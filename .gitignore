@@ -1,0 +1,70 @@
+# ===========================================
+# AgroPack Llano - Secrets & Environment Files
+# ===========================================
+
+# Environment files (never commit real secrets)
+.env
+.env.local
+.env.*.local
+*.env
+!**/*.env.example
+!**/.env.example
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+agropack_llano.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Frontend
+frontend/node_modules/
+frontend/.env
+frontend/.env.local
+frontend/dist/
+frontend/build/
+frontend/.vite/
+
+# Build artifacts & caches
+dist/
+build/
+*.egg-info/
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Logs & temporary files
+*.log
+*.tmp
+*.bak
+
+# OS & Editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Keep example files (these are safe to commit)
+!**/.env.example
+!**/example.env

@@ -1,0 +1,64 @@
+# AgroPack Llano — producción (Docker)
+# Uso:
+#   cp .env.prod.example .env.prod
+#   # editar SECRET_KEY y contraseñas
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# UI:  http://IP_SERVIDOR/
+# API: http://IP_SERVIDOR/api/  (proxy nginx → backend)
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD en .env.prod}
+      POSTGRES_DB: ${POSTGRES_DB:-agropack_llano}
+    volumes:
+      - postgres_data_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    # En producción preferible NO exponer 5432 a internet.
+    # Descomenta solo si necesitas acceso desde la red local:
+    # ports:
+    #   - "5432:5432"
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      SECRET_KEY: ${SECRET_KEY:?Defina SECRET_KEY en .env.prod}
+      ALGORITHM: ${ALGORITHM:-HS256}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-agropack_llano}
+      DEBUG: ${DEBUG:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    # Sin --reload y sin montar código (imagen inmutable)
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+    # Puerto interno; el acceso externo es vía nginx en frontend:80
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+      args:
+        # Misma origen: el navegador llama /api y nginx reenvía al backend
+        VITE_API_URL: ""
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    depends_on:
+      - backend
+
+volumes:
+  postgres_data_prod:
