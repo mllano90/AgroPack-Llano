@@ -40,7 +40,7 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
 
   return (
     <div style={{background: 'white', padding: '25px', borderRadius: '10px'}}>
-      <h2>📊 Dashboard General</h2>
+      <h2>📦 Inventarios</h2>
 
       {/* Tabs / Selector de grupo de producto */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>

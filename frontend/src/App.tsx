@@ -277,7 +277,7 @@ function App() {
             )}
             {visibleTabs.includes('dashboard') && (
               <button type="button" onClick={() => setActiveTab('dashboard')} style={tabButtonStyle('dashboard')}>
-                Dashboard
+                Inventarios
               </button>
             )}
             {visibleTabs.includes('reportes') && (
