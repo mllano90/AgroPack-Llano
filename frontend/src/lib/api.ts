@@ -235,6 +235,75 @@ export async function createEmbarque(token: string, payload: EmbarquePayload): P
   });
 }
 
+export interface ManifiestoDetalleStock {
+  producto: string;
+  mercado: string;
+  cantidad_cajas: number;
+  presentacion?: string | null;
+  talla?: string | null;
+  calidad?: string | null;
+  stock_disponible: number;
+  suficiente: boolean;
+}
+
+export interface ManifiestoParseResult {
+  fecha_embarque?: string | null;
+  hora_salida?: string | null;
+  numero_manifiesto?: string | null;
+  embarcador?: string | null;
+  distribuidor?: string | null;
+  lugar?: string | null;
+  mercado?: string | null;
+  factura?: string | null;
+  total_bultos_manifiesto?: number | null;
+  total_bultos_parseados: number;
+  lineas_raw: Array<{
+    no: number;
+    bultos: number;
+    descripcion: string;
+    lote?: string | null;
+    presentacion?: string | null;
+    talla?: string | null;
+    parse_ok: boolean;
+    parse_note?: string | null;
+  }>;
+  detalles: ManifiestoDetalleStock[];
+  warnings: string[];
+  puede_confirmar: boolean;
+  cliente_sugerido_id?: number | null;
+  cliente_sugerido_nombre?: string | null;
+}
+
+/** Parsea PDF de manifiesto y cruza con inventario (sin descontar) */
+export async function parseManifiesto(token: string, file: File): Promise<ManifiestoParseResult> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await api.post<ManifiestoParseResult>('/api/embarques/parse-manifiesto', form, {
+    headers: {
+      Authorization: `Bearer ${token}`,
+      // No fijar Content-Type: el browser pone multipart boundary
+    },
+    timeout: 90000,
+  });
+  return res.data;
+}
+
+/** Confirma embarque desde manifiesto y descuenta inventario */
+export async function confirmarManifiesto(
+  token: string,
+  body: {
+    cliente_id: number;
+    notas?: string | null;
+    fecha_embarque?: string | null;
+    detalles: EmbarquePayload['detalles'];
+  }
+): Promise<void> {
+  await api.post('/api/embarques/desde-manifiesto', body, {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 60000,
+  });
+}
+
 // ============================================
 // User Management (new)
 // ============================================
