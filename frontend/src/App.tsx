@@ -96,7 +96,9 @@ function App() {
       const data = await login(username, password);
       const accessToken = data?.access_token;
       if (!accessToken) {
-        setLoginError('La API no devolvió token. Revisa VITE_API_URL en Render.');
+        setLoginError(
+          'La API no devolvió token. En Render → agropack-web → Environment pon VITE_API_URL=https://agropack-api.onrender.com y haz Manual Deploy (Clear build cache).'
+        );
         return;
       }
 
@@ -113,18 +115,23 @@ function App() {
       setActiveTab(tabs[0] || 'dashboard');
     } catch (err: any) {
       console.error(err);
-      // Si el login dio token pero /me falló por red, no borrar si ya hay token válido en storage
       const status = err?.response?.status;
+      const detail = err?.response?.data?.detail;
+      const msg = err?.message || '';
+
       if (status === 401 || status === 403) {
         localStorage.removeItem(TOKEN_KEY);
         localStorage.removeItem(USER_KEY);
         setToken('');
         setCurrentUser(null);
-        setLoginError('Usuario o contraseña incorrectos.');
+        setLoginError(typeof detail === 'string' ? detail : 'Usuario o contraseña incorrectos.');
+      } else if (msg.includes('VITE_API_URL') || msg.includes('access_token') || msg.includes('JSON')) {
+        setLoginError(msg);
       } else if (!localStorage.getItem(TOKEN_KEY)) {
-        setLoginError('No se pudo conectar con la API. Espera 30s (cold start) e intenta de nuevo.');
+        setLoginError(
+          'No se pudo conectar con la API. Revisa VITE_API_URL=https://agropack-api.onrender.com en Render (agropack-web) y espera 30s si la API estaba dormida.'
+        );
       } else {
-        // Token guardado; intentar mostrar la app aunque /me haya fallado temporalmente
         setLoginError('');
         setCurrentUser({
           id: 0,

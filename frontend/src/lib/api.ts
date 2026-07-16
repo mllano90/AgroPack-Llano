@@ -41,10 +41,34 @@ export async function login(username: string, password: string): Promise<LoginRe
   const params = new URLSearchParams();
   params.append('username', username);
   params.append('password', password);
-  const res = await api.post<LoginResponse>('/api/auth/login', params, {
+
+  // URL absoluta al backend (evita pegarle al static site por error de VITE_API_URL)
+  const base = getApiBaseUrl().replace(/\/$/, '');
+  const loginUrl = `${base}/api/auth/login`;
+
+  const res = await axios.post(loginUrl, params, {
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
   });
-  return res.data;
+
+  const data = res.data;
+  // Si VITE_API_URL está mal, el static site devuelve HTML (string) con 200
+  if (typeof data === 'string' || !data || typeof data !== 'object') {
+    throw new Error(
+      `Login no devolvió JSON. VITE_API_URL actual="${base || '(vacío)'}". ` +
+        `Debe ser https://agropack-api.onrender.com (Environment del static site + rebuild).`
+    );
+  }
+
+  if (!data.access_token && !data.accessToken) {
+    throw new Error(
+      `Respuesta sin access_token. URL=${loginUrl}. Body=${JSON.stringify(data).slice(0, 200)}`
+    );
+  }
+
+  return {
+    access_token: data.access_token || data.accessToken,
+    token_type: data.token_type || 'bearer',
+  };
 }
 
 // ============================================
