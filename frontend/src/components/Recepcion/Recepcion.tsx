@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { TipoMercado, TipoRecepcion, Variedad, TipoCultivo, Producto } from '../../types';
 import { VariedadSelect, MercadoSelect, TipoCultivoSelect } from '../ui';
 import { useCreateRecepcion } from '../../hooks/useCreateRecepcion';
+import { LOTES_LIMON, PESO_BIN_CAMPO_KG } from '../../lib/constants';
 
 interface RecepcionProps {
   token: string;
@@ -143,25 +144,30 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
       {/* Campos solo para Limón */}
       {productoRecepcion === 'limon_amarillo' && (
         <>
-          <input 
-            type="text" 
-            placeholder="Lote" 
-            value={lote} 
-            onChange={(e) => setLote(e.target.value)} 
-            style={{width: '100%', padding: '12px', margin: '10px 0'}} 
+          <select
+            value={lote}
+            onChange={(e) => setLote(e.target.value)}
+            style={{ width: '100%', padding: '12px', margin: '10px 0' }}
+          >
+            <option value="">Seleccionar lote</option>
+            {LOTES_LIMON.map((l) => (
+              <option key={l} value={l}>
+                {l}
+              </option>
+            ))}
+          </select>
+          <input
+            type="number"
+            placeholder={`Cantidad de bins (${PESO_BIN_CAMPO_KG}kg c/u)`}
+            value={cantidadBins}
+            onChange={(e) => setCantidadBins(e.target.value)}
+            style={{ width: '100%', padding: '12px', margin: '10px 0' }}
           />
-          <input 
-            type="number" 
-            placeholder="Cantidad de bins (230kg c/u)" 
-            value={cantidadBins} 
-            onChange={(e) => setCantidadBins(e.target.value)} 
-            style={{width: '100%', padding: '12px', margin: '10px 0'}} 
-          />
-          <input 
-            type="date" 
-            value={fechaCorte} 
-            onChange={(e) => setFechaCorte(e.target.value)} 
-            style={{width: '100%', padding: '12px', margin: '10px 0'}} 
+          <input
+            type="date"
+            value={fechaCorte}
+            onChange={(e) => setFechaCorte(e.target.value)}
+            style={{ width: '100%', padding: '12px', margin: '10px 0' }}
           />
         </>
       )}

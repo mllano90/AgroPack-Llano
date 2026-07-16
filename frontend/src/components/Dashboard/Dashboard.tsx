@@ -161,7 +161,7 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
       {isLimon && (
         <>
           {/* Inventario en Desverdizado */}
-          <h3>📦 Inventario en Desverdizado (Bins de Limón - 230kg)</h3>
+          <h3>📦 Inventario en Desverdizado (Bins de Limón - 260kg)</h3>
           {visibleDesverdizado.length > 0 ? (
             <div style={{display: 'grid', gap: '8px', marginBottom: '20px'}}>
               {visibleDesverdizado.map((d, idx) => (

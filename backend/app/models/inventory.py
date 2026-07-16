@@ -192,7 +192,7 @@ class InventarioDesverdizado(Base):
     id = Column(Integer, primary_key=True, index=True)
     producto = Column(SQLEnum(Producto), nullable=False, default=Producto.LIMON_AMARILLO)
     
-    # Cantidad en bins de 230kg
+    # Cantidad en bins de 260kg
     cantidad_bins = Column(Integer, nullable=False, default=0)
     
     # Lote y fecha (fecha_recepcion = fecha de corte)

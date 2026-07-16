@@ -12,7 +12,7 @@ class RecepcionCampoCreate(BaseModel):
     
     # Campos específicos para Limón
     lote: str | None = None
-    cantidad_bins: int = 0   # bins de 230kg
+    cantidad_bins: int = 0   # bins de 260kg
     fecha_corte: date | None = None  # misma que recepción
 
 class RecepcionCampoResponse(BaseModel):
