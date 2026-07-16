@@ -85,8 +85,90 @@ class LoteRendimiento(BaseModel):
     prorrateado: bool = False  # True si alguna corrida mezcló lotes
 
 
+class TallaRendimiento(BaseModel):
+    """Distribución por talla (1ra calidad) sobre corridas acumuladas."""
+    talla: str
+    cajas: int = 0  # rpc + cartón de esa talla
+    kg: float = 0.0
+    pct_de_primera: float = 0.0  # % del kg 1ra
+    pct_de_entrada: float = 0.0  # % del kg de campo
+    parrillas: float = 0.0
+
+
+class PresentacionRendimiento(BaseModel):
+    presentacion: str
+    talla: str | None = None
+    cajas: int = 0
+    kg: float = 0.0
+    pct_de_salida: float = 0.0  # % del kg 1ra+2da
+
+
+class FactoresProyeccion(BaseModel):
+    """Factores derivados del histórico de empaque (por bin de campo)."""
+    bins_historicos: int = 0
+    kg_entrada_historico: float = 0.0
+    pct_primera: float = 0.0
+    pct_segunda: float = 0.0
+    pct_recuperacion: float = 0.0
+    kg_primera_por_bin: float = 0.0
+    kg_segunda_por_bin: float = 0.0
+    # cajas por bin de campo, por presentación+talla
+    cajas_por_bin: List[dict] = []  # [{presentacion, talla, cajas_por_bin, kg_por_bin}]
+    # mix de tallas 1ra (% del kg 1ra)
+    mix_tallas: List[TallaRendimiento] = []
+    con_datos: bool = False
+    nota: str | None = None
+
+
+class ProyeccionUnidad(BaseModel):
+    presentacion: str
+    talla: str | None = None
+    calidad: str = "primera"
+    cantidad: float  # cajas o bins jugo proyectados
+    kg: float
+
+
+class ProyeccionLoteItem(BaseModel):
+    lote: str
+    bins: int
+    fecha_recepcion: str
+    fecha_tentativa_salida: str
+    estado: str
+    kg_entrada: float
+    kg_primera: float
+    kg_segunda: float
+    kg_salida: float
+    unidades: List[ProyeccionUnidad] = []
+
+
+class ProyeccionPorFecha(BaseModel):
+    fecha: str  # fecha tentativa de salida de desverdizado
+    bins: int
+    lotes: List[str] = []
+    kg_entrada: float
+    kg_primera: float
+    kg_segunda: float
+    kg_salida: float
+    unidades: List[ProyeccionUnidad] = []
+
+
+class ProyeccionInventarioResponse(BaseModel):
+    factores: FactoresProyeccion
+    por_lote: List[ProyeccionLoteItem] = []
+    por_fecha: List[ProyeccionPorFecha] = []
+    total_bins_desverdizado: int = 0
+    total_kg_primera: float = 0.0
+    total_kg_segunda: float = 0.0
+    total_kg_salida: float = 0.0
+    unidades_totales: List[ProyeccionUnidad] = []
+    stock_actual: List[InventarioFinalItem] = []
+
+
 class RendimientosLimonResponse(BaseModel):
     corridas: List[CorridaRendimiento]
     por_lote: List[LoteRendimiento] = []
+    por_talla: List[TallaRendimiento] = []
+    por_presentacion: List[PresentacionRendimiento] = []
     acumulado: CorridaRendimiento
     hectareas: float = 64.0
+    factores_proyeccion: FactoresProyeccion | None = None

@@ -13,6 +13,13 @@ from app.schemas.reports import (
     DesverdizadoItem,
     CorridaRendimiento,
     LoteRendimiento,
+    TallaRendimiento,
+    PresentacionRendimiento,
+    FactoresProyeccion,
+    ProyeccionUnidad,
+    ProyeccionLoteItem,
+    ProyeccionPorFecha,
+    ProyeccionInventarioResponse,
     RendimientosLimonResponse,
 )
 
@@ -414,6 +421,169 @@ def obtener_dashboard(db: Session = Depends(get_db)):
     )
 
 
+def _iter_produccion_empaques(empaques: list):
+    """
+    Agrega producción histórica y bins de campo (excluye anulados).
+    Returns: agg_pres, bins_total, kg1, kg2, kg_por_talla, cajas_por_talla
+    """
+    bins_total = 0
+    kg1_total = 0.0
+    kg2_total = 0.0
+    # key (presentacion, talla) -> cajas, kg
+    agg_pres: dict[tuple[str, str | None], dict] = defaultdict(
+        lambda: {"cajas": 0, "kg": 0.0}
+    )
+    kg_por_talla: dict[str, float] = defaultdict(float)
+    cajas_por_talla: dict[str, int] = defaultdict(int)
+
+    for e in empaques:
+        consumos, produccion, anulado = _extract_empaque_detalle(e)
+        if anulado:
+            continue
+        bins = sum(int(c.get("bins") or 0) for c in consumos)
+        if bins <= 0 and not produccion:
+            continue
+        bins_total += bins
+        for p in produccion or []:
+            pres = p.get("presentacion") or ""
+            cant = int(p.get("cantidad") or 0)
+            if cant <= 0 or not pres:
+                continue
+            talla = p.get("talla") if pres != "bins_jugo" else None
+            if talla is not None:
+                talla = str(talla)
+            kg_unit = KG_POR_PRESENTACION.get(pres, 0)
+            kg = kg_unit * cant
+            key = (pres, talla)
+            agg_pres[key]["cajas"] += cant
+            agg_pres[key]["kg"] += kg
+            if pres == "bins_jugo":
+                kg2_total += kg
+            else:
+                kg1_total += kg
+                if talla:
+                    kg_por_talla[talla] += kg
+                    cajas_por_talla[talla] += cant
+
+    return agg_pres, bins_total, kg1_total, kg2_total, kg_por_talla, cajas_por_talla
+
+
+def _por_talla_y_presentacion(
+    empaques: list,
+) -> tuple[list[TallaRendimiento], list[PresentacionRendimiento], FactoresProyeccion]:
+    agg_pres, bins_total, kg1, kg2, kg_por_talla, cajas_por_talla = _iter_produccion_empaques(
+        empaques
+    )
+    kg_entrada = bins_total * KG_BIN_CAMPO
+    kg_salida = kg1 + kg2
+
+    tallas: list[TallaRendimiento] = []
+    for talla in sorted(kg_por_talla.keys(), key=lambda x: int(x) if str(x).isdigit() else 0):
+        kg = kg_por_talla[talla]
+        cajas = cajas_por_talla[talla]
+        # parrillas approx: assume mix rpc/carton - use weighted: cajas / 45 as default for tallas
+        parr = round(cajas / CAJAS_POR_PARRILLA_RPC, 2) if cajas else 0.0
+        tallas.append(
+            TallaRendimiento(
+                talla=str(talla),
+                cajas=cajas,
+                kg=round(kg, 2),
+                pct_de_primera=round((kg / kg1 * 100) if kg1 else 0.0, 2),
+                pct_de_entrada=round((kg / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                parrillas=parr,
+            )
+        )
+
+    presentaciones: list[PresentacionRendimiento] = []
+    for (pres, talla), row in sorted(agg_pres.items(), key=lambda x: (x[0][0], x[0][1] or "")):
+        presentaciones.append(
+            PresentacionRendimiento(
+                presentacion=pres,
+                talla=talla,
+                cajas=int(row["cajas"]),
+                kg=round(row["kg"], 2),
+                pct_de_salida=round((row["kg"] / kg_salida * 100) if kg_salida else 0.0, 2),
+            )
+        )
+
+    cajas_por_bin = []
+    for (pres, talla), row in sorted(agg_pres.items(), key=lambda x: (x[0][0], x[0][1] or "")):
+        cajas_por_bin.append(
+            {
+                "presentacion": pres,
+                "talla": talla,
+                "cajas_por_bin": round(row["cajas"] / bins_total, 4) if bins_total else 0.0,
+                "kg_por_bin": round(row["kg"] / bins_total, 4) if bins_total else 0.0,
+            }
+        )
+
+    factores = FactoresProyeccion(
+        bins_historicos=bins_total,
+        kg_entrada_historico=round(kg_entrada, 2),
+        pct_primera=round((kg1 / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        pct_segunda=round((kg2 / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        kg_primera_por_bin=round(kg1 / bins_total, 4) if bins_total else 0.0,
+        kg_segunda_por_bin=round(kg2 / bins_total, 4) if bins_total else 0.0,
+        cajas_por_bin=cajas_por_bin,
+        mix_tallas=tallas,
+        con_datos=bins_total > 0 and (kg1 > 0 or kg2 > 0),
+        nota=(
+            None
+            if bins_total > 0 and (kg1 > 0 or kg2 > 0)
+            else "Sin histórico de empaque suficiente; no se puede proyectar aún."
+        ),
+    )
+    return tallas, presentaciones, factores
+
+
+def _proyectar_unidades(bins: int, factores: FactoresProyeccion) -> list[ProyeccionUnidad]:
+    if bins <= 0 or not factores.con_datos:
+        return []
+    out: list[ProyeccionUnidad] = []
+    for row in factores.cajas_por_bin:
+        pres = row.get("presentacion") or ""
+        talla = row.get("talla")
+        cpb = float(row.get("cajas_por_bin") or 0)
+        kpb = float(row.get("kg_por_bin") or 0)
+        cant = round(cpb * bins, 1)
+        kg = round(kpb * bins, 1)
+        if cant <= 0 and kg <= 0:
+            continue
+        out.append(
+            ProyeccionUnidad(
+                presentacion=pres,
+                talla=talla,
+                calidad="segunda" if pres == "bins_jugo" else "primera",
+                cantidad=cant,
+                kg=kg,
+            )
+        )
+    return out
+
+
+def _merge_unidades(lists: list[list[ProyeccionUnidad]]) -> list[ProyeccionUnidad]:
+    acc: dict[tuple[str, str | None], dict] = defaultdict(lambda: {"cantidad": 0.0, "kg": 0.0, "calidad": "primera"})
+    for units in lists:
+        for u in units:
+            key = (u.presentacion, u.talla)
+            acc[key]["cantidad"] += u.cantidad
+            acc[key]["kg"] += u.kg
+            acc[key]["calidad"] = u.calidad
+    result = []
+    for (pres, talla), row in sorted(acc.items(), key=lambda x: (x[0][0], x[0][1] or "")):
+        result.append(
+            ProyeccionUnidad(
+                presentacion=pres,
+                talla=talla,
+                calidad=row["calidad"],
+                cantidad=round(row["cantidad"], 1),
+                kg=round(row["kg"], 1),
+            )
+        )
+    return result
+
+
 @router.get("/rendimientos-limon", response_model=RendimientosLimonResponse)
 def rendimientos_limon(
     db: Session = Depends(get_db),
@@ -421,13 +591,10 @@ def rendimientos_limon(
 ):
     """
     Rendimientos de limón:
-    - % 1ra / % 2da (principal), kg como secundario
-    - bins por parrilla solo de 1ra (RPC+cartón, sin jugo)
-    - kg/ha con HECTAREAS_RANCHO (64)
-    - por corrida, por lote y acumulado
-    Empaques anulados se excluyen.
+    - % 1ra / % 2da y % por talla (principales)
+    - bins por parrilla solo de 1ra
+    - kg/ha, por corrida, por lote
     """
-    # Traer todos y filtrar en Python: evita fallos de enum Postgres vs valor string
     todos = db.query(Empaque).order_by(Empaque.fecha.desc(), Empaque.id.desc()).all()
     empaques = [e for e in todos if _producto_es_limon(e.producto)]
 
@@ -462,9 +629,134 @@ def rendimientos_limon(
             )
         )
 
+    por_talla, por_pres, factores = _por_talla_y_presentacion(empaques)
+
     return RendimientosLimonResponse(
         corridas=corridas,
         por_lote=_rendimientos_por_lote(empaques),
+        por_talla=por_talla,
+        por_presentacion=por_pres,
         acumulado=_acumular(corridas, hectareas=HECTAREAS_RANCHO),
         hectareas=HECTAREAS_RANCHO,
+        factores_proyeccion=factores,
     )
+
+
+@router.get("/proyeccion-inventario", response_model=ProyeccionInventarioResponse)
+def proyeccion_inventario(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Proyecta inventario final a partir de bins en desverdizado y fechas tentativas,
+    usando factores acumulados del histórico de empaque (% 1ra/2da y mix de tallas).
+    """
+    todos = db.query(Empaque).order_by(Empaque.id.desc()).all()
+    empaques = [e for e in todos if _producto_es_limon(e.producto)]
+    _, _, factores = _por_talla_y_presentacion(empaques)
+
+    desvs = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.cantidad_bins > 0)
+        .order_by(InventarioDesverdizado.fecha_tentativa_salida.asc())
+        .all()
+    )
+
+    por_lote: list[ProyeccionLoteItem] = []
+    by_fecha: dict[str, dict] = defaultdict(
+        lambda: {
+            "bins": 0,
+            "lotes": [],
+            "units": [],
+            "kg1": 0.0,
+            "kg2": 0.0,
+            "kg_e": 0.0,
+        }
+    )
+
+    for d in desvs:
+        bins = int(d.cantidad_bins or 0)
+        if bins <= 0:
+            continue
+        kg_e = bins * KG_BIN_CAMPO
+        kg1 = round(factores.kg_primera_por_bin * bins, 1) if factores.con_datos else 0.0
+        kg2 = round(factores.kg_segunda_por_bin * bins, 1) if factores.con_datos else 0.0
+        units = _proyectar_unidades(bins, factores)
+        fecha_t = str(d.fecha_tentativa_salida) if d.fecha_tentativa_salida else ""
+        item = ProyeccionLoteItem(
+            lote=d.lote or "SIN_LOTE",
+            bins=bins,
+            fecha_recepcion=str(d.fecha_recepcion) if d.fecha_recepcion else "",
+            fecha_tentativa_salida=fecha_t,
+            estado=d.estado or "",
+            kg_entrada=round(kg_e, 1),
+            kg_primera=kg1,
+            kg_segunda=kg2,
+            kg_salida=round(kg1 + kg2, 1),
+            unidades=units,
+        )
+        por_lote.append(item)
+        if fecha_t:
+            by_fecha[fecha_t]["bins"] += bins
+            by_fecha[fecha_t]["lotes"].append(d.lote or "SIN_LOTE")
+            by_fecha[fecha_t]["units"].append(units)
+            by_fecha[fecha_t]["kg1"] += kg1
+            by_fecha[fecha_t]["kg2"] += kg2
+            by_fecha[fecha_t]["kg_e"] += kg_e
+
+    por_fecha: list[ProyeccionPorFecha] = []
+    for fecha, row in sorted(by_fecha.items(), key=lambda x: x[0]):
+        por_fecha.append(
+            ProyeccionPorFecha(
+                fecha=fecha,
+                bins=row["bins"],
+                lotes=row["lotes"],
+                kg_entrada=round(row["kg_e"], 1),
+                kg_primera=round(row["kg1"], 1),
+                kg_segunda=round(row["kg2"], 1),
+                kg_salida=round(row["kg1"] + row["kg2"], 1),
+                unidades=_merge_unidades(row["units"]),
+            )
+        )
+
+    total_bins = sum(p.bins for p in por_lote)
+    total_kg1 = round(sum(p.kg_primera for p in por_lote), 1)
+    total_kg2 = round(sum(p.kg_segunda for p in por_lote), 1)
+    unidades_totales = _merge_unidades([p.unidades for p in por_lote])
+
+    # Stock actual limón
+    stock_actual = []
+    for item in db.query(InventarioFinal).all():
+        pval = getattr(item.producto, "value", None) or str(item.producto)
+        if "limon" not in str(pval).lower() and not (item.atributos_extra or {}).get("presentacion"):
+            continue
+        extra = item.atributos_extra or {}
+        if not isinstance(extra, dict):
+            extra = {}
+        if (item.cantidad_stock or 0) <= 0:
+            continue
+        stock_actual.append(
+            InventarioFinalItem(
+                producto=item.producto,
+                variedad=item.variedad,
+                tipo_cultivo=item.tipo_cultivo,
+                mercado=item.mercado,
+                cantidad_stock=item.cantidad_stock,
+                presentacion=extra.get("presentacion"),
+                calidad=extra.get("calidad"),
+                talla=extra.get("talla"),
+            )
+        )
+
+    return ProyeccionInventarioResponse(
+        factores=factores,
+        por_lote=por_lote,
+        por_fecha=por_fecha,
+        total_bins_desverdizado=total_bins,
+        total_kg_primera=total_kg1,
+        total_kg_segunda=total_kg2,
+        total_kg_salida=round(total_kg1 + total_kg2, 1),
+        unidades_totales=unidades_totales,
+        stock_actual=stock_actual,
+    )
+

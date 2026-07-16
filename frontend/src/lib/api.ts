@@ -175,15 +175,109 @@ export interface LoteRendimientoApi {
   prorrateado: boolean;
 }
 
+export interface TallaRendimientoApi {
+  talla: string;
+  cajas: number;
+  kg: number;
+  pct_de_primera: number;
+  pct_de_entrada: number;
+  parrillas: number;
+}
+
+export interface PresentacionRendimientoApi {
+  presentacion: string;
+  talla?: string | null;
+  cajas: number;
+  kg: number;
+  pct_de_salida: number;
+}
+
+export interface FactoresProyeccionApi {
+  bins_historicos: number;
+  kg_entrada_historico: number;
+  pct_primera: number;
+  pct_segunda: number;
+  pct_recuperacion: number;
+  kg_primera_por_bin: number;
+  kg_segunda_por_bin: number;
+  cajas_por_bin: Array<{
+    presentacion: string;
+    talla?: string | null;
+    cajas_por_bin: number;
+    kg_por_bin: number;
+  }>;
+  mix_tallas: TallaRendimientoApi[];
+  con_datos: boolean;
+  nota?: string | null;
+}
+
+export interface ProyeccionUnidadApi {
+  presentacion: string;
+  talla?: string | null;
+  calidad: string;
+  cantidad: number;
+  kg: number;
+}
+
+export interface ProyeccionInventarioApi {
+  factores: FactoresProyeccionApi;
+  por_lote: Array<{
+    lote: string;
+    bins: number;
+    fecha_recepcion: string;
+    fecha_tentativa_salida: string;
+    estado: string;
+    kg_entrada: number;
+    kg_primera: number;
+    kg_segunda: number;
+    kg_salida: number;
+    unidades: ProyeccionUnidadApi[];
+  }>;
+  por_fecha: Array<{
+    fecha: string;
+    bins: number;
+    lotes: string[];
+    kg_entrada: number;
+    kg_primera: number;
+    kg_segunda: number;
+    kg_salida: number;
+    unidades: ProyeccionUnidadApi[];
+  }>;
+  total_bins_desverdizado: number;
+  total_kg_primera: number;
+  total_kg_segunda: number;
+  total_kg_salida: number;
+  unidades_totales: ProyeccionUnidadApi[];
+  stock_actual: Array<{
+    producto: string;
+    mercado: string;
+    cantidad_stock: number;
+    presentacion?: string | null;
+    talla?: string | null;
+    calidad?: string | null;
+  }>;
+}
+
 export interface RendimientosLimonApi {
   corridas: CorridaRendimientoApi[];
   por_lote: LoteRendimientoApi[];
+  por_talla?: TallaRendimientoApi[];
+  por_presentacion?: PresentacionRendimientoApi[];
   acumulado: CorridaRendimientoApi;
   hectareas?: number;
+  factores_proyeccion?: FactoresProyeccionApi | null;
 }
 
 export async function getRendimientosLimon(token: string): Promise<RendimientosLimonApi> {
   const res = await api.get<RendimientosLimonApi>('/api/reports/rendimientos-limon', {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+export async function getProyeccionInventario(token: string): Promise<ProyeccionInventarioApi> {
+  const res = await api.get<ProyeccionInventarioApi>('/api/reports/proyeccion-inventario', {
     headers: { Authorization: `Bearer ${token}` },
     timeout: 60000,
   });
