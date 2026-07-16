@@ -45,6 +45,11 @@ class CorridaRendimiento(BaseModel):
     pct_primera: float  # % del peso de campo (dato principal)
     pct_segunda: float
     pct_recuperacion: float  # (1ra+2da) / entrada
+    # Desglose 1ra: RPC vs cartón
+    kg_rpc: float = 0.0
+    kg_carton: float = 0.0
+    pct_rpc_de_primera: float = 0.0  # % del kg 1ra que es RPC
+    pct_carton_de_primera: float = 0.0  # % del kg 1ra que es cartón
     cajas_rpc: int  # rpc_12 + rpc_18
     cajas_carton: int  # caja_40lbs
     bins_jugo: int

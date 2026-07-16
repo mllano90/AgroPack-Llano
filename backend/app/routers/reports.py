@@ -60,6 +60,8 @@ def _calcular_rendimiento(
 
     kg_primera = 0.0
     kg_segunda = 0.0
+    kg_rpc = 0.0
+    kg_carton = 0.0
     cajas_rpc = 0
     cajas_carton = 0
     bins_jugo = 0
@@ -76,9 +78,11 @@ def _calcular_rendimiento(
             bins_jugo += cant
         elif pres in ("rpc_12", "rpc_18"):
             kg_primera += kg
+            kg_rpc += kg
             cajas_rpc += cant
         elif pres == "caja_40lbs":
             kg_primera += kg
+            kg_carton += kg
             cajas_carton += cant
         else:
             # desconocido: contar como primera si tiene peso
@@ -88,6 +92,8 @@ def _calcular_rendimiento(
     pct_primera = round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2)
     pct_segunda = round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2)
     pct_recuperacion = round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2)
+    pct_rpc_de_primera = round((kg_rpc / kg_primera * 100) if kg_primera else 0.0, 2)
+    pct_carton_de_primera = round((kg_carton / kg_primera * 100) if kg_primera else 0.0, 2)
 
     parrillas_rpc = round(cajas_rpc / CAJAS_POR_PARRILLA_RPC, 2) if cajas_rpc else 0.0
     parrillas_carton = round(cajas_carton / CAJAS_POR_PARRILLA_CARTON, 2) if cajas_carton else 0.0
@@ -111,6 +117,10 @@ def _calcular_rendimiento(
         pct_primera=pct_primera,
         pct_segunda=pct_segunda,
         pct_recuperacion=pct_recuperacion,
+        kg_rpc=round(kg_rpc, 2),
+        kg_carton=round(kg_carton, 2),
+        pct_rpc_de_primera=pct_rpc_de_primera,
+        pct_carton_de_primera=pct_carton_de_primera,
         cajas_rpc=cajas_rpc,
         cajas_carton=cajas_carton,
         bins_jugo=bins_jugo,
@@ -141,6 +151,8 @@ def _acumular(
     kg_entrada = sum(c.kg_entrada for c in corridas)
     kg_primera = sum(c.kg_primera for c in corridas)
     kg_segunda = sum(c.kg_segunda for c in corridas)
+    kg_rpc = sum(getattr(c, "kg_rpc", 0) or 0 for c in corridas)
+    kg_carton = sum(getattr(c, "kg_carton", 0) or 0 for c in corridas)
     kg_salida = kg_primera + kg_segunda
     cajas_rpc = sum(c.cajas_rpc for c in corridas)
     cajas_carton = sum(c.cajas_carton for c in corridas)
@@ -162,6 +174,10 @@ def _acumular(
         pct_primera=round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2),
         pct_segunda=round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2),
         pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        kg_rpc=round(kg_rpc, 2),
+        kg_carton=round(kg_carton, 2),
+        pct_rpc_de_primera=round((kg_rpc / kg_primera * 100) if kg_primera else 0.0, 2),
+        pct_carton_de_primera=round((kg_carton / kg_primera * 100) if kg_primera else 0.0, 2),
         cajas_rpc=cajas_rpc,
         cajas_carton=cajas_carton,
         bins_jugo=bins_jugo,

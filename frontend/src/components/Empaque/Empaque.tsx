@@ -5,8 +5,10 @@ import { useCreateEmpaque } from '../../hooks/useCreateEmpaque';
 import { getApiBaseUrl } from '../../lib/api';
 import {
   TALLAS_LIMON,
-  PRESENTACIONES_LIMON,
   PESO_BIN_CAMPO_KG,
+  tallasParaPresentacion,
+  esPresentacionRpc,
+  esPresentacionCarton,
 } from '../../lib/constants';
 
 interface EmpaqueProps {
@@ -17,8 +19,16 @@ interface EmpaqueProps {
 
 type TallaCantidades = Record<string, string>;
 
-function emptyTallas(): TallaCantidades {
-  return Object.fromEntries(TALLAS_LIMON.map((t) => [t, '']));
+function emptyTallas(tallas: readonly string[] = TALLAS_LIMON): TallaCantidades {
+  return Object.fromEntries(tallas.map((t) => [t, '']));
+}
+
+function labelPresentacion(p: string) {
+  if (p === 'rpc_12') return 'RPC 12';
+  if (p === 'rpc_18') return 'RPC 18';
+  if (p === 'caja_40lbs') return 'Caja 40 lbs';
+  if (p === 'bins_jugo') return 'Bins jugo';
+  return p;
 }
 
 export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }: EmpaqueProps) {
@@ -68,8 +78,11 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
     }
   }, [productoEmpaque, token]);
 
-  const resetLimonProduccionForm = () => {
-    setTallaCantidades(emptyTallas());
+  const tallasActivas = tallasParaPresentacion(prodPresentacion);
+
+  const resetLimonProduccionForm = (presentacion?: string) => {
+    const tallas = tallasParaPresentacion(presentacion || prodPresentacion);
+    setTallaCantidades(emptyTallas(tallas.length ? tallas : TALLAS_LIMON));
     setCantidadBinsJugo('');
   };
 
@@ -90,8 +103,9 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
       return;
     }
 
+    const tallas = tallasParaPresentacion(prodPresentacion);
     const nuevas: Array<{ presentacion: string; talla: string | null; cantidad: number }> = [];
-    for (const t of TALLAS_LIMON) {
+    for (const t of tallas) {
       const cant = parseInt(tallaCantidades[t] || '', 10) || 0;
       if (cant > 0) {
         nuevas.push({ presentacion: prodPresentacion, talla: t, cantidad: cant });
@@ -101,7 +115,7 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
       return alert('Llena al menos una talla con cantidad mayor a 0');
     }
     setLineasProduccion([...lineasProduccion, ...nuevas]);
-    setTallaCantidades(emptyTallas());
+    setTallaCantidades(emptyTallas(tallas));
   };
 
   const eliminarLineaProduccion = (idx: number) => {
@@ -147,7 +161,7 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
             produccion.push({ presentacion: 'bins_jugo', talla: null, cantidad: cant });
           }
         } else if (prodPresentacion) {
-          for (const t of TALLAS_LIMON) {
+          for (const t of tallasParaPresentacion(prodPresentacion)) {
             const cant = parseInt(tallaCantidades[t] || '', 10) || 0;
             if (cant > 0) {
               produccion.push({ presentacion: prodPresentacion, talla: t, cantidad: cant });
@@ -342,7 +356,7 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
             </div>
           )}
 
-          {/* Presentación + todas las tallas fijas */}
+          {/* Presentación + tallas filtradas */}
           <div
             style={{
               margin: '16px 0',
@@ -352,32 +366,57 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
               background: '#fafafa',
             }}
           >
-            <strong>Producción</strong>
+            <strong>Producción 1ra / 2da</strong>
             <p style={{ fontSize: 13, color: '#64748b', margin: '6px 0 12px' }}>
-              Elige la presentación y llena las cantidades por talla en un solo paso.
+              <strong>RPC</strong> → tallas 140, 165, 200, 235 · <strong>Cartón 40 lbs</strong> → tallas
+              75, 95, 115, 140. Solo la <strong>140</strong> se puede empacar en RPC o cartón.
             </p>
 
-            <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>Presentación *</label>
-            <select
-              value={prodPresentacion}
-              onChange={(e) => {
-                setProdPresentacion(e.target.value);
-                resetLimonProduccionForm();
-              }}
-              style={{ width: '100%', maxWidth: 320, padding: '10px', marginBottom: 12 }}
-            >
-              <option value="">Seleccionar presentación</option>
-              {PRESENTACIONES_LIMON.map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
+              {(
+                [
+                  { value: 'rpc_18', label: 'RPC 18', hint: 'tallas 140+' },
+                  { value: 'rpc_12', label: 'RPC 12', hint: 'tallas 140+' },
+                  { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas ≤140' },
+                  { value: 'bins_jugo', label: 'Bins jugo (2da)', hint: 'sin talla' },
+                ] as const
+              ).map((opt) => {
+                const active = prodPresentacion === opt.value;
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => {
+                      setProdPresentacion(opt.value);
+                      resetLimonProduccionForm(opt.value);
+                    }}
+                    style={{
+                      padding: '10px 14px',
+                      borderRadius: 8,
+                      border: active ? '2px solid #15803d' : '1px solid #cbd5e1',
+                      background: active ? '#dcfce7' : 'white',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      minWidth: 120,
+                    }}
+                  >
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>{opt.label}</div>
+                    <div style={{ fontSize: 11, color: '#64748b' }}>{opt.hint}</div>
+                  </button>
+                );
+              })}
+            </div>
 
-            {esPrimera && (
+            {esPrimera && tallasActivas.length > 0 && (
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
                   Cantidades por talla
+                  {esPresentacionRpc(prodPresentacion) && (
+                    <span style={{ fontWeight: 400, color: '#0369a1' }}> (RPC)</span>
+                  )}
+                  {esPresentacionCarton(prodPresentacion) && (
+                    <span style={{ fontWeight: 400, color: '#a16207' }}> (cartón)</span>
+                  )}
                 </div>
                 <div
                   style={{
@@ -386,17 +425,19 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                     gap: '10px',
                   }}
                 >
-                  {TALLAS_LIMON.map((t) => (
+                  {tallasActivas.map((t) => (
                     <div key={t}>
                       <label
                         style={{
                           display: 'block',
                           fontSize: 12,
-                          color: '#475569',
+                          color: t === '140' ? '#b45309' : '#475569',
                           marginBottom: 2,
+                          fontWeight: t === '140' ? 700 : 400,
                         }}
                       >
                         #{t}
+                        {t === '140' ? ' *' : ''}
                       </label>
                       <input
                         type="number"
@@ -411,6 +452,11 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                     </div>
                   ))}
                 </div>
+                {tallasActivas.includes('140') && (
+                  <p style={{ fontSize: 11, color: '#b45309', margin: '8px 0 0' }}>
+                    * Talla 140: válida en RPC y en cartón (elige la presentación correcta arriba).
+                  </p>
+                )}
               </div>
             )}
 
@@ -455,7 +501,7 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
               <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
                 {lineasProduccion.map((l, i) => (
                   <li key={i} style={{ marginBottom: 4 }}>
-                    {l.presentacion}
+                    {labelPresentacion(l.presentacion)}
                     {l.talla ? ` #${l.talla}` : ''} × {l.cantidad}{' '}
                     <button
                       type="button"
@@ -467,6 +513,25 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                   </li>
                 ))}
               </ul>
+              {/* Mini resumen RPC vs cartón */}
+              {(() => {
+                const rpc = lineasProduccion
+                  .filter((l) => esPresentacionRpc(l.presentacion))
+                  .reduce((s, l) => s + l.cantidad, 0);
+                const carton = lineasProduccion
+                  .filter((l) => esPresentacionCarton(l.presentacion))
+                  .reduce((s, l) => s + l.cantidad, 0);
+                const jugo = lineasProduccion
+                  .filter((l) => l.presentacion === 'bins_jugo')
+                  .reduce((s, l) => s + l.cantidad, 0);
+                if (rpc + carton + jugo === 0) return null;
+                return (
+                  <div style={{ fontSize: 12, color: '#475569', marginTop: 6 }}>
+                    Resumen: RPC {rpc} cajas · Cartón {carton} cajas
+                    {jugo > 0 ? ` · Jugo ${jugo} bins` : ''}
+                  </div>
+                );
+              })()}
             </div>
           )}
         </>

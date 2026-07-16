@@ -167,6 +167,8 @@ function computeFromEmpaques(
 
     let kg1 = 0;
     let kg2 = 0;
+    let kgRpc = 0;
+    let kgCarton = 0;
     let cajasRpc = 0;
     let cajasCarton = 0;
     let binsJugo = 0;
@@ -179,9 +181,11 @@ function computeFromEmpaques(
         binsJugo += cant;
       } else if (p.presentacion === 'rpc_12' || p.presentacion === 'rpc_18') {
         kg1 += kg;
+        kgRpc += kg;
         cajasRpc += cant;
       } else if (p.presentacion === 'caja_40lbs') {
         kg1 += kg;
+        kgCarton += kg;
         cajasCarton += cant;
       } else {
         kg1 += kg;
@@ -215,6 +219,10 @@ function computeFromEmpaques(
           pct_primera: kgEntrada ? Math.round((kg1 / kgEntrada) * 10000) / 100 : 0,
           pct_segunda: kgEntrada ? Math.round((kg2 / kgEntrada) * 10000) / 100 : 0,
           pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
+          kg_rpc: Math.round(kgRpc * 100) / 100,
+          kg_carton: Math.round(kgCarton * 100) / 100,
+          pct_rpc_de_primera: kg1 ? Math.round((kgRpc / kg1) * 10000) / 100 : 0,
+          pct_carton_de_primera: kg1 ? Math.round((kgCarton / kg1) * 10000) / 100 : 0,
           cajas_rpc: cajasRpc,
           cajas_carton: cajasCarton,
           bins_jugo: binsJugo,
@@ -300,6 +308,8 @@ function computeFromEmpaques(
   const bins = corridas.reduce((s, c) => s + c.bins_campo, 0);
   const kg1 = corridas.reduce((s, c) => s + c.kg_primera, 0);
   const kg2 = corridas.reduce((s, c) => s + c.kg_segunda, 0);
+  const kgRpcT = corridas.reduce((s, c) => s + (c.kg_rpc || 0), 0);
+  const kgCartonT = corridas.reduce((s, c) => s + (c.kg_carton || 0), 0);
   const kgE = bins * PESO_BIN_CAMPO_KG;
   const kgS = kg1 + kg2;
   const cRpc = corridas.reduce((s, c) => s + c.cajas_rpc, 0);
@@ -323,6 +333,10 @@ function computeFromEmpaques(
       pct_primera: kgE ? Math.round((kg1 / kgE) * 10000) / 100 : 0,
       pct_segunda: kgE ? Math.round((kg2 / kgE) * 10000) / 100 : 0,
       pct_recuperacion: kgE ? Math.round((kgS / kgE) * 10000) / 100 : 0,
+      kg_rpc: Math.round(kgRpcT * 100) / 100,
+      kg_carton: Math.round(kgCartonT * 100) / 100,
+      pct_rpc_de_primera: kg1 ? Math.round((kgRpcT / kg1) * 10000) / 100 : 0,
+      pct_carton_de_primera: kg1 ? Math.round((kgCartonT / kg1) * 10000) / 100 : 0,
       cajas_rpc: cRpc,
       cajas_carton: cCarton,
       bins_jugo: bJugo,
@@ -568,6 +582,24 @@ export default function Reportes({ token }: ReportesProps) {
                 {fmtKg(a.kg_salida)} kg ÷ {hectareas} ha
               </div>
             </div>
+            <div style={{ ...cardPrimary, background: '#dbeafe' }}>
+              <div style={{ fontSize: 12, color: '#1e40af', fontWeight: 600 }}>% 1ra en RPC</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#1e3a8a' }}>
+                {fmtNum(a.pct_rpc_de_primera, 1)}%
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                {fmtKg(a.kg_rpc ?? 0)} kg · {a.cajas_rpc} cajas
+              </div>
+            </div>
+            <div style={{ ...cardPrimary, background: '#ffedd5' }}>
+              <div style={{ fontSize: 12, color: '#9a3412', fontWeight: 600 }}>% 1ra en cartón</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#7c2d12' }}>
+                {fmtNum(a.pct_carton_de_primera, 1)}%
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                {fmtKg(a.kg_carton ?? 0)} kg · {a.cajas_carton} cajas
+              </div>
+            </div>
           </div>
 
           {/* % por talla (principal) */}
@@ -575,7 +607,7 @@ export default function Reportes({ token }: ReportesProps) {
             <div style={{ marginTop: 8, marginBottom: 12 }}>
               <h4 style={{ margin: '0 0 8px', fontWeight: 700 }}>% por talla (1ra)</h4>
               <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-                Porcentaje de cada tamaño sobre el kg de 1ra calidad (histórico empacado).
+                % de cada tamaño sobre kg de 1ra. RPC: 140+ · Cartón: ≤140 (la 140 puede ser ambas).
               </p>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                 {porTalla.map((t, i) => (

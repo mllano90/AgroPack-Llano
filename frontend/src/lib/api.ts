@@ -136,6 +136,10 @@ export interface CorridaRendimientoApi {
   pct_primera: number;
   pct_segunda: number;
   pct_recuperacion: number;
+  kg_rpc?: number;
+  kg_carton?: number;
+  pct_rpc_de_primera?: number;
+  pct_carton_de_primera?: number;
   cajas_rpc: number;
   cajas_carton: number;
   bins_jugo: number;
