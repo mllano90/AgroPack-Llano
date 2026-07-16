@@ -278,10 +278,12 @@ export interface ManifiestoParseResult {
 export async function parseManifiesto(token: string, file: File): Promise<ManifiestoParseResult> {
   const form = new FormData();
   form.append('file', file);
+  // FormData: dejar que el browser/axios pongan multipart + boundary
+  // (no usar el Content-Type: application/json del cliente api)
   const res = await api.post<ManifiestoParseResult>('/api/embarques/parse-manifiesto', form, {
     headers: {
       Authorization: `Bearer ${token}`,
-      // No fijar Content-Type: el browser pone multipart boundary
+      'Content-Type': undefined as unknown as string,
     },
     timeout: 90000,
   });
