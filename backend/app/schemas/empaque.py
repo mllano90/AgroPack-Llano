@@ -47,6 +47,18 @@ class EmpaqueResponse(BaseModel):
     talla: str | None = None
     calidad: str | None = None
     cantidad_producida: int | None = None
+    detalle_corrida: dict | None = None
 
     class Config:
         from_attributes = True
+
+
+class AgregarConsumoRequest(BaseModel):
+    """Corrige un empaque: descuenta bins de un lote olvidado."""
+    lote: str
+    bins: int
+
+
+class AnularEmpaqueResponse(BaseModel):
+    message: str
+    id: int

@@ -103,6 +103,34 @@ export interface EmpaquePayload {
   cantidad_bins_jugo?: number;
 }
 
+/** Registro de empaque (listado admin / correcciones) */
+export interface EmpaqueRecord {
+  id: number;
+  fecha: string;
+  producto: Producto;
+  variedad?: Variedad | null;
+  tipo_cultivo?: TipoCultivo | null;
+  mercado: TipoMercado;
+  cantidad_cajas_campo_usadas: number;
+  cantidad_cajas_carton_producidas: number;
+  porcentaje_merma: number;
+  numero_empacador: string;
+  bins_desverdizado_usados?: number | null;
+  lote_desverdizado?: string | null;
+  presentacion?: string | null;
+  talla?: string | null;
+  calidad?: string | null;
+  cantidad_producida?: number | null;
+  detalle_corrida?: {
+    consumos?: Array<{ lote: string; bins: number }>;
+    produccion?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
+    bins_campo?: number;
+    lotes_resumen?: string;
+    anulado?: boolean;
+    anulado_por?: string | null;
+  } | null;
+}
+
 // --- Embarques ---
 export interface EmbarqueDetalle {
   producto: Producto;

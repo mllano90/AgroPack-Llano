@@ -6,6 +6,7 @@ import type {
   ClienteCreate,
   RecepcionPayload,
   EmpaquePayload,
+  EmpaqueRecord,
   EmbarquePayload,
   User,
   UserCreate,
@@ -114,6 +115,42 @@ export async function createEmpaque(token: string, payload: EmpaquePayload): Pro
   await api.post('/api/empaque/', payload, {
     headers: { Authorization: `Bearer ${token}` },
   });
+}
+
+/** Lista empaques recientes (solo admin) */
+export async function getEmpaquesAdmin(token: string): Promise<EmpaqueRecord[]> {
+  const res = await api.get<EmpaqueRecord[]>('/api/empaque/admin/recientes', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+/** Corrige empaque: descuenta bins de un lote olvidado */
+export async function agregarConsumoEmpaque(
+  token: string,
+  empaqueId: number,
+  lote: string,
+  bins: number
+): Promise<EmpaqueRecord> {
+  const res = await api.post<EmpaqueRecord>(
+    `/api/empaque/${empaqueId}/agregar-consumo`,
+    { lote, bins },
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
+/** Anula empaque de limón y revierte inventario */
+export async function anularEmpaque(
+  token: string,
+  empaqueId: number
+): Promise<{ message: string; id: number }> {
+  const res = await api.post<{ message: string; id: number }>(
+    `/api/empaque/${empaqueId}/anular`,
+    {},
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
 }
 
 // ============================================

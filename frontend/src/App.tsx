@@ -5,13 +5,14 @@ import Empaque from './components/Empaque/Empaque';
 import Recepcion from './components/Recepcion/Recepcion';
 import Usuarios from './components/Usuarios/Usuarios';
 import Reportes from './components/Reportes/Reportes';
+import Correcciones from './components/Correcciones/Correcciones';
 
 import { login, getCurrentUser } from './lib/api';
 import { useDashboard } from './hooks/useDashboard';
 import { useClientes } from './hooks/useClientes';
 import type { User } from './types';
 
-type TabId = 'recepcion' | 'empaque' | 'embarques' | 'usuarios' | 'dashboard' | 'reportes';
+type TabId = 'recepcion' | 'empaque' | 'embarques' | 'usuarios' | 'dashboard' | 'reportes' | 'correcciones';
 
 const TOKEN_KEY = 'agropack_token';
 const USER_KEY = 'agropack_user';
@@ -36,13 +37,13 @@ function getAllowedTabs(role: string | undefined): TabId[] {
     case 'embarques':
       return ['embarques', 'dashboard', 'reportes'];
     case 'admin':
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes'];
+      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes', 'correcciones'];
     case 'observador':
       return ['dashboard', 'reportes'];
     default:
       // Si el rol no se reconoce, dar acceso completo para no dejar la UI en blanco
       console.warn('Rol no reconocido, mostrando tabs de admin:', role);
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes'];
+      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes', 'correcciones'];
   }
 }
 
@@ -154,19 +155,25 @@ function App() {
     setPassword('');
   };
 
-  const { data: dashboardData } = useDashboard(token);
+  const { data: dashboardData, refetch: refetchDashboard } = useDashboard(token);
   const { data: clientes = [] } = useClientes(token);
 
   const inventarioCampo = dashboardData?.inventario_campo || [];
   const inventarioCarton = dashboardData?.inventario_final || [];
   const desverdizado = dashboardData?.desverdizado || [];
 
-  const cargarDashboard = async () => {};
+  const cargarDashboard = async () => {
+    try {
+      await refetchDashboard?.();
+    } catch {
+      /* ignore */
+    }
+  };
   const cargarClientes = async () => {};
 
   const allowedTabs = currentUser ? getAllowedTabs(currentUser.rol) : [];
   const visibleTabs = (
-    ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes'] as TabId[]
+    ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes', 'correcciones'] as TabId[]
   ).filter((tab) => allowedTabs.includes(tab));
 
   // Si la pestaña activa no está permitida, corregir
@@ -278,6 +285,15 @@ function App() {
                 Reportes
               </button>
             )}
+            {visibleTabs.includes('correcciones') && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('correcciones')}
+                style={tabButtonStyle('correcciones')}
+              >
+                Correcciones
+              </button>
+            )}
           </div>
 
           {visibleTabs.length === 0 && (
@@ -316,6 +332,10 @@ function App() {
           {activeTab === 'usuarios' && visibleTabs.includes('usuarios') && <Usuarios token={token} />}
 
           {activeTab === 'reportes' && visibleTabs.includes('reportes') && <Reportes token={token} />}
+
+          {activeTab === 'correcciones' && visibleTabs.includes('correcciones') && (
+            <Correcciones token={token} onCorregido={cargarDashboard} />
+          )}
         </>
       )}
     </div>
