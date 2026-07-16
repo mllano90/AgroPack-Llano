@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
-from app.core.database import Base, engine
+from app.core.database import Base, engine, ensure_schema
 
 settings = get_settings()
 
@@ -15,8 +15,9 @@ from app.routers.reports import router as reports_router
 from app.routers.embarques import router as embarques_router
 from app.routers.clientes import router as clientes_router   # ← NUEVO
 
-# Crear tablas
+# Crear tablas y columnas nuevas
 Base.metadata.create_all(bind=engine)
+ensure_schema()
 
 app = FastAPI(
     title=settings.PROJECT_NAME,

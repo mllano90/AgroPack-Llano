@@ -61,6 +61,8 @@ class Empaque(Base):
     talla = Column(String, nullable=True)
     calidad = Column(String, nullable=True)
     cantidad_producida = Column(Integer, default=0)
+    # Detalle de corrida limón: {consumos: [...], produccion: [...]}
+    detalle_corrida = Column(JSON, nullable=True)
     
     usuario_id = Column(Integer, ForeignKey("users.id"))
     usuario = relationship("User")

@@ -153,6 +153,39 @@ def crear_empaque(
                     db.add(inv_final)
     
     # 3. Crear el registro de empaque (auditoría)
+    detalle_corrida = None
+    bins_usados = empaque.bins_desverdizado_usados or 0
+    if empaque.producto == Producto.LIMON_AMARILLO:
+        consumos = empaque.consumos_desverdizado or []
+        if empaque.bins_desverdizado_usados > 0 and not consumos:
+            consumos = [{"lote": empaque.lote_desverdizado, "bins": empaque.bins_desverdizado_usados}]
+        lineas = empaque.produccion or []
+        if not lineas:
+            talla = getattr(empaque, "talla", None)
+            lineas = []
+            for pres, cant in [
+                ("rpc_12", empaque.cantidad_rpc12),
+                ("rpc_18", empaque.cantidad_rpc18),
+                ("caja_40lbs", empaque.cantidad_caja40lbs),
+                ("bins_jugo", empaque.cantidad_bins_jugo),
+            ]:
+                if cant and cant > 0:
+                    lineas.append({
+                        "presentacion": pres,
+                        "talla": None if pres == "bins_jugo" else talla,
+                        "cantidad": cant,
+                    })
+        bins_usados = sum(int(c.get("bins") or 0) for c in consumos)
+        lotes = ", ".join(
+            f"{c.get('lote')}:{c.get('bins')}" for c in consumos if c.get("lote")
+        ) or empaque.lote_desverdizado
+        detalle_corrida = {
+            "consumos": consumos,
+            "produccion": lineas,
+            "bins_campo": bins_usados,
+            "lotes_resumen": lotes,
+        }
+
     nuevo_empaque = Empaque(
         producto=empaque.producto,
         variedad=empaque.variedad,
@@ -163,12 +196,13 @@ def crear_empaque(
         porcentaje_merma=empaque.porcentaje_merma,
         notas_merma=empaque.notas_merma,
         numero_empacador=empaque.numero_empacador,
-        bins_desverdizado_usados=empaque.bins_desverdizado_usados,
+        bins_desverdizado_usados=bins_usados,
         lote_desverdizado=empaque.lote_desverdizado,
         presentacion=empaque.presentacion,
         talla=empaque.talla,
         calidad=empaque.calidad,
         cantidad_producida=empaque.cantidad_producida,
+        detalle_corrida=detalle_corrida,
         usuario_id=current_user.id if hasattr(current_user, 'id') else None
     )
     db.add(nuevo_empaque)

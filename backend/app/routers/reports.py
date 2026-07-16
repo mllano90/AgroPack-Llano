@@ -1,10 +1,147 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.models.inventory import InventarioFinal, InventarioCampo, Embarque, InventarioDesverdizado
-from app.schemas.reports import DashboardResponse, InventarioFinalItem, InventarioCampoItem, DesverdizadoItem
+from app.core.security import get_current_user
+from app.models.inventory import InventarioFinal, InventarioCampo, Embarque, InventarioDesverdizado, Empaque
+from app.models.enums import Producto
+from app.schemas.reports import (
+    DashboardResponse,
+    InventarioFinalItem,
+    InventarioCampoItem,
+    DesverdizadoItem,
+    CorridaRendimiento,
+    RendimientosLimonResponse,
+)
 
 router = APIRouter(tags=["Reportes"])
+
+# Constantes de peso y parrillas (limón)
+KG_BIN_CAMPO = 260
+KG_POR_PRESENTACION = {
+    "rpc_12": 12,
+    "rpc_18": 18,
+    "caja_40lbs": 18,
+    "bins_jugo": 900,
+}
+CAJAS_POR_PARRILLA_RPC = 45  # RPC 12 y 18
+CAJAS_POR_PARRILLA_CARTON = 63  # cartón / 40lbs
+
+
+def _calcular_rendimiento(
+    *,
+    id: int,
+    fecha: str,
+    numero_empacador: str | None,
+    consumos: list,
+    produccion: list,
+    lotes_resumen: str | None = None,
+) -> CorridaRendimiento:
+    bins_campo = sum(int(c.get("bins") or 0) for c in (consumos or []))
+    kg_entrada = bins_campo * KG_BIN_CAMPO
+
+    kg_primera = 0.0
+    kg_segunda = 0.0
+    cajas_rpc = 0
+    cajas_carton = 0
+    bins_jugo = 0
+
+    for p in produccion or []:
+        pres = p.get("presentacion") or ""
+        cant = int(p.get("cantidad") or 0)
+        if cant <= 0:
+            continue
+        kg_unit = KG_POR_PRESENTACION.get(pres, 0)
+        kg = kg_unit * cant
+        if pres == "bins_jugo":
+            kg_segunda += kg
+            bins_jugo += cant
+        elif pres in ("rpc_12", "rpc_18"):
+            kg_primera += kg
+            cajas_rpc += cant
+        elif pres == "caja_40lbs":
+            kg_primera += kg
+            cajas_carton += cant
+        else:
+            # desconocido: contar como primera si tiene peso
+            kg_primera += kg
+
+    kg_salida = kg_primera + kg_segunda
+    pct_primera = round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2)
+    pct_segunda = round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2)
+    pct_recuperacion = round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2)
+
+    parrillas_rpc = round(cajas_rpc / CAJAS_POR_PARRILLA_RPC, 2) if cajas_rpc else 0.0
+    parrillas_carton = round(cajas_carton / CAJAS_POR_PARRILLA_CARTON, 2) if cajas_carton else 0.0
+    parrillas_jugo = float(bins_jugo)
+    parrillas_total = round(parrillas_rpc + parrillas_carton + parrillas_jugo, 2)
+    bins_por_parrilla = (
+        round(bins_campo / parrillas_total, 2) if parrillas_total > 0 else None
+    )
+
+    return CorridaRendimiento(
+        id=id,
+        fecha=fecha,
+        numero_empacador=numero_empacador,
+        bins_campo=bins_campo,
+        kg_entrada=round(kg_entrada, 2),
+        kg_primera=round(kg_primera, 2),
+        kg_segunda=round(kg_segunda, 2),
+        kg_salida=round(kg_salida, 2),
+        pct_primera=pct_primera,
+        pct_segunda=pct_segunda,
+        pct_recuperacion=pct_recuperacion,
+        cajas_rpc=cajas_rpc,
+        cajas_carton=cajas_carton,
+        bins_jugo=bins_jugo,
+        parrillas_rpc=parrillas_rpc,
+        parrillas_carton=parrillas_carton,
+        parrillas_jugo=parrillas_jugo,
+        parrillas_total=parrillas_total,
+        bins_por_parrilla=bins_por_parrilla,
+        lotes_resumen=lotes_resumen,
+    )
+
+
+def _acumular(corridas: list[CorridaRendimiento]) -> CorridaRendimiento:
+    if not corridas:
+        return _calcular_rendimiento(
+            id=0, fecha="acumulado", numero_empacador=None, consumos=[], produccion=[]
+        )
+    # Acumular kg y unidades; recalcular % y parrillas
+    bins_campo = sum(c.bins_campo for c in corridas)
+    kg_entrada = sum(c.kg_entrada for c in corridas)
+    kg_primera = sum(c.kg_primera for c in corridas)
+    kg_segunda = sum(c.kg_segunda for c in corridas)
+    kg_salida = kg_primera + kg_segunda
+    cajas_rpc = sum(c.cajas_rpc for c in corridas)
+    cajas_carton = sum(c.cajas_carton for c in corridas)
+    bins_jugo = sum(c.bins_jugo for c in corridas)
+    parrillas_rpc = round(cajas_rpc / CAJAS_POR_PARRILLA_RPC, 2) if cajas_rpc else 0.0
+    parrillas_carton = round(cajas_carton / CAJAS_POR_PARRILLA_CARTON, 2) if cajas_carton else 0.0
+    parrillas_jugo = float(bins_jugo)
+    parrillas_total = round(parrillas_rpc + parrillas_carton + parrillas_jugo, 2)
+    return CorridaRendimiento(
+        id=0,
+        fecha="acumulado",
+        numero_empacador=None,
+        bins_campo=bins_campo,
+        kg_entrada=round(kg_entrada, 2),
+        kg_primera=round(kg_primera, 2),
+        kg_segunda=round(kg_segunda, 2),
+        kg_salida=round(kg_salida, 2),
+        pct_primera=round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        pct_segunda=round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        cajas_rpc=cajas_rpc,
+        cajas_carton=cajas_carton,
+        bins_jugo=bins_jugo,
+        parrillas_rpc=parrillas_rpc,
+        parrillas_carton=parrillas_carton,
+        parrillas_jugo=parrillas_jugo,
+        parrillas_total=parrillas_total,
+        bins_por_parrilla=round(bins_campo / parrillas_total, 2) if parrillas_total > 0 else None,
+        lotes_resumen=f"{len(corridas)} corridas",
+    )
 
 @router.get("/dashboard", response_model=DashboardResponse)
 def obtener_dashboard(db: Session = Depends(get_db)):
@@ -69,4 +206,63 @@ def obtener_dashboard(db: Session = Depends(get_db)):
             "fecha_salida": e.fecha_salida,
             "estado": e.estado
         } for e in embarques_recientes]
+    )
+
+
+@router.get("/rendimientos-limon", response_model=RendimientosLimonResponse)
+def rendimientos_limon(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Rendimientos por corrida de empaque de limón y acumulado.
+    - kg 1ra (RPC 12/18 + cartón) vs kg 2da (bins jugo) y % sobre bins de campo (260 kg).
+    - Parrillas: 45 cajas RPC, 63 cajas cartón, 1 bin jugo = 1 parrilla.
+    - Relación bins de campo → parrillas.
+    """
+    empaques = (
+        db.query(Empaque)
+        .filter(Empaque.producto == Producto.LIMON_AMARILLO)
+        .order_by(Empaque.fecha.desc(), Empaque.id.desc())
+        .all()
+    )
+
+    corridas: list[CorridaRendimiento] = []
+    for e in empaques:
+        detalle = e.detalle_corrida if isinstance(e.detalle_corrida, dict) else None
+        if detalle and (detalle.get("produccion") or detalle.get("consumos")):
+            consumos = detalle.get("consumos") or []
+            produccion = detalle.get("produccion") or []
+            lotes = detalle.get("lotes_resumen")
+        else:
+            # Empaques viejos sin detalle: solo bins si existe
+            bins = e.bins_desverdizado_usados or 0
+            if bins <= 0 and not e.cantidad_producida:
+                continue
+            consumos = [{"bins": bins, "lote": e.lote_desverdizado}] if bins else []
+            produccion = []
+            if e.presentacion and e.cantidad_producida:
+                produccion = [{
+                    "presentacion": e.presentacion,
+                    "talla": e.talla,
+                    "cantidad": e.cantidad_producida,
+                }]
+            if not consumos and not produccion:
+                continue
+            lotes = e.lote_desverdizado
+
+        corridas.append(
+            _calcular_rendimiento(
+                id=e.id,
+                fecha=str(e.fecha) if e.fecha else "",
+                numero_empacador=e.numero_empacador,
+                consumos=consumos,
+                produccion=produccion,
+                lotes_resumen=lotes,
+            )
+        )
+
+    return RendimientosLimonResponse(
+        corridas=corridas,
+        acumulado=_acumular(corridas),
     )

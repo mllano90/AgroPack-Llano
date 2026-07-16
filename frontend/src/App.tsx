@@ -4,13 +4,14 @@ import Dashboard from './components/Dashboard/Dashboard';
 import Empaque from './components/Empaque/Empaque';
 import Recepcion from './components/Recepcion/Recepcion';
 import Usuarios from './components/Usuarios/Usuarios';
+import Reportes from './components/Reportes/Reportes';
 
 import { login, getCurrentUser } from './lib/api';
 import { useDashboard } from './hooks/useDashboard';
 import { useClientes } from './hooks/useClientes';
 import type { User } from './types';
 
-type TabId = 'recepcion' | 'empaque' | 'embarques' | 'usuarios' | 'dashboard';
+type TabId = 'recepcion' | 'empaque' | 'embarques' | 'usuarios' | 'dashboard' | 'reportes';
 
 const TOKEN_KEY = 'agropack_token';
 const USER_KEY = 'agropack_user';
@@ -27,21 +28,21 @@ function getAllowedTabs(role: string | undefined): TabId[] {
 
   switch (r) {
     case 'recepcion':
-      return ['recepcion', 'dashboard'];
+      return ['recepcion', 'dashboard', 'reportes'];
     case 'empacador':
-      return ['empaque', 'dashboard'];
+      return ['empaque', 'dashboard', 'reportes'];
     case 'recepcion_empacador':
-      return ['recepcion', 'empaque', 'dashboard'];
+      return ['recepcion', 'empaque', 'dashboard', 'reportes'];
     case 'embarques':
-      return ['embarques', 'dashboard'];
+      return ['embarques', 'dashboard', 'reportes'];
     case 'admin':
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard'];
+      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes'];
     case 'observador':
-      return ['dashboard'];
+      return ['dashboard', 'reportes'];
     default:
       // Si el rol no se reconoce, dar acceso completo para no dejar la UI en blanco
       console.warn('Rol no reconocido, mostrando tabs de admin:', role);
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard'];
+      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes'];
   }
 }
 
@@ -164,9 +165,9 @@ function App() {
   const cargarClientes = async () => {};
 
   const allowedTabs = currentUser ? getAllowedTabs(currentUser.rol) : [];
-  const visibleTabs = (['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard'] as TabId[]).filter(
-    (tab) => allowedTabs.includes(tab)
-  );
+  const visibleTabs = (
+    ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes'] as TabId[]
+  ).filter((tab) => allowedTabs.includes(tab));
 
   // Si la pestaña activa no está permitida, corregir
   useEffect(() => {
@@ -272,6 +273,11 @@ function App() {
                 Dashboard
               </button>
             )}
+            {visibleTabs.includes('reportes') && (
+              <button type="button" onClick={() => setActiveTab('reportes')} style={tabButtonStyle('reportes')}>
+                Reportes
+              </button>
+            )}
           </div>
 
           {visibleTabs.length === 0 && (
@@ -308,6 +314,8 @@ function App() {
           )}
 
           {activeTab === 'usuarios' && visibleTabs.includes('usuarios') && <Usuarios token={token} />}
+
+          {activeTab === 'reportes' && visibleTabs.includes('reportes') && <Reportes token={token} />}
         </>
       )}
     </div>

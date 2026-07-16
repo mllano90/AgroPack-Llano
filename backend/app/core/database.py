@@ -43,3 +43,23 @@ def get_db():
         yield db
     finally:
         db.close()
+
+
+def ensure_schema():
+    """Añade columnas nuevas sin migración Alembic (Postgres/SQLite)."""
+    from sqlalchemy import text, inspect
+
+    try:
+        insp = inspect(engine)
+        if "empaque" not in insp.get_table_names():
+            return
+        cols = {c["name"] for c in insp.get_columns("empaque")}
+        if "detalle_corrida" not in cols:
+            with engine.begin() as conn:
+                if DATABASE_URL.startswith("sqlite"):
+                    conn.execute(text("ALTER TABLE empaque ADD COLUMN detalle_corrida JSON"))
+                else:
+                    conn.execute(text("ALTER TABLE empaque ADD COLUMN IF NOT EXISTS detalle_corrida JSON"))
+            print("✅ Columna empaque.detalle_corrida agregada")
+    except Exception as e:
+        print(f"⚠️ ensure_schema: {e}")
