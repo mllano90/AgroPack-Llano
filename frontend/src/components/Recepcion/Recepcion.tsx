@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { TipoMercado, TipoRecepcion, Variedad, TipoCultivo, Producto } from '../../types';
 import { VariedadSelect, MercadoSelect, TipoCultivoSelect } from '../ui';
 import { useCreateRecepcion } from '../../hooks/useCreateRecepcion';
-import { LOTES_LIMON, PESO_BIN_CAMPO_KG } from '../../lib/constants';
+import { LOTES_LIMON, PESO_BIN_CAMPO_KG, DIAS_DESVERDIZADO } from '../../lib/constants';
 
 interface RecepcionProps {
   token: string;
@@ -163,12 +163,19 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
             onChange={(e) => setCantidadBins(e.target.value)}
             style={{ width: '100%', padding: '12px', margin: '10px 0' }}
           />
+          <label style={{ display: 'block', fontSize: 13, color: '#475569', marginTop: 4 }}>
+            Fecha de corte / recepción
+          </label>
           <input
             type="date"
             value={fechaCorte}
             onChange={(e) => setFechaCorte(e.target.value)}
-            style={{ width: '100%', padding: '12px', margin: '10px 0' }}
+            style={{ width: '100%', padding: '12px', margin: '6px 0 4px' }}
           />
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 8px' }}>
+            Salida tentativa de desverdizado = fecha de corte + {DIAS_DESVERDIZADO} días
+            (para proyección de producción).
+          </p>
         </>
       )}
 
