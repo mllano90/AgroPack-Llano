@@ -201,7 +201,7 @@ class InventarioDesverdizado(Base):
     lote = Column(String, nullable=False)
     fecha_recepcion = Column(Date, nullable=False)
     
-    # Fecha tentativa de salida (recepción + 6 días)
+    # Fecha tentativa de salida (recepción + DIAS_DESVERDIZADO, default 7)
     fecha_tentativa_salida = Column(Date, nullable=False)
     
     # Usuario marca manualmente cuando sale

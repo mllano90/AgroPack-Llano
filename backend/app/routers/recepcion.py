@@ -6,6 +6,7 @@ from app.models.enums import Rol
 from app.schemas.recepcion import RecepcionCampoCreate, RecepcionCampoResponse
 from app.models.inventory import RecepcionCampo, InventarioCampo, InventarioFinal, InventarioDesverdizado
 from app.models.enums import Producto
+from app.core.constants import DIAS_DESVERDIZADO
 from datetime import datetime, timedelta, date
 
 router = APIRouter(tags=["Recepción"])
@@ -88,9 +89,9 @@ def crear_recepcion(
         if recepcion.cantidad_bins <= 0 or not recepcion.lote:
             raise HTTPException(status_code=400, detail="Para Limón se requiere cantidad_bins > 0 y lote")
         
-        # Fecha de recepción = fecha de corte
+        # Fecha de recepción = fecha de corte; salida tentativa = + DIAS_DESVERDIZADO
         fecha_recepcion = recepcion.fecha_corte or date.today()
-        fecha_tentativa = fecha_recepcion + timedelta(days=6)
+        fecha_tentativa = fecha_recepcion + timedelta(days=DIAS_DESVERDIZADO)
         
         # Crear entrada en inventario de desverdizado (automático)
         inv_desv = InventarioDesverdizado(

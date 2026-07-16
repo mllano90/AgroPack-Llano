@@ -62,6 +62,7 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
             des.estado = "listo_empaque"
     else:
         from datetime import date, timedelta
+        from app.core.constants import DIAS_DESVERDIZADO
 
         hoy = date.today()
         db.add(
@@ -70,7 +71,7 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
                 cantidad_bins=bins,
                 lote=lote,
                 fecha_recepcion=hoy,
-                fecha_tentativa_salida=hoy + timedelta(days=6),
+                fecha_tentativa_salida=hoy + timedelta(days=DIAS_DESVERDIZADO),
                 estado="listo_empaque",
             )
         )

@@ -8,7 +8,7 @@ import {
   type TallaRendimientoApi,
   type ProyeccionInventarioApi,
 } from '../../lib/api';
-import { PESO_BIN_CAMPO_KG, HECTAREAS_RANCHO } from '../../lib/constants';
+import { PESO_BIN_CAMPO_KG, HECTAREAS_RANCHO, DIAS_DESVERDIZADO } from '../../lib/constants';
 import type { EmpaqueRecord } from '../../types';
 
 type Corrida = CorridaRendimientoApi;
@@ -685,9 +685,9 @@ export default function Reportes({ token }: ReportesProps) {
         <div>
           <h3 style={{ marginTop: 8 }}>Proyección de inventario final</h3>
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-            Usa los bins aún en desverdizado y su <strong>fecha tentativa de salida</strong>,
-            aplicando el rendimiento acumulado (% 1ra / % 2da y mix de tallas) de los empaques
-            ya registrados.
+            Usa los bins aún en desverdizado y su <strong>fecha tentativa de salida</strong>{' '}
+            (recepción + {DIAS_DESVERDIZADO} días de desverdizado), aplicando el rendimiento
+            acumulado (% 1ra / % 2da y mix de tallas) de los empaques ya registrados.
           </p>
 
           {!proyeccion ? (

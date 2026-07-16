@@ -24,6 +24,9 @@ export const PESO_BIN_CAMPO_KG = 260;
 /** Superficie total del rancho (ha) para kg/ha en reportes */
 export const HECTAREAS_RANCHO = 64;
 
+/** Días de desverdizado limón (fecha tentativa = recepción + N) */
+export const DIAS_DESVERDIZADO = 7;
+
 /**
  * Tallas limón 1ra por presentación:
  * - Cartón (caja 40 lbs): 75, 95, 115 y 140
