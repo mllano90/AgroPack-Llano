@@ -5,7 +5,7 @@ import {
   type CorridaRendimientoApi,
   type LoteRendimientoApi,
 } from '../../lib/api';
-import { PESO_BIN_CAMPO_KG } from '../../lib/constants';
+import { PESO_BIN_CAMPO_KG, HECTAREAS_RANCHO } from '../../lib/constants';
 import type { EmpaqueRecord } from '../../types';
 
 type Corrida = CorridaRendimientoApi;
@@ -32,8 +32,24 @@ const cardStyle: CSSProperties = {
   minWidth: 140,
 };
 
+const cardPrimary: CSSProperties = {
+  ...cardStyle,
+  minWidth: 160,
+  boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+};
+
 function fmtKg(n: number) {
   return (n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
+function fmtNum(n: number | null | undefined, digits = 2) {
+  if (n == null || Number.isNaN(n)) return '—';
+  return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+function kgHa(kg: number, ha: number) {
+  if (!ha) return null;
+  return Math.round((kg / ha) * 100) / 100;
 }
 
 function parseDetalle(raw: EmpaqueRecord['detalle_corrida'] | string | null | undefined) {
@@ -48,8 +64,53 @@ function parseDetalle(raw: EmpaqueRecord['detalle_corrida'] | string | null | un
   return raw;
 }
 
+function enrichCorrida(c: Corrida, ha: number): Corrida {
+  const parrPrimera =
+    c.parrillas_primera != null
+      ? c.parrillas_primera
+      : Math.round(((c.parrillas_rpc || 0) + (c.parrillas_carton || 0)) * 100) / 100;
+  const binsPorParrilla =
+    parrPrimera > 0
+      ? Math.round((c.bins_campo / parrPrimera) * 100) / 100
+      : null;
+  return {
+    ...c,
+    parrillas_primera: parrPrimera,
+    // Siempre bins / parrillas 1ra (no jugo)
+    bins_por_parrilla: binsPorParrilla,
+    kg_por_ha: c.kg_por_ha ?? kgHa(c.kg_salida, ha),
+    kg_primera_por_ha: c.kg_primera_por_ha ?? kgHa(c.kg_primera, ha),
+    kg_segunda_por_ha: c.kg_segunda_por_ha ?? kgHa(c.kg_segunda, ha),
+  };
+}
+
+function enrichLote(l: Lote, ha: number): Lote {
+  const parrPrimera =
+    l.parrillas_primera != null
+      ? l.parrillas_primera
+      : (() => {
+          const pRpc = l.cajas_rpc ? l.cajas_rpc / CAJAS_PARRILLA_RPC : 0;
+          const pCarton = l.cajas_carton ? l.cajas_carton / CAJAS_PARRILLA_CARTON : 0;
+          return Math.round((pRpc + pCarton) * 100) / 100;
+        })();
+  return {
+    ...l,
+    parrillas_primera: parrPrimera,
+    bins_por_parrilla:
+      parrPrimera > 0
+        ? Math.round((l.bins_campo / parrPrimera) * 100) / 100
+        : null,
+    kg_por_ha: l.kg_por_ha ?? kgHa(l.kg_salida, ha),
+    kg_primera_por_ha: l.kg_primera_por_ha ?? kgHa(l.kg_primera, ha),
+    kg_segunda_por_ha: l.kg_segunda_por_ha ?? kgHa(l.kg_segunda, ha),
+  };
+}
+
 /** Calcula rendimientos en el cliente a partir de /api/empaque/ (fallback) */
-function computeFromEmpaques(empaques: EmpaqueRecord[]): {
+function computeFromEmpaques(
+  empaques: EmpaqueRecord[],
+  ha: number
+): {
   corridas: Corrida[];
   por_lote: Lote[];
   acumulado: Corrida;
@@ -128,35 +189,43 @@ function computeFromEmpaques(empaques: EmpaqueRecord[]): {
     const kgSalida = kg1 + kg2;
     const parrRpc = cajasRpc ? cajasRpc / CAJAS_PARRILLA_RPC : 0;
     const parrCarton = cajasCarton ? cajasCarton / CAJAS_PARRILLA_CARTON : 0;
-    const parrTotal = Math.round((parrRpc + parrCarton + binsJugo) * 100) / 100;
+    const parrPrimera = Math.round((parrRpc + parrCarton) * 100) / 100;
+    const parrTotal = Math.round((parrPrimera + binsJugo) * 100) / 100;
     const lotesResumen =
       det?.lotes_resumen ||
       consumos.map((c) => `${c.lote}:${c.bins}`).join(', ') ||
       e.lote_desverdizado ||
       '';
 
-    corridas.push({
-      id: e.id,
-      fecha: e.fecha,
-      numero_empacador: e.numero_empacador,
-      bins_campo: binsCampo,
-      kg_entrada: kgEntrada,
-      kg_primera: Math.round(kg1 * 100) / 100,
-      kg_segunda: Math.round(kg2 * 100) / 100,
-      kg_salida: Math.round(kgSalida * 100) / 100,
-      pct_primera: kgEntrada ? Math.round((kg1 / kgEntrada) * 10000) / 100 : 0,
-      pct_segunda: kgEntrada ? Math.round((kg2 / kgEntrada) * 10000) / 100 : 0,
-      pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
-      cajas_rpc: cajasRpc,
-      cajas_carton: cajasCarton,
-      bins_jugo: binsJugo,
-      parrillas_rpc: Math.round(parrRpc * 100) / 100,
-      parrillas_carton: Math.round(parrCarton * 100) / 100,
-      parrillas_jugo: binsJugo,
-      parrillas_total: parrTotal,
-      bins_por_parrilla: parrTotal > 0 ? Math.round((binsCampo / parrTotal) * 100) / 100 : null,
-      lotes_resumen: lotesResumen,
-    });
+    corridas.push(
+      enrichCorrida(
+        {
+          id: e.id,
+          fecha: e.fecha,
+          numero_empacador: e.numero_empacador,
+          bins_campo: binsCampo,
+          kg_entrada: kgEntrada,
+          kg_primera: Math.round(kg1 * 100) / 100,
+          kg_segunda: Math.round(kg2 * 100) / 100,
+          kg_salida: Math.round(kgSalida * 100) / 100,
+          pct_primera: kgEntrada ? Math.round((kg1 / kgEntrada) * 10000) / 100 : 0,
+          pct_segunda: kgEntrada ? Math.round((kg2 / kgEntrada) * 10000) / 100 : 0,
+          pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
+          cajas_rpc: cajasRpc,
+          cajas_carton: cajasCarton,
+          bins_jugo: binsJugo,
+          parrillas_rpc: Math.round(parrRpc * 100) / 100,
+          parrillas_carton: Math.round(parrCarton * 100) / 100,
+          parrillas_jugo: binsJugo,
+          parrillas_primera: parrPrimera,
+          parrillas_total: parrTotal,
+          bins_por_parrilla:
+            parrPrimera > 0 ? Math.round((binsCampo / parrPrimera) * 100) / 100 : null,
+          lotes_resumen: lotesResumen,
+        },
+        ha
+      )
+    );
 
     const totalBins = consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0) || 1;
     const multi = new Set(consumos.map((c) => c.lote || 'SIN_LOTE')).size > 1;
@@ -195,30 +264,33 @@ function computeFromEmpaques(empaques: EmpaqueRecord[]): {
       const cRpc = Math.round(row.rpc);
       const cCarton = Math.round(row.carton);
       const bJugo = Math.round(row.jugo);
-      const parr =
-        Math.round(
-          ((cRpc ? cRpc / CAJAS_PARRILLA_RPC : 0) +
-            (cCarton ? cCarton / CAJAS_PARRILLA_CARTON : 0) +
-            bJugo) *
-            100
-        ) / 100;
-      return {
-        lote,
-        bins_campo: row.bins,
-        kg_entrada: Math.round(kgEntrada * 100) / 100,
-        kg_primera: Math.round(row.kg1 * 100) / 100,
-        kg_segunda: Math.round(row.kg2 * 100) / 100,
-        kg_salida: Math.round(kgSalida * 100) / 100,
-        pct_primera: kgEntrada ? Math.round((row.kg1 / kgEntrada) * 10000) / 100 : 0,
-        pct_segunda: kgEntrada ? Math.round((row.kg2 / kgEntrada) * 10000) / 100 : 0,
-        pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
-        cajas_rpc: cRpc,
-        cajas_carton: cCarton,
-        bins_jugo: bJugo,
-        parrillas_total: parr,
-        num_corridas: row.ids.size,
-        prorrateado: row.multi,
-      };
+      const pRpc = cRpc ? cRpc / CAJAS_PARRILLA_RPC : 0;
+      const pCarton = cCarton ? cCarton / CAJAS_PARRILLA_CARTON : 0;
+      const parrPrimera = Math.round((pRpc + pCarton) * 100) / 100;
+      const parr = Math.round((parrPrimera + bJugo) * 100) / 100;
+      return enrichLote(
+        {
+          lote,
+          bins_campo: row.bins,
+          kg_entrada: Math.round(kgEntrada * 100) / 100,
+          kg_primera: Math.round(row.kg1 * 100) / 100,
+          kg_segunda: Math.round(row.kg2 * 100) / 100,
+          kg_salida: Math.round(kgSalida * 100) / 100,
+          pct_primera: kgEntrada ? Math.round((row.kg1 / kgEntrada) * 10000) / 100 : 0,
+          pct_segunda: kgEntrada ? Math.round((row.kg2 / kgEntrada) * 10000) / 100 : 0,
+          pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
+          cajas_rpc: cRpc,
+          cajas_carton: cCarton,
+          bins_jugo: bJugo,
+          parrillas_primera: parrPrimera,
+          parrillas_total: parr,
+          bins_por_parrilla:
+            parrPrimera > 0 ? Math.round((row.bins / parrPrimera) * 100) / 100 : null,
+          num_corridas: row.ids.size,
+          prorrateado: row.multi,
+        },
+        ha
+      );
     });
 
   const bins = corridas.reduce((s, c) => s + c.bins_campo, 0);
@@ -231,30 +303,35 @@ function computeFromEmpaques(empaques: EmpaqueRecord[]): {
   const bJugo = corridas.reduce((s, c) => s + c.bins_jugo, 0);
   const pRpc = cRpc ? cRpc / CAJAS_PARRILLA_RPC : 0;
   const pCarton = cCarton ? cCarton / CAJAS_PARRILLA_CARTON : 0;
-  const pTotal = Math.round((pRpc + pCarton + bJugo) * 100) / 100;
+  const pPrimera = Math.round((pRpc + pCarton) * 100) / 100;
+  const pTotal = Math.round((pPrimera + bJugo) * 100) / 100;
 
-  const acumulado: Corrida = {
-    id: 0,
-    fecha: 'acumulado',
-    numero_empacador: null,
-    bins_campo: bins,
-    kg_entrada: kgE,
-    kg_primera: Math.round(kg1 * 100) / 100,
-    kg_segunda: Math.round(kg2 * 100) / 100,
-    kg_salida: Math.round(kgS * 100) / 100,
-    pct_primera: kgE ? Math.round((kg1 / kgE) * 10000) / 100 : 0,
-    pct_segunda: kgE ? Math.round((kg2 / kgE) * 10000) / 100 : 0,
-    pct_recuperacion: kgE ? Math.round((kgS / kgE) * 10000) / 100 : 0,
-    cajas_rpc: cRpc,
-    cajas_carton: cCarton,
-    bins_jugo: bJugo,
-    parrillas_rpc: Math.round(pRpc * 100) / 100,
-    parrillas_carton: Math.round(pCarton * 100) / 100,
-    parrillas_jugo: bJugo,
-    parrillas_total: pTotal,
-    bins_por_parrilla: pTotal > 0 ? Math.round((bins / pTotal) * 100) / 100 : null,
-    lotes_resumen: `${corridas.length} corridas`,
-  };
+  const acumulado = enrichCorrida(
+    {
+      id: 0,
+      fecha: 'acumulado',
+      numero_empacador: null,
+      bins_campo: bins,
+      kg_entrada: kgE,
+      kg_primera: Math.round(kg1 * 100) / 100,
+      kg_segunda: Math.round(kg2 * 100) / 100,
+      kg_salida: Math.round(kgS * 100) / 100,
+      pct_primera: kgE ? Math.round((kg1 / kgE) * 10000) / 100 : 0,
+      pct_segunda: kgE ? Math.round((kg2 / kgE) * 10000) / 100 : 0,
+      pct_recuperacion: kgE ? Math.round((kgS / kgE) * 10000) / 100 : 0,
+      cajas_rpc: cRpc,
+      cajas_carton: cCarton,
+      bins_jugo: bJugo,
+      parrillas_rpc: Math.round(pRpc * 100) / 100,
+      parrillas_carton: Math.round(pCarton * 100) / 100,
+      parrillas_jugo: bJugo,
+      parrillas_primera: pPrimera,
+      parrillas_total: pTotal,
+      bins_por_parrilla: pPrimera > 0 ? Math.round((bins / pPrimera) * 100) / 100 : null,
+      lotes_resumen: `${corridas.length} corridas`,
+    },
+    ha
+  );
 
   return { corridas, por_lote, acumulado };
 }
@@ -263,6 +340,7 @@ export default function Reportes({ token }: ReportesProps) {
   const [corridas, setCorridas] = useState<Corrida[]>([]);
   const [porLote, setPorLote] = useState<Lote[]>([]);
   const [acumulado, setAcumulado] = useState<Corrida | null>(null);
+  const [hectareas, setHectareas] = useState(HECTAREAS_RANCHO);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
@@ -275,21 +353,22 @@ export default function Reportes({ token }: ReportesProps) {
     setAviso('');
     setDebugInfo('');
     try {
+      let ha = HECTAREAS_RANCHO;
       let data: { corridas: Corrida[]; por_lote: Lote[]; acumulado: Corrida | null } | null = null;
 
       try {
         const apiData = await getRendimientosLimon(token);
+        ha = apiData.hectareas ?? HECTAREAS_RANCHO;
         data = {
-          corridas: apiData.corridas || [],
-          por_lote: apiData.por_lote || [],
-          acumulado: apiData.acumulado || null,
+          corridas: (apiData.corridas || []).map((c) => enrichCorrida(c, ha)),
+          por_lote: (apiData.por_lote || []).map((l) => enrichLote(l, ha)),
+          acumulado: apiData.acumulado ? enrichCorrida(apiData.acumulado, ha) : null,
         };
       } catch (err: any) {
         console.warn('rendimientos-limon falló, usando fallback empaques', err);
         setAviso('Usando cálculo local desde empaques (el endpoint de reportes no respondió).');
       }
 
-      // Fallback o si el API devolvió vacío pero hay empaques con detalle
       if (!data || (data.corridas.length === 0 && data.por_lote.length === 0)) {
         const empaques = await getEmpaques(token);
         const limon = empaques.filter((e) => String(e.producto || '').toLowerCase().includes('limon'));
@@ -304,17 +383,16 @@ export default function Reportes({ token }: ReportesProps) {
         setDebugInfo(
           `Empaques limón: ${limon.length} · Con datos de corrida: ${conDetalle.length}`
         );
-        const computed = computeFromEmpaques(empaques);
+        const computed = computeFromEmpaques(empaques, ha);
         if (computed.corridas.length > 0) {
           data = computed;
-          if (!aviso) {
-            setAviso('Datos calculados desde registros de empaque.');
-          }
+          if (!aviso) setAviso('Datos calculados desde registros de empaque.');
         } else if (!data) {
           data = computed;
         }
       }
 
+      setHectareas(ha);
       setCorridas(data?.corridas || []);
       setPorLote(data?.por_lote || []);
       setAcumulado(data?.acumulado || null);
@@ -376,8 +454,9 @@ export default function Reportes({ token }: ReportesProps) {
       </div>
 
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
-        Bin campo = {PESO_BIN_CAMPO_KG} kg · RPC 12 = 12 kg · RPC 18 / cartón = 18 kg · Bin jugo = 900 kg ·
-        Parrilla RPC = 45 cajas · Parrilla cartón = 63 cajas · 1 bin jugo = 1 parrilla
+        Rancho = <strong>{hectareas} ha</strong> · Bin campo = {PESO_BIN_CAMPO_KG} kg · RPC 12 = 12 kg ·
+        RPC 18 / cartón = 18 kg · Bin jugo = 900 kg · Parrilla RPC = 45 cajas · Cartón = 63 ·{' '}
+        <strong>Bins/parrilla = bins campo ÷ parrillas de 1ra</strong> (sin jugo)
       </p>
 
       {aviso && (
@@ -389,48 +468,70 @@ export default function Reportes({ token }: ReportesProps) {
         <p style={{ fontSize: 12, color: '#64748b' }}>{debugInfo}</p>
       )}
 
-      {/* Acumulado */}
+      {/* Acumulado — principales primero */}
       {a && a.bins_campo > 0 && (
         <div style={{ marginTop: 20 }}>
-          <h3>Acumulado (todas las corridas)</h3>
+          <h3 style={{ marginBottom: 8 }}>Acumulado — indicadores principales</h3>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+            <div style={{ ...cardPrimary, background: '#dcfce7' }}>
+              <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>% 1ra calidad</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>{a.pct_primera}%</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>{fmtKg(a.kg_primera)} kg · {fmtNum(a.kg_primera_por_ha)} kg/ha</div>
+            </div>
+            <div style={{ ...cardPrimary, background: '#fef9c3' }}>
+              <div style={{ fontSize: 12, color: '#854d0e', fontWeight: 600 }}>% 2da calidad</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#713f12' }}>{a.pct_segunda}%</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>{fmtKg(a.kg_segunda)} kg · {fmtNum(a.kg_segunda_por_ha)} kg/ha</div>
+            </div>
+            <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
+              <div style={{ fontSize: 12, color: '#075985', fontWeight: 600 }}>Bins / parrilla (1ra)</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#0c4a6e' }}>
+                {a.bins_por_parrilla != null ? a.bins_por_parrilla : '—'}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                {a.bins_campo} bins ÷ {a.parrillas_primera ?? '—'} parr. 1ra
+              </div>
+            </div>
+            <div style={{ ...cardPrimary, background: '#f0fdf4' }}>
+              <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Kg totales / ha</div>
+              <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>
+                {fmtNum(a.kg_por_ha)}
+              </div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>
+                {fmtKg(a.kg_salida)} kg ÷ {hectareas} ha
+              </div>
+            </div>
+          </div>
+
+          <h4 style={{ margin: '16px 0 8px', color: '#64748b', fontWeight: 600 }}>Detalle (secundario)</h4>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
             <div style={cardStyle}>
               <div style={{ fontSize: 12, color: '#64748b' }}>Bins de campo</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{a.bins_campo}</div>
+              <div style={{ fontSize: 20, fontWeight: 700 }}>{a.bins_campo}</div>
               <div style={{ fontSize: 12 }}>{fmtKg(a.kg_entrada)} kg entrada</div>
             </div>
-            <div style={{ ...cardStyle, background: '#dcfce7' }}>
-              <div style={{ fontSize: 12, color: '#166534' }}>1ra calidad (kg)</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtKg(a.kg_primera)}</div>
-              <div style={{ fontSize: 12 }}>{a.pct_primera}% del campo</div>
-            </div>
-            <div style={{ ...cardStyle, background: '#fef9c3' }}>
-              <div style={{ fontSize: 12, color: '#854d0e' }}>2da calidad / jugo (kg)</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtKg(a.kg_segunda)}</div>
-              <div style={{ fontSize: 12 }}>{a.pct_segunda}% del campo</div>
-            </div>
             <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: '#64748b' }}>Kg totales producidos</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtKg(a.kg_salida)}</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Kg 1ra / 2da / total</div>
+              <div style={{ fontSize: 16, fontWeight: 700 }}>
+                {fmtKg(a.kg_primera)} · {fmtKg(a.kg_segunda)} · {fmtKg(a.kg_salida)}
+              </div>
               <div style={{ fontSize: 12 }}>{a.pct_recuperacion}% recuperación</div>
             </div>
-            <div style={{ ...cardStyle, background: '#e0f2fe' }}>
-              <div style={{ fontSize: 12, color: '#075985' }}>Parrillas totales</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{a.parrillas_total}</div>
+            <div style={cardStyle}>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Parrillas 1ra / jugo / total</div>
+              <div style={{ fontSize: 18, fontWeight: 700 }}>
+                {a.parrillas_primera ?? 0} · {a.parrillas_jugo} · {a.parrillas_total}
+              </div>
               <div style={{ fontSize: 12 }}>
-                RPC {a.parrillas_rpc} · Cartón {a.parrillas_carton} · Jugo {a.parrillas_jugo}
+                RPC {a.parrillas_rpc} · Cartón {a.parrillas_carton}
               </div>
             </div>
             <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: '#64748b' }}>Bins → Parrillas</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Kg/ha 1ra · 2da</div>
               <div style={{ fontSize: 18, fontWeight: 700 }}>
-                {a.bins_campo} bins → {a.parrillas_total} parrillas
+                {fmtNum(a.kg_primera_por_ha)} · {fmtNum(a.kg_segunda_por_ha)}
               </div>
-              <div style={{ fontSize: 12 }}>
-                {a.bins_por_parrilla != null
-                  ? `${a.bins_por_parrilla} bins de campo por parrilla`
-                  : '—'}
-              </div>
+              <div style={{ fontSize: 12 }}>sobre {hectareas} ha</div>
             </div>
           </div>
         </div>
@@ -449,18 +550,13 @@ export default function Reportes({ token }: ReportesProps) {
         <>
           <h3 style={{ marginTop: 8 }}>Rendimiento por lote</h3>
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
-            Por cada lote: kg entrada, kg totales producidos, 1ra (RPC/cartón) y 2da (bins jugo). Si un
-            empaque mezcló lotes, la producción se reparte por proporción de bins.
+            Principales: % 1ra, % 2da, bins/parrilla (solo 1ra). Kg y kg/ha como referencia.
+            Multi-lote: producción prorrateada por bins.
           </p>
           {porLote.length === 0 ? (
             <div>
               <p style={{ color: '#64748b' }}>
-                No hay lotes con empaque usable. Solo cuentan registros de limón que tengan consumos
-                (bins de lote) y/o producción guardados en el empaque.
-              </p>
-              <p style={{ fontSize: 13, color: '#64748b' }}>
-                Si acabas de empacar: pulsa <strong>Actualizar</strong>. Si el empaque salió sin
-                detalle (bins en 0), corrígelo en <strong>Correcciones</strong> o regístralo de nuevo.
+                No hay lotes con empaque usable. Solo cuentan registros con consumos y/o producción.
               </p>
             </div>
           ) : (
@@ -470,22 +566,21 @@ export default function Reportes({ token }: ReportesProps) {
                   width: '100%',
                   borderCollapse: 'collapse',
                   fontSize: 13,
-                  minWidth: 860,
+                  minWidth: 920,
                 }}
               >
                 <thead>
                   <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
                     <th style={th}>Lote</th>
-                    <th style={th}>Bins campo</th>
-                    <th style={th}>kg entrada</th>
-                    <th style={th}>kg total prod.</th>
+                    <th style={thPrimary}>% 1ra</th>
+                    <th style={thPrimary}>% 2da</th>
+                    <th style={thPrimary}>Bins/parr. 1ra</th>
+                    <th style={th}>kg/ha total</th>
                     <th style={th}>kg 1ra</th>
-                    <th style={th}>% 1ra</th>
                     <th style={th}>kg 2da</th>
-                    <th style={th}>% 2da</th>
-                    <th style={th}>% recup.</th>
-                    <th style={th}>Parrillas</th>
-                    <th style={th}>Corridas</th>
+                    <th style={th}>kg total</th>
+                    <th style={th}>Bins</th>
+                    <th style={th}>Parr. 1ra</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -494,57 +589,33 @@ export default function Reportes({ token }: ReportesProps) {
                       <td style={td}>
                         <strong>{l.lote}</strong>
                         {l.prorrateado && (
-                          <div style={{ fontSize: 11, color: '#b45309' }}>
-                            * prorrateado (mezcla)
-                          </div>
+                          <div style={{ fontSize: 11, color: '#b45309' }}>* mezcla</div>
                         )}
                       </td>
+                      <td style={{ ...td, background: '#f0fdf4', fontWeight: 700, fontSize: 15 }}>
+                        {l.pct_primera}%
+                      </td>
+                      <td style={{ ...td, background: '#fefce8', fontWeight: 700, fontSize: 15 }}>
+                        {l.pct_segunda}%
+                      </td>
+                      <td style={{ ...td, background: '#e0f2fe', fontWeight: 700, fontSize: 15 }}>
+                        {l.bins_por_parrilla != null ? l.bins_por_parrilla : '—'}
+                      </td>
+                      <td style={td}>{fmtNum(l.kg_por_ha)}</td>
+                      <td style={td}>
+                        <span style={{ color: '#64748b' }}>{fmtKg(l.kg_primera)}</span>
+                        <div style={{ fontSize: 11, color: '#94a3b8' }}>{fmtNum(l.kg_primera_por_ha)} /ha</div>
+                      </td>
+                      <td style={td}>
+                        <span style={{ color: '#64748b' }}>{fmtKg(l.kg_segunda)}</span>
+                        <div style={{ fontSize: 11, color: '#94a3b8' }}>{fmtNum(l.kg_segunda_por_ha)} /ha</div>
+                      </td>
+                      <td style={td}>{fmtKg(l.kg_salida)}</td>
                       <td style={td}>{l.bins_campo}</td>
-                      <td style={td}>{fmtKg(l.kg_entrada)}</td>
-                      <td style={td}>
-                        <strong>{fmtKg(l.kg_salida)}</strong>
-                      </td>
-                      <td style={{ ...td, background: '#f0fdf4' }}>{fmtKg(l.kg_primera)}</td>
-                      <td style={td}>
-                        <strong>{l.pct_primera}%</strong>
-                      </td>
-                      <td style={{ ...td, background: '#fefce8' }}>{fmtKg(l.kg_segunda)}</td>
-                      <td style={td}>
-                        <strong>{l.pct_segunda}%</strong>
-                      </td>
-                      <td style={td}>{l.pct_recuperacion}%</td>
-                      <td style={td}>{l.parrillas_total}</td>
-                      <td style={td}>{l.num_corridas}</td>
+                      <td style={td}>{fmtNum(l.parrillas_primera, 2)}</td>
                     </tr>
                   ))}
                 </tbody>
-                {porLote.length > 1 && (
-                  <tfoot>
-                    <tr style={{ background: '#f8fafc', fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>
-                      <td style={td}>TOTAL</td>
-                      <td style={td}>{porLote.reduce((s, l) => s + l.bins_campo, 0)}</td>
-                      <td style={td}>
-                        {fmtKg(porLote.reduce((s, l) => s + l.kg_entrada, 0))}
-                      </td>
-                      <td style={td}>
-                        {fmtKg(porLote.reduce((s, l) => s + l.kg_salida, 0))}
-                      </td>
-                      <td style={td}>
-                        {fmtKg(porLote.reduce((s, l) => s + l.kg_primera, 0))}
-                      </td>
-                      <td style={td}>—</td>
-                      <td style={td}>
-                        {fmtKg(porLote.reduce((s, l) => s + l.kg_segunda, 0))}
-                      </td>
-                      <td style={td}>—</td>
-                      <td style={td}>—</td>
-                      <td style={td}>
-                        {porLote.reduce((s, l) => s + l.parrillas_total, 0).toFixed(1)}
-                      </td>
-                      <td style={td}>—</td>
-                    </tr>
-                  </tfoot>
-                )}
               </table>
             </div>
           )}
@@ -555,10 +626,7 @@ export default function Reportes({ token }: ReportesProps) {
         <>
           <h3 style={{ marginTop: 8 }}>Por corrida de empaque</h3>
           {corridas.length === 0 ? (
-            <p style={{ color: '#64748b' }}>
-              No hay corridas con detalle. Revisa en Correcciones que el empaque tenga consumos y
-              producción.
-            </p>
+            <p style={{ color: '#64748b' }}>No hay corridas con detalle.</p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
               <table
@@ -566,7 +634,7 @@ export default function Reportes({ token }: ReportesProps) {
                   width: '100%',
                   borderCollapse: 'collapse',
                   fontSize: 13,
-                  minWidth: 900,
+                  minWidth: 960,
                 }}
               >
                 <thead>
@@ -574,15 +642,15 @@ export default function Reportes({ token }: ReportesProps) {
                     <th style={th}>#</th>
                     <th style={th}>Fecha</th>
                     <th style={th}>Lotes</th>
-                    <th style={th}>Bins campo</th>
-                    <th style={th}>kg total</th>
+                    <th style={thPrimary}>% 1ra</th>
+                    <th style={thPrimary}>% 2da</th>
+                    <th style={thPrimary}>Bins/parr. 1ra</th>
+                    <th style={th}>kg/ha</th>
                     <th style={th}>kg 1ra</th>
-                    <th style={th}>% 1ra</th>
                     <th style={th}>kg 2da</th>
-                    <th style={th}>% 2da</th>
-                    <th style={th}>% recup.</th>
-                    <th style={th}>Parrillas</th>
-                    <th style={th}>Bins → Parr.</th>
+                    <th style={th}>kg total</th>
+                    <th style={th}>Bins</th>
+                    <th style={th}>Parr. 1ra</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -591,35 +659,28 @@ export default function Reportes({ token }: ReportesProps) {
                       <td style={td}>{c.id}</td>
                       <td style={td}>{c.fecha}</td>
                       <td style={td}>{c.lotes_resumen || '—'}</td>
+                      <td style={{ ...td, background: '#f0fdf4', fontWeight: 700, fontSize: 15 }}>
+                        {c.pct_primera}%
+                      </td>
+                      <td style={{ ...td, background: '#fefce8', fontWeight: 700, fontSize: 15 }}>
+                        {c.pct_segunda}%
+                      </td>
+                      <td style={{ ...td, background: '#e0f2fe', fontWeight: 700, fontSize: 15 }}>
+                        {c.bins_por_parrilla != null ? c.bins_por_parrilla : '—'}
+                      </td>
+                      <td style={td}>{fmtNum(c.kg_por_ha)}</td>
+                      <td style={td}>{fmtKg(c.kg_primera)}</td>
+                      <td style={td}>{fmtKg(c.kg_segunda)}</td>
+                      <td style={td}>{fmtKg(c.kg_salida)}</td>
                       <td style={td}>
                         {c.bins_campo}
                         <div style={{ fontSize: 11, color: '#94a3b8' }}>{fmtKg(c.kg_entrada)} kg</div>
                       </td>
                       <td style={td}>
-                        <strong>{fmtKg(c.kg_salida)}</strong>
-                      </td>
-                      <td style={td}>{fmtKg(c.kg_primera)}</td>
-                      <td style={td}>
-                        <strong>{c.pct_primera}%</strong>
-                      </td>
-                      <td style={td}>{fmtKg(c.kg_segunda)}</td>
-                      <td style={td}>
-                        <strong>{c.pct_segunda}%</strong>
-                      </td>
-                      <td style={td}>{c.pct_recuperacion}%</td>
-                      <td style={td}>
-                        <strong>{c.parrillas_total}</strong>
+                        {fmtNum(c.parrillas_primera, 2)}
                         <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                          R{c.parrillas_rpc} / C{c.parrillas_carton} / J{c.parrillas_jugo}
+                          +{c.parrillas_jugo} jugo
                         </div>
-                      </td>
-                      <td style={td}>
-                        {c.bins_campo} → {c.parrillas_total}
-                        {c.bins_por_parrilla != null && (
-                          <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                            {c.bins_por_parrilla} bins/parr.
-                          </div>
-                        )}
                       </td>
                     </tr>
                   ))}
@@ -637,6 +698,11 @@ const th: CSSProperties = {
   padding: '10px 8px',
   fontWeight: 600,
   whiteSpace: 'nowrap',
+};
+
+const thPrimary: CSSProperties = {
+  ...th,
+  background: '#e2e8f0',
 };
 
 const td: CSSProperties = {

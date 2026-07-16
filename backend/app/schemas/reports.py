@@ -42,7 +42,7 @@ class CorridaRendimiento(BaseModel):
     kg_primera: float
     kg_segunda: float
     kg_salida: float
-    pct_primera: float  # % del peso de campo
+    pct_primera: float  # % del peso de campo (dato principal)
     pct_segunda: float
     pct_recuperacion: float  # (1ra+2da) / entrada
     cajas_rpc: int  # rpc_12 + rpc_18
@@ -50,9 +50,14 @@ class CorridaRendimiento(BaseModel):
     bins_jugo: int
     parrillas_rpc: float  # cajas_rpc / 45
     parrillas_carton: float  # cajas_carton / 63
-    parrillas_jugo: float  # 1 bin jugo = 1 parrilla
+    parrillas_jugo: float  # 1 bin jugo = 1 parrilla (2da)
+    parrillas_primera: float = 0.0  # solo 1ra: RPC + cartón
     parrillas_total: float
-    bins_por_parrilla: float | None = None  # bins campo / parrillas
+    # bins campo / parrillas de 1ra (NO incluye bins jugo)
+    bins_por_parrilla: float | None = None
+    kg_por_ha: float | None = None  # kg salida / hectareas del rancho
+    kg_primera_por_ha: float | None = None
+    kg_segunda_por_ha: float | None = None
     lotes_resumen: str | None = None
 
 
@@ -70,7 +75,12 @@ class LoteRendimiento(BaseModel):
     cajas_rpc: int
     cajas_carton: int
     bins_jugo: int
+    parrillas_primera: float = 0.0
     parrillas_total: float
+    bins_por_parrilla: float | None = None  # bins / parrillas 1ra
+    kg_por_ha: float | None = None
+    kg_primera_por_ha: float | None = None
+    kg_segunda_por_ha: float | None = None
     num_corridas: int  # empaques donde participó este lote
     prorrateado: bool = False  # True si alguna corrida mezcló lotes
 
@@ -79,3 +89,4 @@ class RendimientosLimonResponse(BaseModel):
     corridas: List[CorridaRendimiento]
     por_lote: List[LoteRendimiento] = []
     acumulado: CorridaRendimiento
+    hectareas: float = 64.0

@@ -142,8 +142,13 @@ export interface CorridaRendimientoApi {
   parrillas_rpc: number;
   parrillas_carton: number;
   parrillas_jugo: number;
+  parrillas_primera?: number;
   parrillas_total: number;
+  /** bins campo / parrillas de 1ra (sin jugo) */
   bins_por_parrilla: number | null;
+  kg_por_ha?: number | null;
+  kg_primera_por_ha?: number | null;
+  kg_segunda_por_ha?: number | null;
   lotes_resumen?: string | null;
 }
 
@@ -160,7 +165,12 @@ export interface LoteRendimientoApi {
   cajas_rpc: number;
   cajas_carton: number;
   bins_jugo: number;
+  parrillas_primera?: number;
   parrillas_total: number;
+  bins_por_parrilla?: number | null;
+  kg_por_ha?: number | null;
+  kg_primera_por_ha?: number | null;
+  kg_segunda_por_ha?: number | null;
   num_corridas: number;
   prorrateado: boolean;
 }
@@ -169,6 +179,7 @@ export interface RendimientosLimonApi {
   corridas: CorridaRendimientoApi[];
   por_lote: LoteRendimientoApi[];
   acumulado: CorridaRendimientoApi;
+  hectareas?: number;
 }
 
 export async function getRendimientosLimon(token: string): Promise<RendimientosLimonApi> {

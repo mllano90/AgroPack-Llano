@@ -28,6 +28,14 @@ KG_POR_PRESENTACION = {
 }
 CAJAS_POR_PARRILLA_RPC = 45  # RPC 12 y 18
 CAJAS_POR_PARRILLA_CARTON = 63  # cartón / 40lbs
+# Superficie total del rancho (para kg/ha en reportes)
+HECTAREAS_RANCHO = 64.0
+
+
+def _kg_por_ha(kg: float, hectareas: float = HECTAREAS_RANCHO) -> float | None:
+    if not hectareas or hectareas <= 0:
+        return None
+    return round(kg / hectareas, 2)
 
 
 def _calcular_rendimiento(
@@ -38,6 +46,7 @@ def _calcular_rendimiento(
     consumos: list,
     produccion: list,
     lotes_resumen: str | None = None,
+    hectareas: float = HECTAREAS_RANCHO,
 ) -> CorridaRendimiento:
     bins_campo = sum(int(c.get("bins") or 0) for c in (consumos or []))
     kg_entrada = bins_campo * KG_BIN_CAMPO
@@ -76,9 +85,11 @@ def _calcular_rendimiento(
     parrillas_rpc = round(cajas_rpc / CAJAS_POR_PARRILLA_RPC, 2) if cajas_rpc else 0.0
     parrillas_carton = round(cajas_carton / CAJAS_POR_PARRILLA_CARTON, 2) if cajas_carton else 0.0
     parrillas_jugo = float(bins_jugo)
-    parrillas_total = round(parrillas_rpc + parrillas_carton + parrillas_jugo, 2)
+    # Solo 1ra (RPC + cartón); no incluye bins jugo / 2da
+    parrillas_primera = round(parrillas_rpc + parrillas_carton, 2)
+    parrillas_total = round(parrillas_primera + parrillas_jugo, 2)
     bins_por_parrilla = (
-        round(bins_campo / parrillas_total, 2) if parrillas_total > 0 else None
+        round(bins_campo / parrillas_primera, 2) if parrillas_primera > 0 else None
     )
 
     return CorridaRendimiento(
@@ -99,16 +110,24 @@ def _calcular_rendimiento(
         parrillas_rpc=parrillas_rpc,
         parrillas_carton=parrillas_carton,
         parrillas_jugo=parrillas_jugo,
+        parrillas_primera=parrillas_primera,
         parrillas_total=parrillas_total,
         bins_por_parrilla=bins_por_parrilla,
+        kg_por_ha=_kg_por_ha(kg_salida, hectareas),
+        kg_primera_por_ha=_kg_por_ha(kg_primera, hectareas),
+        kg_segunda_por_ha=_kg_por_ha(kg_segunda, hectareas),
         lotes_resumen=lotes_resumen,
     )
 
 
-def _acumular(corridas: list[CorridaRendimiento]) -> CorridaRendimiento:
+def _acumular(
+    corridas: list[CorridaRendimiento],
+    hectareas: float = HECTAREAS_RANCHO,
+) -> CorridaRendimiento:
     if not corridas:
         return _calcular_rendimiento(
-            id=0, fecha="acumulado", numero_empacador=None, consumos=[], produccion=[]
+            id=0, fecha="acumulado", numero_empacador=None, consumos=[], produccion=[],
+            hectareas=hectareas,
         )
     # Acumular kg y unidades; recalcular % y parrillas
     bins_campo = sum(c.bins_campo for c in corridas)
@@ -122,7 +141,8 @@ def _acumular(corridas: list[CorridaRendimiento]) -> CorridaRendimiento:
     parrillas_rpc = round(cajas_rpc / CAJAS_POR_PARRILLA_RPC, 2) if cajas_rpc else 0.0
     parrillas_carton = round(cajas_carton / CAJAS_POR_PARRILLA_CARTON, 2) if cajas_carton else 0.0
     parrillas_jugo = float(bins_jugo)
-    parrillas_total = round(parrillas_rpc + parrillas_carton + parrillas_jugo, 2)
+    parrillas_primera = round(parrillas_rpc + parrillas_carton, 2)
+    parrillas_total = round(parrillas_primera + parrillas_jugo, 2)
     return CorridaRendimiento(
         id=0,
         fecha="acumulado",
@@ -141,8 +161,14 @@ def _acumular(corridas: list[CorridaRendimiento]) -> CorridaRendimiento:
         parrillas_rpc=parrillas_rpc,
         parrillas_carton=parrillas_carton,
         parrillas_jugo=parrillas_jugo,
+        parrillas_primera=parrillas_primera,
         parrillas_total=parrillas_total,
-        bins_por_parrilla=round(bins_campo / parrillas_total, 2) if parrillas_total > 0 else None,
+        bins_por_parrilla=(
+            round(bins_campo / parrillas_primera, 2) if parrillas_primera > 0 else None
+        ),
+        kg_por_ha=_kg_por_ha(kg_salida, hectareas),
+        kg_primera_por_ha=_kg_por_ha(kg_primera, hectareas),
+        kg_segunda_por_ha=_kg_por_ha(kg_segunda, hectareas),
         lotes_resumen=f"{len(corridas)} corridas",
     )
 
@@ -292,7 +318,8 @@ def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
         parrillas_rpc = round(cajas_rpc / CAJAS_POR_PARRILLA_RPC, 2) if cajas_rpc else 0.0
         parrillas_carton = round(cajas_carton / CAJAS_POR_PARRILLA_CARTON, 2) if cajas_carton else 0.0
         parrillas_jugo = float(bins_jugo)
-        parrillas_total = round(parrillas_rpc + parrillas_carton + parrillas_jugo, 2)
+        parrillas_primera = round(parrillas_rpc + parrillas_carton, 2)
+        parrillas_total = round(parrillas_primera + parrillas_jugo, 2)
         result.append(
             LoteRendimiento(
                 lote=lote,
@@ -307,6 +334,13 @@ def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
                 cajas_rpc=cajas_rpc,
                 cajas_carton=cajas_carton,
                 bins_jugo=bins_jugo,
+                parrillas_primera=parrillas_primera,
+                bins_por_parrilla=(
+                    round(bins_campo / parrillas_primera, 2) if parrillas_primera > 0 else None
+                ),
+                kg_por_ha=_kg_por_ha(kg_salida),
+                kg_primera_por_ha=_kg_por_ha(kg_primera),
+                kg_segunda_por_ha=_kg_por_ha(kg_segunda),
                 parrillas_total=parrillas_total,
                 num_corridas=len(row["corrida_ids"]),
                 prorrateado=bool(row["prorrateado"]),
@@ -387,9 +421,10 @@ def rendimientos_limon(
 ):
     """
     Rendimientos de limón:
-    - por corrida de empaque
-    - por lote de campo (kg total, 1ra, 2da; multi-lote prorratea por bins)
-    - acumulado
+    - % 1ra / % 2da (principal), kg como secundario
+    - bins por parrilla solo de 1ra (RPC+cartón, sin jugo)
+    - kg/ha con HECTAREAS_RANCHO (64)
+    - por corrida, por lote y acumulado
     Empaques anulados se excluyen.
     """
     # Traer todos y filtrar en Python: evita fallos de enum Postgres vs valor string
@@ -423,11 +458,13 @@ def rendimientos_limon(
                 consumos=consumos,
                 produccion=produccion,
                 lotes_resumen=lotes,
+                hectareas=HECTAREAS_RANCHO,
             )
         )
 
     return RendimientosLimonResponse(
         corridas=corridas,
         por_lote=_rendimientos_por_lote(empaques),
-        acumulado=_acumular(corridas),
+        acumulado=_acumular(corridas, hectareas=HECTAREAS_RANCHO),
+        hectareas=HECTAREAS_RANCHO,
     )

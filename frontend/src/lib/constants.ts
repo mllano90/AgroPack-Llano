@@ -21,6 +21,9 @@ export const TIPO_CULTIVO_OPTIONS: Array<{ value: TipoCultivo; label: string }> 
 /** Peso de bin de campo limón (kg) */
 export const PESO_BIN_CAMPO_KG = 260;
 
+/** Superficie total del rancho (ha) para kg/ha en reportes */
+export const HECTAREAS_RANCHO = 64;
+
 /** Tallas de limón 1ra (campos fijos en empaque) */
 export const TALLAS_LIMON = ['75', '95', '115', '140', '165', '200', '235'] as const;
 
