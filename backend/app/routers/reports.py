@@ -1,3 +1,4 @@
+import json
 from collections import defaultdict
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -180,11 +181,33 @@ def _kg_y_unidades_produccion(produccion: list) -> dict:
     }
 
 
+def _as_dict(val) -> dict | None:
+    """Normaliza JSON de detalle_corrida (dict o string)."""
+    if val is None:
+        return None
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        try:
+            parsed = json.loads(val)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
+def _producto_es_limon(producto) -> bool:
+    if producto is None:
+        return False
+    val = getattr(producto, "value", None) or str(producto)
+    return str(val).lower() in ("limon_amarillo", "producto.limon_amarillo")
+
+
 def _extract_empaque_detalle(e: Empaque) -> tuple[list, list, bool]:
     """
     Devuelve (consumos, produccion, anulado).
     """
-    detalle = e.detalle_corrida if isinstance(e.detalle_corrida, dict) else None
+    detalle = _as_dict(e.detalle_corrida)
     if detalle and detalle.get("anulado"):
         return [], [], True
 
@@ -369,12 +392,9 @@ def rendimientos_limon(
     - acumulado
     Empaques anulados se excluyen.
     """
-    empaques = (
-        db.query(Empaque)
-        .filter(Empaque.producto == Producto.LIMON_AMARILLO)
-        .order_by(Empaque.fecha.desc(), Empaque.id.desc())
-        .all()
-    )
+    # Traer todos y filtrar en Python: evita fallos de enum Postgres vs valor string
+    todos = db.query(Empaque).order_by(Empaque.fecha.desc(), Empaque.id.desc()).all()
+    empaques = [e for e in todos if _producto_es_limon(e.producto)]
 
     corridas: list[CorridaRendimiento] = []
     for e in empaques:
@@ -384,7 +404,7 @@ def rendimientos_limon(
         if not consumos and not produccion:
             continue
 
-        detalle = e.detalle_corrida if isinstance(e.detalle_corrida, dict) else None
+        detalle = _as_dict(e.detalle_corrida)
         lotes = None
         if detalle:
             lotes = detalle.get("lotes_resumen")

@@ -117,6 +117,68 @@ export async function createEmpaque(token: string, payload: EmpaquePayload): Pro
   });
 }
 
+/** Lista empaques recientes (público en API; útil para reportes / fallback) */
+export async function getEmpaques(token?: string): Promise<EmpaqueRecord[]> {
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const res = await api.get<EmpaqueRecord[]>('/api/empaque/', { headers });
+  return res.data;
+}
+
+export interface CorridaRendimientoApi {
+  id: number;
+  fecha: string;
+  numero_empacador?: string | null;
+  bins_campo: number;
+  kg_entrada: number;
+  kg_primera: number;
+  kg_segunda: number;
+  kg_salida: number;
+  pct_primera: number;
+  pct_segunda: number;
+  pct_recuperacion: number;
+  cajas_rpc: number;
+  cajas_carton: number;
+  bins_jugo: number;
+  parrillas_rpc: number;
+  parrillas_carton: number;
+  parrillas_jugo: number;
+  parrillas_total: number;
+  bins_por_parrilla: number | null;
+  lotes_resumen?: string | null;
+}
+
+export interface LoteRendimientoApi {
+  lote: string;
+  bins_campo: number;
+  kg_entrada: number;
+  kg_primera: number;
+  kg_segunda: number;
+  kg_salida: number;
+  pct_primera: number;
+  pct_segunda: number;
+  pct_recuperacion: number;
+  cajas_rpc: number;
+  cajas_carton: number;
+  bins_jugo: number;
+  parrillas_total: number;
+  num_corridas: number;
+  prorrateado: boolean;
+}
+
+export interface RendimientosLimonApi {
+  corridas: CorridaRendimientoApi[];
+  por_lote: LoteRendimientoApi[];
+  acumulado: CorridaRendimientoApi;
+}
+
+export async function getRendimientosLimon(token: string): Promise<RendimientosLimonApi> {
+  const res = await api.get<RendimientosLimonApi>('/api/reports/rendimientos-limon', {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 60000,
+  });
+  return res.data;
+}
+
 /** Lista empaques recientes (solo admin) */
 export async function getEmpaquesAdmin(token: string): Promise<EmpaqueRecord[]> {
   const res = await api.get<EmpaqueRecord[]>('/api/empaque/admin/recientes', {
