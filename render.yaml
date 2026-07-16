@@ -1,20 +1,20 @@
-# Blueprint para Render.com
-# Dashboard: https://dashboard.render.com → New → Blueprint → conectar este repo
+# Blueprint Render — AgroPack Llano
+# Si el plan "free" falla en Blueprint, crea los servicios a mano (ver DESPLIEGUE_NUBE.md).
 #
 # Tras el deploy:
-# 1. Anota la URL del backend (ej. https://agropack-api.onrender.com)
-# 2. En el servicio frontend, define VITE_API_URL = esa URL (sin barra final)
-# 3. Redeploy del frontend si hace falta
-# 4. Crear admin: POST /api/auth/register (primer usuario sin token)
+# 1. Copia la URL de agropack-api
+# 2. En agropack-web pon VITE_API_URL = esa URL (sin / final) y redeploy
 
 services:
+  # API FastAPI (runtime Python nativo; mejor compatibilidad free que Docker)
   - type: web
     name: agropack-api
-    runtime: docker
+    runtime: python
     rootDir: backend
-    dockerfilePath: ./Dockerfile
-    dockerCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Omitir "plan" si free falla; en el dashboard elige "Free" al crear a mano.
+    # plan: free
     healthCheckPath: /
     envVars:
       - key: SECRET_KEY
@@ -25,21 +25,22 @@ services:
         value: "1440"
       - key: DEBUG
         value: "false"
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       - key: DATABASE_URL
         fromDatabase:
           name: agropack-db
           property: connectionString
 
+  # Frontend estático (React build)
   - type: web
     name: agropack-web
     runtime: static
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
-    plan: free
+    # Los static sites no usan el mismo "plan free" que un web service Docker
     envVars:
-      # IMPORTANTE: tras crear agropack-api, pon aquí su URL pública
-      # Ejemplo: https://agropack-api.onrender.com
       - key: VITE_API_URL
         sync: false
     routes:

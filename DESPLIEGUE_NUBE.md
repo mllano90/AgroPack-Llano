@@ -60,16 +60,50 @@ git push -u origin main
 
 #### 2. Crear el stack en Render
 
+**Opción A — Blueprint** (si no da error de plan):
+
 1. Entra a https://dashboard.render.com  
 2. **New** → **Blueprint**  
 3. Conecta el repo `AgroPack-Llano`  
 4. Render detecta `render.yaml`  
 5. **Apply** / crear servicios  
 
-Se crean:
+**Si ves `no such plan free for service type web`:**  
+el plan free del Blueprint a veces no aplica. Usa la **opción B (manual)** abajo.
+
+**Opción B — Manual (recomendada si falla el Blueprint)**
+
+1. **New → PostgreSQL**
+   - Name: `agropack-db`
+   - Plan: **Free**
+   - Create
+
+2. **New → Web Service**
+   - Connect repo `AgroPack-Llano`
+   - **Root Directory:** `backend`
+   - Runtime: **Python 3**
+   - Build: `pip install -r requirements.txt`
+   - Start: `uvicorn app.main:app --host 0.0.0.0 --port $PORT`
+   - Instance type: **Free** (elige en el UI, no en el YAML)
+   - Environment:
+     - `SECRET_KEY` = genera un string largo (o Generate)
+     - `ALGORITHM` = `HS256`
+     - `DATABASE_URL` = **Link** al Postgres `agropack-db` (Internal Database URL)
+   - Create Web Service
+
+3. **New → Static Site**
+   - Connect mismo repo
+   - **Root Directory:** `frontend`
+   - Build: `npm ci && npm run build`
+   - Publish directory: `dist`
+   - Environment:
+     - `VITE_API_URL` = URL del web service API (ej. `https://agropack-api.onrender.com`) **sin** `/` final
+   - Create Static Site
+
+Se crean (nombres aproximados):
 
 - `agropack-db` (Postgres)
-- `agropack-api` (backend Docker)
+- `agropack-api` (backend Python)
 - `agropack-web` (frontend estático)
 
 #### 3. Configurar la URL de la API en el frontend
