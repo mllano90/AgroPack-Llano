@@ -153,3 +153,55 @@ def marcar_salida_desverdizado(
     db.commit()
     db.refresh(des)
     return {"message": "Salida de desverdizado registrada", "fecha": des.fecha_real_salida}
+
+
+@router.get("/admin/desverdizado", response_model=list[dict])
+def listar_desverdizado_admin(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """Lista lotes en desverdizado (con stock) para correcciones admin."""
+    items = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.cantidad_bins > 0)
+        .order_by(InventarioDesverdizado.fecha_recepcion.desc(), InventarioDesverdizado.id.desc())
+        .limit(100)
+        .all()
+    )
+    return [
+        {
+            "id": d.id,
+            "lote": d.lote,
+            "cantidad_bins_disponibles": d.cantidad_bins,
+            "fecha_recepcion": str(d.fecha_recepcion) if d.fecha_recepcion else None,
+            "fecha_tentativa_salida": str(d.fecha_tentativa_salida) if d.fecha_tentativa_salida else None,
+            "estado": d.estado,
+        }
+        for d in items
+    ]
+
+
+@router.delete("/admin/desverdizado/{desverdizado_id}")
+def eliminar_desverdizado_admin(
+    desverdizado_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Elimina un lote de desverdizado mal dado de alta.
+    Solo admin. No revierte recepción de campo (solo quita el stock de desverdizado).
+    """
+    des = db.query(InventarioDesverdizado).filter(InventarioDesverdizado.id == desverdizado_id).first()
+    if not des:
+        raise HTTPException(status_code=404, detail="Lote de desverdizado no encontrado")
+
+    lote = des.lote
+    bins = des.cantidad_bins
+    db.delete(des)
+    db.commit()
+    return {
+        "message": f"Lote {lote} eliminado de desverdizado ({bins} bins)",
+        "id": desverdizado_id,
+        "lote": lote,
+        "bins_eliminados": bins,
+    }

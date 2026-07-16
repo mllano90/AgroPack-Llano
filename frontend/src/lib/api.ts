@@ -124,6 +124,39 @@ export async function getEmpaques(token?: string): Promise<EmpaqueRecord[]> {
   return res.data;
 }
 
+export interface DesverdizadoAdminItem {
+  id: number;
+  lote: string;
+  cantidad_bins_disponibles: number;
+  fecha_recepcion?: string | null;
+  fecha_tentativa_salida?: string | null;
+  estado?: string | null;
+}
+
+/** Lotes en desverdizado (admin / correcciones) */
+export async function getDesverdizadoAdmin(token: string): Promise<DesverdizadoAdminItem[]> {
+  const res = await api.get<DesverdizadoAdminItem[]>('/api/recepcion/admin/desverdizado', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+/** Elimina un lote de desverdizado mal registrado (admin) */
+export async function eliminarDesverdizado(
+  token: string,
+  desverdizadoId: number
+): Promise<{ message: string; id: number; lote: string; bins_eliminados: number }> {
+  const res = await api.delete<{
+    message: string;
+    id: number;
+    lote: string;
+    bins_eliminados: number;
+  }>(`/api/recepcion/admin/desverdizado/${desverdizadoId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
 export interface CorridaRendimientoApi {
   id: number;
   fecha: string;

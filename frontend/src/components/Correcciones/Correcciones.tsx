@@ -3,7 +3,9 @@ import {
   getEmpaquesAdmin,
   agregarConsumoEmpaque,
   anularEmpaque,
-  getApiBaseUrl,
+  getDesverdizadoAdmin,
+  eliminarDesverdizado,
+  type DesverdizadoAdminItem,
 } from '../../lib/api';
 import type { EmpaqueRecord } from '../../types';
 
@@ -29,9 +31,7 @@ function labelProducto(p: string) {
 
 export default function Correcciones({ token, onCorregido }: CorreccionesProps) {
   const [empaques, setEmpaques] = useState<EmpaqueRecord[]>([]);
-  const [desverdizado, setDesverdizado] = useState<
-    Array<{ lote: string; cantidad_bins_disponibles: number }>
-  >([]);
+  const [desverdizado, setDesverdizado] = useState<DesverdizadoAdminItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [okMsg, setOkMsg] = useState('');
@@ -45,14 +45,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setLoading(true);
     setError('');
     try {
-      const base = getApiBaseUrl().replace(/\/$/, '');
       const [list, desv] = await Promise.all([
         getEmpaquesAdmin(token),
-        fetch(`${base}/api/recepcion/desverdizado`, {
-          headers: { Authorization: `Bearer ${token}` },
-        })
-          .then((r) => (r.ok ? r.json() : []))
-          .catch(() => []),
+        getDesverdizadoAdmin(token).catch(() => [] as DesverdizadoAdminItem[]),
       ]);
       setEmpaques(list);
       setDesverdizado(Array.isArray(desv) ? desv : []);
@@ -138,6 +133,35 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
+  const handleEliminarDesverdizado = async (d: DesverdizadoAdminItem) => {
+    if (
+      !confirm(
+        `¿Eliminar de desverdizado el lote "${d.lote}" (${d.cantidad_bins_disponibles} bins)?\n\n` +
+          `Úsalo si se dio de alta mal en recepción.\n` +
+          `No revierte el registro de recepción; solo quita esos bins del inventario de desverdizado.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const res = await eliminarDesverdizado(token, d.id);
+      setOkMsg(res.message || `Lote ${d.lote} eliminado`);
+      if (lote === d.lote) {
+        setLote('');
+        setBins('');
+      }
+      await load();
+      onCorregido?.();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'No se pudo eliminar el lote de desverdizado');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const consumos =
     selected?.detalle_corrida?.consumos ||
     (selected?.lote_desverdizado
@@ -149,8 +173,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     <div>
       <h2 style={{ marginBottom: 8 }}>Correcciones (solo admin)</h2>
       <p style={{ color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-        Usa esta pantalla cuando un empaque de limón quedó mal: te faltó un lote, o hay que anular
-        todo el registro. Los cambios actualizan desverdizado e inventario final automáticamente.
+        Corrige empaques mal registrados (agregar lote olvidado / anular) o elimina lotes de
+        desverdizado dados de alta por error. Los cambios actualizan inventario automáticamente.
       </p>
 
       {error && (
@@ -306,7 +330,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                           {desverdizado
                             .filter((d) => (d.cantidad_bins_disponibles || 0) > 0)
                             .map((d) => (
-                              <option key={d.lote} value={d.lote}>
+                              <option key={d.id} value={d.lote}>
                                 {d.lote} ({d.cantidad_bins_disponibles} bins)
                               </option>
                             ))}
@@ -383,6 +407,77 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
               </>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Lotes desverdizado */}
+      {!loading && (
+        <div
+          style={{
+            marginTop: 32,
+            padding: 20,
+            border: '1px solid #fecaca',
+            borderRadius: 12,
+            background: '#fffafa',
+          }}
+        >
+          <h3 style={{ marginTop: 0, color: '#991b1b' }}>Eliminar lotes de desverdizado</h3>
+          <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
+            Si un lote se dio de alta mal en recepción, elimínalo aquí. Se quitan los bins del
+            inventario de desverdizado (no borra el historial de recepción).
+          </p>
+          {desverdizado.length === 0 ? (
+            <p style={{ color: '#64748b' }}>No hay lotes con bins en desverdizado.</p>
+          ) : (
+            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                <thead>
+                  <tr style={{ background: '#fef2f2', textAlign: 'left' }}>
+                    <th style={th}>ID</th>
+                    <th style={th}>Lote</th>
+                    <th style={th}>Bins</th>
+                    <th style={th}>Recepción</th>
+                    <th style={th}>Salida tent.</th>
+                    <th style={th}>Estado</th>
+                    <th style={th}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {desverdizado.map((d) => (
+                    <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={td}>#{d.id}</td>
+                      <td style={td}>
+                        <strong>{d.lote}</strong>
+                      </td>
+                      <td style={td}>{d.cantidad_bins_disponibles}</td>
+                      <td style={td}>{formatFecha(d.fecha_recepcion || '')}</td>
+                      <td style={td}>{formatFecha(d.fecha_tentativa_salida || '')}</td>
+                      <td style={td}>{d.estado || '—'}</td>
+                      <td style={td}>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => handleEliminarDesverdizado(d)}
+                          style={{
+                            padding: '6px 12px',
+                            background: '#dc2626',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: 6,
+                            cursor: busy ? 'wait' : 'pointer',
+                            fontWeight: 600,
+                            fontSize: 13,
+                          }}
+                        >
+                          Eliminar
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>
