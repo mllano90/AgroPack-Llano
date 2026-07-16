@@ -294,8 +294,8 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                 style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '4px 0', fontSize: 13 }}
               >
                 <span>
-                  Lote: <strong>{d.lote}</strong> | Bins disp: {d.cantidad_bins_disponibles} | Tentativa:{' '}
-                  {formatFechaCorta(d.fecha_tentativa_salida)}
+                  Lote: <strong>{d.lote}</strong> | Bins disp: {d.cantidad_bins_disponibles} | Corte:{' '}
+                  {formatFechaCorta(d.fecha_recepcion)}
                 </span>
                 <button
                   type="button"
