@@ -25,6 +25,24 @@ interface CorridaRendimiento {
   lotes_resumen?: string | null;
 }
 
+interface LoteRendimiento {
+  lote: string;
+  bins_campo: number;
+  kg_entrada: number;
+  kg_primera: number;
+  kg_segunda: number;
+  kg_salida: number;
+  pct_primera: number;
+  pct_segunda: number;
+  pct_recuperacion: number;
+  cajas_rpc: number;
+  cajas_carton: number;
+  bins_jugo: number;
+  parrillas_total: number;
+  num_corridas: number;
+  prorrateado: boolean;
+}
+
 interface ReportesProps {
   token: string;
 }
@@ -37,11 +55,17 @@ const cardStyle: CSSProperties = {
   minWidth: 140,
 };
 
+function fmtKg(n: number) {
+  return n.toLocaleString(undefined, { maximumFractionDigits: 1 });
+}
+
 export default function Reportes({ token }: ReportesProps) {
   const [corridas, setCorridas] = useState<CorridaRendimiento[]>([]);
+  const [porLote, setPorLote] = useState<LoteRendimiento[]>([]);
   const [acumulado, setAcumulado] = useState<CorridaRendimiento | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [vista, setVista] = useState<'lote' | 'corrida'>('lote');
 
   const load = () => {
     setLoading(true);
@@ -59,6 +83,7 @@ export default function Reportes({ token }: ReportesProps) {
       })
       .then((data) => {
         setCorridas(data.corridas || []);
+        setPorLote(data.por_lote || []);
         setAcumulado(data.acumulado || null);
       })
       .catch((e) => setError(e.message || 'Error al cargar reportes'))
@@ -91,6 +116,15 @@ export default function Reportes({ token }: ReportesProps) {
   }
 
   const a = acumulado;
+  const tabBtn = (id: 'lote' | 'corrida'): CSSProperties => ({
+    padding: '8px 16px',
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontWeight: vista === id ? 700 : 400,
+    background: vista === id ? '#15803d' : '#f1f5f9',
+    color: vista === id ? 'white' : '#334155',
+  });
 
   return (
     <div style={{ background: 'white', padding: 25, borderRadius: 10 }}>
@@ -114,22 +148,22 @@ export default function Reportes({ token }: ReportesProps) {
             <div style={cardStyle}>
               <div style={{ fontSize: 12, color: '#64748b' }}>Bins de campo</div>
               <div style={{ fontSize: 22, fontWeight: 700 }}>{a.bins_campo}</div>
-              <div style={{ fontSize: 12 }}>{a.kg_entrada.toLocaleString()} kg entrada</div>
+              <div style={{ fontSize: 12 }}>{fmtKg(a.kg_entrada)} kg entrada</div>
             </div>
             <div style={{ ...cardStyle, background: '#dcfce7' }}>
               <div style={{ fontSize: 12, color: '#166534' }}>1ra calidad (kg)</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{a.kg_primera.toLocaleString()}</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtKg(a.kg_primera)}</div>
               <div style={{ fontSize: 12 }}>{a.pct_primera}% del campo</div>
             </div>
             <div style={{ ...cardStyle, background: '#fef9c3' }}>
               <div style={{ fontSize: 12, color: '#854d0e' }}>2da calidad / jugo (kg)</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{a.kg_segunda.toLocaleString()}</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtKg(a.kg_segunda)}</div>
               <div style={{ fontSize: 12 }}>{a.pct_segunda}% del campo</div>
             </div>
             <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: '#64748b' }}>Recuperación total</div>
-              <div style={{ fontSize: 22, fontWeight: 700 }}>{a.pct_recuperacion}%</div>
-              <div style={{ fontSize: 12 }}>{a.kg_salida.toLocaleString()} kg salida</div>
+              <div style={{ fontSize: 12, color: '#64748b' }}>Kg totales producidos</div>
+              <div style={{ fontSize: 22, fontWeight: 700 }}>{fmtKg(a.kg_salida)}</div>
+              <div style={{ fontSize: 12 }}>{a.pct_recuperacion}% recuperación</div>
             </div>
             <div style={{ ...cardStyle, background: '#e0f2fe' }}>
               <div style={{ fontSize: 12, color: '#075985' }}>Parrillas totales</div>
@@ -153,76 +187,193 @@ export default function Reportes({ token }: ReportesProps) {
         </div>
       )}
 
-      {/* Por corrida */}
-      <h3 style={{ marginTop: 28 }}>Por corrida de empaque</h3>
-      {corridas.length === 0 ? (
-        <p style={{ color: '#64748b' }}>
-          Aún no hay corridas de limón con detalle. Registra un empaque de limón (con consumos y
-          producción) para ver rendimientos aquí.
-        </p>
-      ) : (
-        <div style={{ overflowX: 'auto' }}>
-          <table
-            style={{
-              width: '100%',
-              borderCollapse: 'collapse',
-              fontSize: 13,
-              minWidth: 900,
-            }}
-          >
-            <thead>
-              <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
-                <th style={th}>#</th>
-                <th style={th}>Fecha</th>
-                <th style={th}>Lotes</th>
-                <th style={th}>Bins campo</th>
-                <th style={th}>kg 1ra</th>
-                <th style={th}>% 1ra</th>
-                <th style={th}>kg 2da</th>
-                <th style={th}>% 2da</th>
-                <th style={th}>% recup.</th>
-                <th style={th}>Parrillas</th>
-                <th style={th}>Bins → Parr.</th>
-              </tr>
-            </thead>
-            <tbody>
-              {corridas.map((c) => (
-                <tr key={c.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                  <td style={td}>{c.id}</td>
-                  <td style={td}>{c.fecha}</td>
-                  <td style={td}>{c.lotes_resumen || '—'}</td>
-                  <td style={td}>
-                    {c.bins_campo}
-                    <div style={{ fontSize: 11, color: '#94a3b8' }}>{c.kg_entrada} kg</div>
-                  </td>
-                  <td style={td}>{c.kg_primera}</td>
-                  <td style={td}>
-                    <strong>{c.pct_primera}%</strong>
-                  </td>
-                  <td style={td}>{c.kg_segunda}</td>
-                  <td style={td}>
-                    <strong>{c.pct_segunda}%</strong>
-                  </td>
-                  <td style={td}>{c.pct_recuperacion}%</td>
-                  <td style={td}>
-                    <strong>{c.parrillas_total}</strong>
-                    <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                      R{c.parrillas_rpc} / C{c.parrillas_carton} / J{c.parrillas_jugo}
-                    </div>
-                  </td>
-                  <td style={td}>
-                    {c.bins_campo} → {c.parrillas_total}
-                    {c.bins_por_parrilla != null && (
-                      <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                        {c.bins_por_parrilla} bins/parr.
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+      <div style={{ display: 'flex', gap: 8, marginTop: 24, marginBottom: 12 }}>
+        <button type="button" style={tabBtn('lote')} onClick={() => setVista('lote')}>
+          Por lote
+        </button>
+        <button type="button" style={tabBtn('corrida')} onClick={() => setVista('corrida')}>
+          Por corrida
+        </button>
+      </div>
+
+      {vista === 'lote' && (
+        <>
+          <h3 style={{ marginTop: 8 }}>Rendimiento por lote</h3>
+          <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
+            Por cada lote de campo: kg de entrada, kg totales producidos, cuánto fue a 1ra (RPC/cartón) y
+            a 2da (bins jugo). Si un empaque mezcló varios lotes, la producción se reparte en
+            proporción a los bins de cada lote.
+          </p>
+          {porLote.length === 0 ? (
+            <p style={{ color: '#64748b' }}>
+              Aún no hay lotes con empaque registrado. Empaca limón con consumos de lote para ver
+              rendimientos aquí.
+            </p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table
+                style={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontSize: 13,
+                  minWidth: 860,
+                }}
+              >
+                <thead>
+                  <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
+                    <th style={th}>Lote</th>
+                    <th style={th}>Bins campo</th>
+                    <th style={th}>kg entrada</th>
+                    <th style={th}>kg total prod.</th>
+                    <th style={th}>kg 1ra</th>
+                    <th style={th}>% 1ra</th>
+                    <th style={th}>kg 2da</th>
+                    <th style={th}>% 2da</th>
+                    <th style={th}>% recup.</th>
+                    <th style={th}>Parrillas</th>
+                    <th style={th}>Corridas</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {porLote.map((l) => (
+                    <tr key={l.lote} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <td style={td}>
+                        <strong>{l.lote}</strong>
+                        {l.prorrateado && (
+                          <div style={{ fontSize: 11, color: '#b45309' }}>
+                            * prorrateado (mezcla)
+                          </div>
+                        )}
+                      </td>
+                      <td style={td}>{l.bins_campo}</td>
+                      <td style={td}>{fmtKg(l.kg_entrada)}</td>
+                      <td style={td}>
+                        <strong>{fmtKg(l.kg_salida)}</strong>
+                      </td>
+                      <td style={{ ...td, background: '#f0fdf4' }}>{fmtKg(l.kg_primera)}</td>
+                      <td style={td}>
+                        <strong>{l.pct_primera}%</strong>
+                      </td>
+                      <td style={{ ...td, background: '#fefce8' }}>{fmtKg(l.kg_segunda)}</td>
+                      <td style={td}>
+                        <strong>{l.pct_segunda}%</strong>
+                      </td>
+                      <td style={td}>{l.pct_recuperacion}%</td>
+                      <td style={td}>{l.parrillas_total}</td>
+                      <td style={td}>{l.num_corridas}</td>
+                    </tr>
+                  ))}
+                </tbody>
+                {porLote.length > 1 && (
+                  <tfoot>
+                    <tr style={{ background: '#f8fafc', fontWeight: 700, borderTop: '2px solid #cbd5e1' }}>
+                      <td style={td}>TOTAL</td>
+                      <td style={td}>{porLote.reduce((s, l) => s + l.bins_campo, 0)}</td>
+                      <td style={td}>
+                        {fmtKg(porLote.reduce((s, l) => s + l.kg_entrada, 0))}
+                      </td>
+                      <td style={td}>
+                        {fmtKg(porLote.reduce((s, l) => s + l.kg_salida, 0))}
+                      </td>
+                      <td style={td}>
+                        {fmtKg(porLote.reduce((s, l) => s + l.kg_primera, 0))}
+                      </td>
+                      <td style={td}>—</td>
+                      <td style={td}>
+                        {fmtKg(porLote.reduce((s, l) => s + l.kg_segunda, 0))}
+                      </td>
+                      <td style={td}>—</td>
+                      <td style={td}>—</td>
+                      <td style={td}>
+                        {porLote.reduce((s, l) => s + l.parrillas_total, 0).toFixed(1)}
+                      </td>
+                      <td style={td}>—</td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {vista === 'corrida' && (
+        <>
+          <h3 style={{ marginTop: 8 }}>Por corrida de empaque</h3>
+          {corridas.length === 0 ? (
+            <p style={{ color: '#64748b' }}>
+              Aún no hay corridas de limón con detalle. Registra un empaque de limón (con consumos y
+              producción) para ver rendimientos aquí.
+            </p>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table
+                style={{
+                  width: '100%',
+                  borderCollapse: 'collapse',
+                  fontSize: 13,
+                  minWidth: 900,
+                }}
+              >
+                <thead>
+                  <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
+                    <th style={th}>#</th>
+                    <th style={th}>Fecha</th>
+                    <th style={th}>Lotes</th>
+                    <th style={th}>Bins campo</th>
+                    <th style={th}>kg total</th>
+                    <th style={th}>kg 1ra</th>
+                    <th style={th}>% 1ra</th>
+                    <th style={th}>kg 2da</th>
+                    <th style={th}>% 2da</th>
+                    <th style={th}>% recup.</th>
+                    <th style={th}>Parrillas</th>
+                    <th style={th}>Bins → Parr.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {corridas.map((c) => (
+                    <tr key={c.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                      <td style={td}>{c.id}</td>
+                      <td style={td}>{c.fecha}</td>
+                      <td style={td}>{c.lotes_resumen || '—'}</td>
+                      <td style={td}>
+                        {c.bins_campo}
+                        <div style={{ fontSize: 11, color: '#94a3b8' }}>{fmtKg(c.kg_entrada)} kg</div>
+                      </td>
+                      <td style={td}>
+                        <strong>{fmtKg(c.kg_salida)}</strong>
+                      </td>
+                      <td style={td}>{fmtKg(c.kg_primera)}</td>
+                      <td style={td}>
+                        <strong>{c.pct_primera}%</strong>
+                      </td>
+                      <td style={td}>{fmtKg(c.kg_segunda)}</td>
+                      <td style={td}>
+                        <strong>{c.pct_segunda}%</strong>
+                      </td>
+                      <td style={td}>{c.pct_recuperacion}%</td>
+                      <td style={td}>
+                        <strong>{c.parrillas_total}</strong>
+                        <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                          R{c.parrillas_rpc} / C{c.parrillas_carton} / J{c.parrillas_jugo}
+                        </div>
+                      </td>
+                      <td style={td}>
+                        {c.bins_campo} → {c.parrillas_total}
+                        {c.bins_por_parrilla != null && (
+                          <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                            {c.bins_por_parrilla} bins/parr.
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

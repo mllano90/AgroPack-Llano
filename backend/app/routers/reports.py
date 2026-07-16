@@ -1,3 +1,4 @@
+from collections import defaultdict
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.core.database import get_db
@@ -10,6 +11,7 @@ from app.schemas.reports import (
     InventarioCampoItem,
     DesverdizadoItem,
     CorridaRendimiento,
+    LoteRendimiento,
     RendimientosLimonResponse,
 )
 
@@ -143,6 +145,152 @@ def _acumular(corridas: list[CorridaRendimiento]) -> CorridaRendimiento:
         lotes_resumen=f"{len(corridas)} corridas",
     )
 
+
+def _kg_y_unidades_produccion(produccion: list) -> dict:
+    """Suma kg 1ra/2da y unidades a partir de líneas de producción."""
+    kg_primera = 0.0
+    kg_segunda = 0.0
+    cajas_rpc = 0
+    cajas_carton = 0
+    bins_jugo = 0
+    for p in produccion or []:
+        pres = p.get("presentacion") or ""
+        cant = int(p.get("cantidad") or 0)
+        if cant <= 0:
+            continue
+        kg_unit = KG_POR_PRESENTACION.get(pres, 0)
+        kg = kg_unit * cant
+        if pres == "bins_jugo":
+            kg_segunda += kg
+            bins_jugo += cant
+        elif pres in ("rpc_12", "rpc_18"):
+            kg_primera += kg
+            cajas_rpc += cant
+        elif pres == "caja_40lbs":
+            kg_primera += kg
+            cajas_carton += cant
+        else:
+            kg_primera += kg
+    return {
+        "kg_primera": kg_primera,
+        "kg_segunda": kg_segunda,
+        "cajas_rpc": cajas_rpc,
+        "cajas_carton": cajas_carton,
+        "bins_jugo": bins_jugo,
+    }
+
+
+def _extract_empaque_detalle(e: Empaque) -> tuple[list, list, bool]:
+    """
+    Devuelve (consumos, produccion, anulado).
+    """
+    detalle = e.detalle_corrida if isinstance(e.detalle_corrida, dict) else None
+    if detalle and detalle.get("anulado"):
+        return [], [], True
+
+    if detalle and (detalle.get("produccion") or detalle.get("consumos")):
+        consumos = list(detalle.get("consumos") or [])
+        produccion = list(detalle.get("produccion") or [])
+    else:
+        bins = e.bins_desverdizado_usados or 0
+        consumos = []
+        if bins > 0:
+            consumos = [{"bins": bins, "lote": e.lote_desverdizado or "SIN_LOTE"}]
+        produccion = []
+        if e.presentacion and e.cantidad_producida:
+            produccion = [{
+                "presentacion": e.presentacion,
+                "talla": e.talla,
+                "cantidad": e.cantidad_producida,
+            }]
+
+    return consumos, produccion, False
+
+
+def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
+    """
+    Acumula por lote de campo.
+    Si una corrida usó varios lotes, la producción se prorratea por proporción de bins
+    (no se registra 1ra/2da por lote al empacar).
+    """
+    acc: dict[str, dict] = defaultdict(
+        lambda: {
+            "bins_campo": 0,
+            "kg_primera": 0.0,
+            "kg_segunda": 0.0,
+            "cajas_rpc": 0.0,
+            "cajas_carton": 0.0,
+            "bins_jugo": 0.0,
+            "corrida_ids": set(),
+            "prorrateado": False,
+        }
+    )
+
+    for e in empaques:
+        consumos, produccion, anulado = _extract_empaque_detalle(e)
+        if anulado:
+            continue
+        consumos_ok = [
+            c for c in consumos
+            if int(c.get("bins") or 0) > 0
+        ]
+        total_bins = sum(int(c.get("bins") or 0) for c in consumos_ok)
+        if total_bins <= 0:
+            continue
+
+        units = _kg_y_unidades_produccion(produccion)
+        multi_lote = len({str(c.get("lote") or "SIN_LOTE") for c in consumos_ok}) > 1
+
+        for c in consumos_ok:
+            lote = str(c.get("lote") or "SIN_LOTE").strip() or "SIN_LOTE"
+            bins = int(c.get("bins") or 0)
+            share = bins / total_bins
+            row = acc[lote]
+            row["bins_campo"] += bins
+            row["kg_primera"] += units["kg_primera"] * share
+            row["kg_segunda"] += units["kg_segunda"] * share
+            row["cajas_rpc"] += units["cajas_rpc"] * share
+            row["cajas_carton"] += units["cajas_carton"] * share
+            row["bins_jugo"] += units["bins_jugo"] * share
+            row["corrida_ids"].add(e.id)
+            if multi_lote:
+                row["prorrateado"] = True
+
+    result: list[LoteRendimiento] = []
+    for lote, row in sorted(acc.items(), key=lambda x: x[0]):
+        bins_campo = int(row["bins_campo"])
+        kg_entrada = bins_campo * KG_BIN_CAMPO
+        kg_primera = row["kg_primera"]
+        kg_segunda = row["kg_segunda"]
+        kg_salida = kg_primera + kg_segunda
+        cajas_rpc = int(round(row["cajas_rpc"]))
+        cajas_carton = int(round(row["cajas_carton"]))
+        bins_jugo = int(round(row["bins_jugo"]))
+        parrillas_rpc = round(cajas_rpc / CAJAS_POR_PARRILLA_RPC, 2) if cajas_rpc else 0.0
+        parrillas_carton = round(cajas_carton / CAJAS_POR_PARRILLA_CARTON, 2) if cajas_carton else 0.0
+        parrillas_jugo = float(bins_jugo)
+        parrillas_total = round(parrillas_rpc + parrillas_carton + parrillas_jugo, 2)
+        result.append(
+            LoteRendimiento(
+                lote=lote,
+                bins_campo=bins_campo,
+                kg_entrada=round(kg_entrada, 2),
+                kg_primera=round(kg_primera, 2),
+                kg_segunda=round(kg_segunda, 2),
+                kg_salida=round(kg_salida, 2),
+                pct_primera=round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                pct_segunda=round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                cajas_rpc=cajas_rpc,
+                cajas_carton=cajas_carton,
+                bins_jugo=bins_jugo,
+                parrillas_total=parrillas_total,
+                num_corridas=len(row["corrida_ids"]),
+                prorrateado=bool(row["prorrateado"]),
+            )
+        )
+    return result
+
 @router.get("/dashboard", response_model=DashboardResponse)
 def obtener_dashboard(db: Session = Depends(get_db)):
     
@@ -215,10 +363,11 @@ def rendimientos_limon(
     current_user=Depends(get_current_user),
 ):
     """
-    Rendimientos por corrida de empaque de limón y acumulado.
-    - kg 1ra (RPC 12/18 + cartón) vs kg 2da (bins jugo) y % sobre bins de campo (260 kg).
-    - Parrillas: 45 cajas RPC, 63 cajas cartón, 1 bin jugo = 1 parrilla.
-    - Relación bins de campo → parrillas.
+    Rendimientos de limón:
+    - por corrida de empaque
+    - por lote de campo (kg total, 1ra, 2da; multi-lote prorratea por bins)
+    - acumulado
+    Empaques anulados se excluyen.
     """
     empaques = (
         db.query(Empaque)
@@ -229,27 +378,22 @@ def rendimientos_limon(
 
     corridas: list[CorridaRendimiento] = []
     for e in empaques:
+        consumos, produccion, anulado = _extract_empaque_detalle(e)
+        if anulado:
+            continue
+        if not consumos and not produccion:
+            continue
+
         detalle = e.detalle_corrida if isinstance(e.detalle_corrida, dict) else None
-        if detalle and (detalle.get("produccion") or detalle.get("consumos")):
-            consumos = detalle.get("consumos") or []
-            produccion = detalle.get("produccion") or []
+        lotes = None
+        if detalle:
             lotes = detalle.get("lotes_resumen")
-        else:
-            # Empaques viejos sin detalle: solo bins si existe
-            bins = e.bins_desverdizado_usados or 0
-            if bins <= 0 and not e.cantidad_producida:
-                continue
-            consumos = [{"bins": bins, "lote": e.lote_desverdizado}] if bins else []
-            produccion = []
-            if e.presentacion and e.cantidad_producida:
-                produccion = [{
-                    "presentacion": e.presentacion,
-                    "talla": e.talla,
-                    "cantidad": e.cantidad_producida,
-                }]
-            if not consumos and not produccion:
-                continue
-            lotes = e.lote_desverdizado
+        if not lotes:
+            lotes = ", ".join(
+                f"{c.get('lote')}:{c.get('bins')}"
+                for c in consumos
+                if c.get("lote")
+            ) or e.lote_desverdizado
 
         corridas.append(
             _calcular_rendimiento(
@@ -264,5 +408,6 @@ def rendimientos_limon(
 
     return RendimientosLimonResponse(
         corridas=corridas,
+        por_lote=_rendimientos_por_lote(empaques),
         acumulado=_acumular(corridas),
     )

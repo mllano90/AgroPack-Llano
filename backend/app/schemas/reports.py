@@ -56,6 +56,26 @@ class CorridaRendimiento(BaseModel):
     lotes_resumen: str | None = None
 
 
+class LoteRendimiento(BaseModel):
+    """Rendimiento acumulado por lote de campo (limón)."""
+    lote: str
+    bins_campo: int
+    kg_entrada: float
+    kg_primera: float
+    kg_segunda: float
+    kg_salida: float  # 1ra + 2da (kg totales producidos)
+    pct_primera: float
+    pct_segunda: float
+    pct_recuperacion: float
+    cajas_rpc: int
+    cajas_carton: int
+    bins_jugo: int
+    parrillas_total: float
+    num_corridas: int  # empaques donde participó este lote
+    prorrateado: bool = False  # True si alguna corrida mezcló lotes
+
+
 class RendimientosLimonResponse(BaseModel):
     corridas: List[CorridaRendimiento]
+    por_lote: List[LoteRendimiento] = []
     acumulado: CorridaRendimiento
