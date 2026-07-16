@@ -60,42 +60,80 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabId>('recepcion');
   const [loginError, setLoginError] = useState('');
 
-  // Restaurar sesión / validar token al cargar
+  // Validar token guardado. Solo borrar sesión si la API responde 401 (token inválido).
+  // No borrar por errores de red / cold start de Render (dejaría de nuevo el login).
   useEffect(() => {
     if (!token) return;
+    let cancelled = false;
     getCurrentUser(token)
       .then((user) => {
+        if (cancelled) return;
         setCurrentUser(user);
         localStorage.setItem(USER_KEY, JSON.stringify(user));
         const tabs = getAllowedTabs(user.rol);
         setActiveTab((prev) => (tabs.includes(prev) ? prev : tabs[0]));
       })
-      .catch(() => {
-        localStorage.removeItem(TOKEN_KEY);
-        localStorage.removeItem(USER_KEY);
-        setToken('');
-        setCurrentUser(null);
+      .catch((err: any) => {
+        if (cancelled) return;
+        const status = err?.response?.status;
+        if (status === 401 || status === 403) {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(USER_KEY);
+          setToken('');
+          setCurrentUser(null);
+        } else {
+          console.warn('No se pudo validar sesión (red/API). Se mantiene el token.', err);
+        }
       });
+    return () => {
+      cancelled = true;
+    };
   }, [token]);
 
   const handleLogin = async () => {
     setLoginError('');
     try {
       const data = await login(username, password);
-      const user = await getCurrentUser(data.access_token);
+      const accessToken = data?.access_token;
+      if (!accessToken) {
+        setLoginError('La API no devolvió token. Revisa VITE_API_URL en Render.');
+        return;
+      }
 
-      localStorage.setItem(TOKEN_KEY, data.access_token);
+      // Guardar token YA, antes de /me, para no perder la sesión
+      localStorage.setItem(TOKEN_KEY, accessToken);
+      setToken(accessToken);
+
+      const user = await getCurrentUser(accessToken);
       localStorage.setItem(USER_KEY, JSON.stringify(user));
-
-      setToken(data.access_token);
       setCurrentUser(user);
       setPassword('');
 
       const tabs = getAllowedTabs(user.rol);
       setActiveTab(tabs[0] || 'dashboard');
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      setLoginError('Usuario o contraseña incorrectos, o no se pudo conectar con la API.');
+      // Si el login dio token pero /me falló por red, no borrar si ya hay token válido en storage
+      const status = err?.response?.status;
+      if (status === 401 || status === 403) {
+        localStorage.removeItem(TOKEN_KEY);
+        localStorage.removeItem(USER_KEY);
+        setToken('');
+        setCurrentUser(null);
+        setLoginError('Usuario o contraseña incorrectos.');
+      } else if (!localStorage.getItem(TOKEN_KEY)) {
+        setLoginError('No se pudo conectar con la API. Espera 30s (cold start) e intenta de nuevo.');
+      } else {
+        // Token guardado; intentar mostrar la app aunque /me haya fallado temporalmente
+        setLoginError('');
+        setCurrentUser({
+          id: 0,
+          username: username || 'usuario',
+          nombre_completo: username || 'usuario',
+          rol: 'admin',
+        });
+        setActiveTab('recepcion');
+      }
     }
   };
 
