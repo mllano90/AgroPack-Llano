@@ -51,15 +51,34 @@ def ensure_schema():
 
     try:
         insp = inspect(engine)
-        if "empaque" not in insp.get_table_names():
-            return
-        cols = {c["name"] for c in insp.get_columns("empaque")}
-        if "detalle_corrida" not in cols:
-            with engine.begin() as conn:
-                if DATABASE_URL.startswith("sqlite"):
-                    conn.execute(text("ALTER TABLE empaque ADD COLUMN detalle_corrida JSON"))
-                else:
-                    conn.execute(text("ALTER TABLE empaque ADD COLUMN IF NOT EXISTS detalle_corrida JSON"))
-            print("✅ Columna empaque.detalle_corrida agregada")
+        tables = insp.get_table_names()
+        if "empaque" in tables:
+            cols = {c["name"] for c in insp.get_columns("empaque")}
+            if "detalle_corrida" not in cols:
+                with engine.begin() as conn:
+                    if DATABASE_URL.startswith("sqlite"):
+                        conn.execute(text("ALTER TABLE empaque ADD COLUMN detalle_corrida JSON"))
+                    else:
+                        conn.execute(
+                            text("ALTER TABLE empaque ADD COLUMN IF NOT EXISTS detalle_corrida JSON")
+                        )
+                print("✅ Columna empaque.detalle_corrida agregada")
+
+        if "inventario_desverdizado" in tables:
+            dcols = {c["name"] for c in insp.get_columns("inventario_desverdizado")}
+            if "numero_tanda" not in dcols:
+                with engine.begin() as conn:
+                    if DATABASE_URL.startswith("sqlite"):
+                        conn.execute(
+                            text("ALTER TABLE inventario_desverdizado ADD COLUMN numero_tanda INTEGER")
+                        )
+                    else:
+                        conn.execute(
+                            text(
+                                "ALTER TABLE inventario_desverdizado "
+                                "ADD COLUMN IF NOT EXISTS numero_tanda INTEGER"
+                            )
+                        )
+                print("✅ Columna inventario_desverdizado.numero_tanda agregada")
     except Exception as e:
         print(f"⚠️ ensure_schema: {e}")

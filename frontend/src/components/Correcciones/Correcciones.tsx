@@ -611,6 +611,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                 <thead>
                   <tr style={{ background: '#fef2f2', textAlign: 'left' }}>
+                    <th style={th}>Tanda</th>
                     <th style={th}>ID</th>
                     <th style={th}>Lote</th>
                     <th style={th}>Bins</th>
@@ -629,6 +630,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                         background: editDesv?.id === d.id ? '#dcfce7' : 'white',
                       }}
                     >
+                      <td style={td}>
+                        <strong style={{ color: '#15803d' }}>#{d.numero_tanda ?? '—'}</strong>
+                      </td>
                       <td style={td}>#{d.id}</td>
                       <td style={td}>
                         <strong>{d.lote}</strong>

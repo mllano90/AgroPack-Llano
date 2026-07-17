@@ -43,6 +43,12 @@ def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
         )
 
 
+def _renumerar_tandas(db: Session) -> None:
+    from app.utils.tandas import reasignar_numeros_tanda
+
+    reasignar_numeros_tanda(db)
+
+
 def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     """Devuelve bins a un lote (anular empaque)."""
     if bins <= 0 or not lote:
@@ -182,6 +188,11 @@ def crear_empaque(
                     d.estado = "listo_empaque"
             if restante > 0:
                 raise HTTPException(status_code=400, detail=f"No hay suficientes bins en desverdizado para lote {lote or 'cualquiera'}")
+
+        # Renumerar tandas (filas en 0 bins salen de la secuencia)
+        from app.utils.tandas import reasignar_numeros_tanda
+
+        reasignar_numeros_tanda(db)
         
         # Producir a inventario final por presentación (cantidades separadas) + talla para 1ra
         # Use structured produccion if provided (new line-based UI), else legacy flat counts + single talla
@@ -407,6 +418,7 @@ def agregar_consumo_lote(
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
+    _renumerar_tandas(db)
     db.commit()
     db.refresh(emp)
     return emp
@@ -458,5 +470,6 @@ def anular_empaque(
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
+    _renumerar_tandas(db)
     db.commit()
     return AnularEmpaqueResponse(message="Empaque anulado; inventario revertido", id=empaque_id)

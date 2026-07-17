@@ -207,6 +207,10 @@ class InventarioDesverdizado(Base):
     # Usuario marca manualmente cuando sale
     fecha_real_salida = Column(Date, nullable=True)
     estado = Column(String, default="en_desverdizado")  # en_desverdizado, listo_empaque, empaquetado
+
+    # Número de tanda: 1 = corte más antiguo; mismo día = orden de captura (id)
+    # Se reasigna al crear/editar/eliminar tandas con stock
+    numero_tanda = Column(Integer, nullable=True, index=True)
     
     usuario_id = Column(Integer, ForeignKey("users.id"))
     usuario = relationship("User")

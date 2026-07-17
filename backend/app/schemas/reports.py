@@ -24,6 +24,7 @@ class DesverdizadoItem(BaseModel):
     fecha_recepcion: str
     fecha_tentativa_salida: str
     estado: str
+    numero_tanda: int | None = None
 
 class DashboardResponse(BaseModel):
     inventario_final: List[InventarioFinalItem]

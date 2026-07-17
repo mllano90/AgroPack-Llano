@@ -8,6 +8,7 @@ from app.schemas.recepcion import RecepcionCampoCreate, RecepcionCampoResponse
 from app.models.inventory import RecepcionCampo, InventarioCampo, InventarioFinal, InventarioDesverdizado
 from app.models.enums import Producto
 from app.core.constants import DIAS_DESVERDIZADO
+from app.utils.tandas import reasignar_numeros_tanda
 from datetime import datetime, timedelta, date
 
 router = APIRouter(tags=["Recepción"])
@@ -128,6 +129,8 @@ def crear_recepcion(
             usuario_id=current_user.id if hasattr(current_user, 'id') else None
         )
         db.add(inv_desv)
+        db.flush()
+        reasignar_numeros_tanda(db)
     
     db.commit()
     db.refresh(nueva_recepcion)
@@ -143,6 +146,9 @@ def listar_desverdizado(db: Session = Depends(get_db)):
     """Lista el inventario actual en desverdizado para selección en empaque.
     Orden: fecha de corte/recepción (más antiguo primero), luego id.
     """
+    # Asegurar numeración coherente (p.ej. tras deploy o datos viejos)
+    reasignar_numeros_tanda(db, commit=True)
+
     items = (
         db.query(InventarioDesverdizado)
         .filter(
@@ -164,7 +170,8 @@ def listar_desverdizado(db: Session = Depends(get_db)):
             "cantidad_bins_disponibles": d.cantidad_bins,
             "fecha_recepcion": str(d.fecha_recepcion),
             "fecha_tentativa_salida": str(d.fecha_tentativa_salida),
-            "estado": d.estado
+            "estado": d.estado,
+            "numero_tanda": d.numero_tanda,
         }
         for d in items
     ]
@@ -196,6 +203,8 @@ def listar_desverdizado_admin(
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """Lista lotes en desverdizado (con stock) para correcciones admin."""
+    reasignar_numeros_tanda(db, commit=True)
+
     items = (
         db.query(InventarioDesverdizado)
         .filter(InventarioDesverdizado.cantidad_bins > 0)
@@ -214,6 +223,7 @@ def listar_desverdizado_admin(
             "fecha_recepcion": str(d.fecha_recepcion) if d.fecha_recepcion else None,
             "fecha_tentativa_salida": str(d.fecha_tentativa_salida) if d.fecha_tentativa_salida else None,
             "estado": d.estado,
+            "numero_tanda": d.numero_tanda,
         }
         for d in items
     ]
@@ -228,9 +238,12 @@ def _purge_desverdizado_rows(db: Session, rows: list) -> tuple[int, int, list[in
     for r in rows:
         r.cantidad_bins = 0
         r.estado = "eliminado"
+        r.numero_tanda = None
     db.flush()
     for r in rows:
         db.delete(r)
+    db.flush()
+    reasignar_numeros_tanda(db)
     db.commit()
     return len(ids), bins_total, ids
 
@@ -289,17 +302,20 @@ def editar_desverdizado_admin(
     if des.cantidad_bins == 0 and des.estado not in ("empaquetado", "eliminado"):
         # 0 bins: no debe listarse en empaque
         des.estado = "empaquetado"
+        des.numero_tanda = None
 
+    reasignar_numeros_tanda(db)
     db.commit()
     db.refresh(des)
     return {
-        "message": f"Desverdizado #{des.id} actualizado",
+        "message": f"Desverdizado #{des.id} actualizado (tandas renumeradas)",
         "id": des.id,
         "lote": des.lote,
         "cantidad_bins_disponibles": des.cantidad_bins,
         "fecha_recepcion": str(des.fecha_recepcion) if des.fecha_recepcion else None,
         "fecha_tentativa_salida": str(des.fecha_tentativa_salida) if des.fecha_tentativa_salida else None,
         "estado": des.estado,
+        "numero_tanda": des.numero_tanda,
     }
 
 

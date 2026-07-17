@@ -131,6 +131,7 @@ export interface DesverdizadoAdminItem {
   fecha_recepcion?: string | null;
   fecha_tentativa_salida?: string | null;
   estado?: string | null;
+  numero_tanda?: number | null;
 }
 
 /** Lotes en desverdizado (admin / correcciones) */

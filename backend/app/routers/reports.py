@@ -409,6 +409,10 @@ def obtener_dashboard(db: Session = Depends(get_db)):
     embarques_recientes = db.query(Embarque).order_by(Embarque.fecha_salida.desc()).limit(10).all()
 
     # Inventario en Desverdizado (bins de limón en proceso)
+    from app.utils.tandas import reasignar_numeros_tanda
+
+    reasignar_numeros_tanda(db, commit=True)
+
     desverdizado_raw = db.query(InventarioDesverdizado).filter(
         InventarioDesverdizado.cantidad_bins > 0,
     ).order_by(
@@ -422,7 +426,8 @@ def obtener_dashboard(db: Session = Depends(get_db)):
             cantidad_bins_disponibles=d.cantidad_bins,
             fecha_recepcion=str(d.fecha_recepcion),
             fecha_tentativa_salida=str(d.fecha_tentativa_salida),
-            estado=d.estado
+            estado=d.estado,
+            numero_tanda=d.numero_tanda,
         )
         for d in desverdizado_raw
         if (d.cantidad_bins or 0) > 0 and (d.estado or "") != "eliminado"
