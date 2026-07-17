@@ -416,14 +416,15 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                       padding: '10px 14px',
                       borderRadius: 8,
                       border: active ? '2px solid #15803d' : '1px solid #cbd5e1',
-                      background: active ? '#dcfce7' : 'white',
+                      background: active ? '#dcfce7' : '#ffffff',
+                      color: '#0f172a',
                       cursor: 'pointer',
                       textAlign: 'left',
                       minWidth: 120,
                     }}
                   >
-                    <div style={{ fontWeight: 700, fontSize: 13 }}>{opt.label}</div>
-                    <div style={{ fontSize: 11, color: '#64748b' }}>{opt.hint}</div>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: '#0f172a' }}>{opt.label}</div>
+                    <div style={{ fontSize: 11, color: '#475569' }}>{opt.hint}</div>
                   </button>
                 );
               })}
