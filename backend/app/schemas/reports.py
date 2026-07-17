@@ -132,6 +132,11 @@ class ProyeccionUnidad(BaseModel):
     calidad: str = "primera"
     cantidad: float  # cajas o bins jugo proyectados
     kg: float
+    # Parrillas: RPC=45 cajas, cartón=63; jugo: 1 bin = 1 parrilla
+    cajas_por_parrilla: int | None = None
+    parrillas_enteras: int = 0
+    cajas_sueltas: int = 0
+    parrillas_label: str = ""  # ej. "2 parrillas + 10 cajas"
 
 
 class ProyeccionLoteItem(BaseModel):

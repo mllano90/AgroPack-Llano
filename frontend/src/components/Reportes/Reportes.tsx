@@ -398,6 +398,32 @@ function labelPres(p: string) {
   return map[p] || p;
 }
 
+/** RPC=45, cartón=63; sobrantes como parrillas + cajas */
+function formatParrillas(
+  presentacion: string,
+  cantidad: number,
+  labelFromApi?: string | null
+): string {
+  if (labelFromApi) return labelFromApi;
+  const cajas = Math.round(cantidad || 0);
+  if (presentacion === 'bins_jugo') {
+    return cajas === 1 ? '1 parrilla' : `${cajas} parrillas`;
+  }
+  const div =
+    presentacion === 'rpc_12' || presentacion === 'rpc_18'
+      ? CAJAS_PARRILLA_RPC
+      : presentacion === 'caja_40lbs'
+        ? CAJAS_PARRILLA_CARTON
+        : 0;
+  if (!div) return `${cajas} cajas`;
+  const parr = Math.floor(cajas / div);
+  const sueltas = cajas % div;
+  if (parr > 0 && sueltas > 0) return `${parr} parrilla${parr !== 1 ? 's' : ''} + ${sueltas} cajas`;
+  if (parr > 0) return `${parr} parrilla${parr !== 1 ? 's' : ''}`;
+  if (sueltas > 0) return `${sueltas} cajas`;
+  return '0';
+}
+
 export default function Reportes({ token }: ReportesProps) {
   const [corridas, setCorridas] = useState<Corrida[]>([]);
   const [porLote, setPorLote] = useState<Lote[]>([]);
@@ -687,7 +713,9 @@ export default function Reportes({ token }: ReportesProps) {
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
             Usa los bins aún en desverdizado y su <strong>fecha tentativa de salida</strong>{' '}
             (recepción + {DIAS_DESVERDIZADO} días de desverdizado), aplicando el rendimiento
-            acumulado (% 1ra / % 2da y mix de tallas) de los empaques ya registrados.
+            acumulado (% 1ra / % 2da y mix de tallas). Volúmenes en{' '}
+            <strong>parrillas</strong>: RPC = {CAJAS_PARRILLA_RPC} cajas · Cartón ={' '}
+            {CAJAS_PARRILLA_CARTON} cajas · sobrantes = parrillas + cajas · 1 bin jugo = 1 parrilla.
           </p>
 
           {!proyeccion ? (
@@ -765,7 +793,7 @@ export default function Reportes({ token }: ReportesProps) {
                         <th style={th}>Lotes</th>
                         <th style={th}>kg 1ra</th>
                         <th style={th}>kg 2da</th>
-                        <th style={th}>Proyección (cajas / bins)</th>
+                        <th style={th}>Proyección en parrillas</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -781,11 +809,18 @@ export default function Reportes({ token }: ReportesProps) {
                           <td style={td}>
                             <ul style={{ margin: 0, paddingLeft: 16 }}>
                               {f.unidades.map((u, i) => (
-                                <li key={i}>
+                                <li key={i} style={{ marginBottom: 4 }}>
                                   {labelPres(u.presentacion)}
                                   {u.talla ? ` #${u.talla}` : ''}:{' '}
-                                  <strong>{fmtNum(u.cantidad, 1)}</strong>
-                                  <span style={{ color: '#94a3b8' }}> ({fmtKg(u.kg)} kg)</span>
+                                  <strong style={{ color: '#0c4a6e' }}>
+                                    {formatParrillas(u.presentacion, u.cantidad, u.parrillas_label)}
+                                  </strong>
+                                  <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                                    {fmtNum(u.cantidad, 0)} cajas · {fmtKg(u.kg)} kg
+                                    {u.cajas_por_parrilla
+                                      ? ` · ${u.cajas_por_parrilla}/parr.`
+                                      : ''}
+                                  </div>
                                 </li>
                               ))}
                             </ul>
@@ -835,16 +870,20 @@ export default function Reportes({ token }: ReportesProps) {
 
               {proyeccion.unidades_totales.length > 0 && (
                 <>
-                  <h4>Total proyectado a inventario final (si se empaca todo el desverdizado)</h4>
+                  <h4>Total proyectado (si se empaca todo el desverdizado)</h4>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
                     {proyeccion.unidades_totales.map((u, i) => (
-                      <div key={i} style={cardStyle}>
+                      <div key={i} style={{ ...cardStyle, minWidth: 160 }}>
                         <div style={{ fontSize: 12, fontWeight: 600 }}>
                           {labelPres(u.presentacion)}
                           {u.talla ? ` #${u.talla}` : ''}
                         </div>
-                        <div style={{ fontSize: 20, fontWeight: 700 }}>{fmtNum(u.cantidad, 1)}</div>
-                        <div style={{ fontSize: 12, color: '#64748b' }}>{fmtKg(u.kg)} kg · {u.calidad}</div>
+                        <div style={{ fontSize: 18, fontWeight: 800, color: '#0c4a6e' }}>
+                          {formatParrillas(u.presentacion, u.cantidad, u.parrillas_label)}
+                        </div>
+                        <div style={{ fontSize: 12, color: '#64748b' }}>
+                          {fmtNum(u.cantidad, 0)} cajas · {fmtKg(u.kg)} kg · {u.calidad}
+                        </div>
                       </div>
                     ))}
                   </div>

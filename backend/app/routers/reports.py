@@ -562,6 +562,58 @@ def _por_talla_y_presentacion(
     return tallas, presentaciones, factores
 
 
+def _parrillas_desde_cajas(presentacion: str, cantidad: float) -> tuple[int | None, int, int, str]:
+    """
+    Devuelve (cajas_por_parrilla, parrillas_enteras, cajas_sueltas, label).
+    RPC 12/18 → 45; cartón 40 lbs → 63; bins jugo → 1 bin = 1 parrilla.
+    """
+    cajas = int(round(float(cantidad or 0)))
+    if cajas < 0:
+        cajas = 0
+    if presentacion in ("rpc_12", "rpc_18"):
+        div = CAJAS_POR_PARRILLA_RPC
+    elif presentacion == "caja_40lbs":
+        div = CAJAS_POR_PARRILLA_CARTON
+    elif presentacion == "bins_jugo":
+        # 1 bin jugo = 1 parrilla
+        return 1, cajas, 0, f"{cajas} parrilla{'s' if cajas != 1 else ''}" if cajas else "0 parrillas"
+    else:
+        return None, 0, cajas, f"{cajas} cajas" if cajas else "0 cajas"
+
+    parr = cajas // div
+    sueltas = cajas % div
+    if parr > 0 and sueltas > 0:
+        label = f"{parr} parrilla{'s' if parr != 1 else ''} + {sueltas} cajas"
+    elif parr > 0:
+        label = f"{parr} parrilla{'s' if parr != 1 else ''}"
+    elif sueltas > 0:
+        label = f"{sueltas} cajas"
+    else:
+        label = "0"
+    return div, parr, sueltas, label
+
+
+def _unidad_con_parrillas(
+    presentacion: str,
+    talla: str | None,
+    calidad: str,
+    cantidad: float,
+    kg: float,
+) -> ProyeccionUnidad:
+    div, parr, sueltas, label = _parrillas_desde_cajas(presentacion, cantidad)
+    return ProyeccionUnidad(
+        presentacion=presentacion,
+        talla=talla,
+        calidad=calidad,
+        cantidad=round(cantidad, 1),
+        kg=round(kg, 1),
+        cajas_por_parrilla=div,
+        parrillas_enteras=parr,
+        cajas_sueltas=sueltas,
+        parrillas_label=label,
+    )
+
+
 def _proyectar_unidades(bins: int, factores: FactoresProyeccion) -> list[ProyeccionUnidad]:
     if bins <= 0 or not factores.con_datos:
         return []
@@ -576,19 +628,21 @@ def _proyectar_unidades(bins: int, factores: FactoresProyeccion) -> list[Proyecc
         if cant <= 0 and kg <= 0:
             continue
         out.append(
-            ProyeccionUnidad(
-                presentacion=pres,
-                talla=talla,
-                calidad="segunda" if pres == "bins_jugo" else "primera",
-                cantidad=cant,
-                kg=kg,
+            _unidad_con_parrillas(
+                pres,
+                talla,
+                "segunda" if pres == "bins_jugo" else "primera",
+                cant,
+                kg,
             )
         )
     return out
 
 
 def _merge_unidades(lists: list[list[ProyeccionUnidad]]) -> list[ProyeccionUnidad]:
-    acc: dict[tuple[str, str | None], dict] = defaultdict(lambda: {"cantidad": 0.0, "kg": 0.0, "calidad": "primera"})
+    acc: dict[tuple[str, str | None], dict] = defaultdict(
+        lambda: {"cantidad": 0.0, "kg": 0.0, "calidad": "primera"}
+    )
     for units in lists:
         for u in units:
             key = (u.presentacion, u.talla)
@@ -598,12 +652,12 @@ def _merge_unidades(lists: list[list[ProyeccionUnidad]]) -> list[ProyeccionUnida
     result = []
     for (pres, talla), row in sorted(acc.items(), key=lambda x: (x[0][0], x[0][1] or "")):
         result.append(
-            ProyeccionUnidad(
-                presentacion=pres,
-                talla=talla,
-                calidad=row["calidad"],
-                cantidad=round(row["cantidad"], 1),
-                kg=round(row["kg"], 1),
+            _unidad_con_parrillas(
+                pres,
+                talla,
+                row["calidad"],
+                round(row["cantidad"], 1),
+                round(row["kg"], 1),
             )
         )
     return result

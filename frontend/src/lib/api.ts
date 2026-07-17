@@ -287,6 +287,10 @@ export interface ProyeccionUnidadApi {
   calidad: string;
   cantidad: number;
   kg: number;
+  cajas_por_parrilla?: number | null;
+  parrillas_enteras?: number;
+  cajas_sueltas?: number;
+  parrillas_label?: string;
 }
 
 export interface ProyeccionInventarioApi {
