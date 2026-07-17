@@ -411,7 +411,10 @@ def obtener_dashboard(db: Session = Depends(get_db)):
     # Inventario en Desverdizado (bins de limón en proceso)
     desverdizado_raw = db.query(InventarioDesverdizado).filter(
         InventarioDesverdizado.cantidad_bins > 0,
-    ).order_by(InventarioDesverdizado.fecha_recepcion.desc()).all()
+    ).order_by(
+        InventarioDesverdizado.fecha_recepcion.asc(),
+        InventarioDesverdizado.id.asc(),
+    ).all()
 
     desverdizado_list = [
         DesverdizadoItem(

@@ -66,12 +66,19 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => {
         const list = Array.isArray(data)
-          ? data.filter(
-              (d: any) =>
-                (d.cantidad_bins_disponibles || 0) > 0 &&
-                d.estado !== 'eliminado' &&
-                d.estado !== 'empaquetado'
-            )
+          ? data
+              .filter(
+                (d: any) =>
+                  (d.cantidad_bins_disponibles || 0) > 0 &&
+                  d.estado !== 'eliminado' &&
+                  d.estado !== 'empaquetado'
+              )
+              .sort((a: any, b: any) => {
+                const fa = String(a.fecha_recepcion || '');
+                const fb = String(b.fecha_recepcion || '');
+                if (fa !== fb) return fa.localeCompare(fb);
+                return (a.id || 0) - (b.id || 0);
+              })
           : [];
         setDesverdizadoList(list);
       })

@@ -140,11 +140,21 @@ def listar_recepciones(db: Session = Depends(get_db)):
 
 @router.get("/desverdizado", response_model=list[dict])
 def listar_desverdizado(db: Session = Depends(get_db)):
-    """Lista el inventario actual en desverdizado para selección en empaque."""
-    items = db.query(InventarioDesverdizado).filter(
-        InventarioDesverdizado.estado.in_(["en_desverdizado", "listo_empaque"]),
-        InventarioDesverdizado.cantidad_bins > 0,
-    ).all()
+    """Lista el inventario actual en desverdizado para selección en empaque.
+    Orden: fecha de corte/recepción (más antiguo primero), luego id.
+    """
+    items = (
+        db.query(InventarioDesverdizado)
+        .filter(
+            InventarioDesverdizado.estado.in_(["en_desverdizado", "listo_empaque"]),
+            InventarioDesverdizado.cantidad_bins > 0,
+        )
+        .order_by(
+            InventarioDesverdizado.fecha_recepcion.asc(),
+            InventarioDesverdizado.id.asc(),
+        )
+        .all()
+    )
     # Excluir eliminados por si quedó estado raro
     items = [d for d in items if (d.estado or "") != "eliminado" and (d.cantidad_bins or 0) > 0]
     return [
@@ -189,7 +199,10 @@ def listar_desverdizado_admin(
     items = (
         db.query(InventarioDesverdizado)
         .filter(InventarioDesverdizado.cantidad_bins > 0)
-        .order_by(InventarioDesverdizado.fecha_recepcion.desc(), InventarioDesverdizado.id.desc())
+        .order_by(
+            InventarioDesverdizado.fecha_recepcion.asc(),
+            InventarioDesverdizado.id.asc(),
+        )
         .limit(200)
         .all()
     )

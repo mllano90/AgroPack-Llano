@@ -23,7 +23,15 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
   // Filter data
   const uvaFinalItems = inventarioCarton.filter(i => !i.presentacion && (i.producto === 'uva' || !i.producto));
   const limonFinalItems = inventarioCarton.filter(i => i.producto === 'limon_amarillo' || !!i.presentacion);
-  const visibleDesverdizado = (desverdizado || []).filter(d => d.cantidad_bins_disponibles > 0);
+  const visibleDesverdizado = (desverdizado || [])
+    .filter((d) => d.cantidad_bins_disponibles > 0)
+    .slice()
+    .sort((a, b) => {
+      const fa = String(a.fecha_recepcion || '');
+      const fb = String(b.fecha_recepcion || '');
+      if (fa !== fb) return fa.localeCompare(fb);
+      return String(a.lote || '').localeCompare(String(b.lote || ''));
+    });
   const visibleUvaFinal = uvaFinalItems.filter(i => (i.cantidad_stock || 0) > 0);
   const visibleLimonFinal = limonFinalItems.filter(i => (i.cantidad_stock || 0) > 0);
 
