@@ -5,8 +5,10 @@ import {
   anularEmpaque,
   getDesverdizadoAdmin,
   eliminarDesverdizado,
+  editarDesverdizado,
   type DesverdizadoAdminItem,
 } from '../../lib/api';
+import { DIAS_DESVERDIZADO } from '../../lib/constants';
 import type { EmpaqueRecord } from '../../types';
 
 interface CorreccionesProps {
@@ -40,6 +42,15 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const [lote, setLote] = useState('');
   const [bins, setBins] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Edición desverdizado
+  const [editDesv, setEditDesv] = useState<DesverdizadoAdminItem | null>(null);
+  const [editLote, setEditLote] = useState('');
+  const [editBins, setEditBins] = useState('');
+  const [editFechaCorte, setEditFechaCorte] = useState('');
+  const [editFechaTent, setEditFechaTent] = useState('');
+  const [editEstado, setEditEstado] = useState('en_desverdizado');
+  const [editRecalc, setEditRecalc] = useState(true);
 
   const load = async () => {
     setLoading(true);
@@ -133,26 +144,76 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
-  const handleEliminarDesverdizado = async (d: DesverdizadoAdminItem) => {
-    const mismos = desverdizado.filter((x) => (x.lote || '').trim() === (d.lote || '').trim());
-    const binsTotal = mismos.reduce((s, x) => s + (x.cantidad_bins_disponibles || 0), 0);
-    if (
-      !confirm(
-        `¿Eliminar el lote "${d.lote}" de desverdizado en TODO el sistema?\n\n` +
-          `Registros: ${mismos.length} · Bins totales: ${binsTotal}\n` +
-          `(Si el mismo lote se recibió varias veces, se borran todas las filas.)\n\n` +
-          `Desaparecerá de Empaque, Inventarios y Proyección.\n` +
-          `No borra el historial de recepción, solo el stock de desverdizado.`
-      )
-    ) {
-      return;
-    }
+  const toInputDate = (s?: string | null) => {
+    if (!s) return '';
+    // already YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+    return s;
+  };
+
+  const openEditDesverdizado = (d: DesverdizadoAdminItem) => {
+    setEditDesv(d);
+    setEditLote(d.lote || '');
+    setEditBins(String(d.cantidad_bins_disponibles ?? 0));
+    setEditFechaCorte(toInputDate(d.fecha_recepcion));
+    setEditFechaTent(toInputDate(d.fecha_tentativa_salida));
+    setEditEstado(d.estado || 'en_desverdizado');
+    setEditRecalc(true);
+    setOkMsg('');
+    setError('');
+  };
+
+  const cancelEditDesverdizado = () => {
+    setEditDesv(null);
+  };
+
+  const handleGuardarDesverdizado = async () => {
+    if (!editDesv) return;
+    const binsNum = parseInt(editBins, 10);
+    if (!editLote.trim()) return alert('El lote no puede quedar vacío');
+    if (isNaN(binsNum) || binsNum < 0) return alert('Bins debe ser un número ≥ 0');
+
     setBusy(true);
     setError('');
     setOkMsg('');
     try {
-      const res = await eliminarDesverdizado(token, d.id);
+      const res = await editarDesverdizado(token, editDesv.id, {
+        lote: editLote.trim(),
+        cantidad_bins: binsNum,
+        fecha_recepcion: editFechaCorte || null,
+        fecha_tentativa_salida: editRecalc ? null : editFechaTent || null,
+        estado: editEstado,
+        recalcular_tentativa: editRecalc,
+      });
+      setOkMsg(res.message || `Registro #${editDesv.id} actualizado`);
+      setEditDesv(null);
+      await load();
+      onCorregido?.();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'No se pudo editar el desverdizado');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleEliminarDesverdizado = async (d: DesverdizadoAdminItem, soloEste = false) => {
+    const mismos = desverdizado.filter((x) => (x.lote || '').trim() === (d.lote || '').trim());
+    const binsTotal = mismos.reduce((s, x) => s + (x.cantidad_bins_disponibles || 0), 0);
+    const msg = soloEste
+      ? `¿Eliminar solo el registro #${d.id} (lote "${d.lote}", ${d.cantidad_bins_disponibles} bins)?`
+      : `¿Eliminar el lote "${d.lote}" de desverdizado en TODO el sistema?\n\n` +
+        `Registros: ${mismos.length} · Bins totales: ${binsTotal}\n` +
+        `(Si el mismo lote se recibió varias veces, se borran todas las filas.)\n\n` +
+        `Desaparecerá de Empaque, Inventarios y Proyección.`;
+    if (!confirm(msg)) return;
+
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const res = await eliminarDesverdizado(token, d.id, !soloEste);
       setOkMsg(res.message || `Lote ${d.lote} eliminado`);
+      if (editDesv?.id === d.id) setEditDesv(null);
       if (lote === d.lote) {
         setLote('');
         setBins('');
@@ -425,11 +486,135 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             background: '#fffafa',
           }}
         >
-          <h3 style={{ marginTop: 0, color: '#991b1b' }}>Eliminar lotes de desverdizado</h3>
+          <h3 style={{ marginTop: 0, color: '#991b1b' }}>Desverdizado: editar o eliminar</h3>
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-            Si un lote se dio de alta mal en recepción, elimínalo aquí. Se quitan los bins del
-            inventario de desverdizado (no borra el historial de recepción).
+            Corrige lote, bins, fecha de corte o estado. Eliminar quita el stock de desverdizado
+            (no borra el historial de recepción).
           </p>
+
+          {editDesv && (
+            <div
+              style={{
+                marginBottom: 16,
+                padding: 16,
+                background: 'white',
+                border: '1px solid #86efac',
+                borderRadius: 10,
+              }}
+            >
+              <h4 style={{ marginTop: 0 }}>Editar registro #{editDesv.id}</h4>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                <label style={editLabel}>
+                  Lote
+                  <input
+                    value={editLote}
+                    onChange={(e) => setEditLote(e.target.value)}
+                    style={editInput}
+                  />
+                </label>
+                <label style={editLabel}>
+                  Bins
+                  <input
+                    type="number"
+                    min={0}
+                    value={editBins}
+                    onChange={(e) => setEditBins(e.target.value)}
+                    style={editInput}
+                  />
+                </label>
+                <label style={editLabel}>
+                  Fecha corte / recepción
+                  <input
+                    type="date"
+                    value={editFechaCorte}
+                    onChange={(e) => setEditFechaCorte(e.target.value)}
+                    style={editInput}
+                  />
+                </label>
+                <label style={editLabel}>
+                  Salida tentativa
+                  <input
+                    type="date"
+                    value={editFechaTent}
+                    onChange={(e) => {
+                      setEditFechaTent(e.target.value);
+                      setEditRecalc(false);
+                    }}
+                    disabled={editRecalc}
+                    style={{ ...editInput, opacity: editRecalc ? 0.6 : 1 }}
+                  />
+                </label>
+                <label style={editLabel}>
+                  Estado
+                  <select
+                    value={editEstado}
+                    onChange={(e) => setEditEstado(e.target.value)}
+                    style={editInput}
+                  >
+                    <option value="en_desverdizado">en_desverdizado</option>
+                    <option value="listo_empaque">listo_empaque</option>
+                    <option value="empaquetado">empaquetado</option>
+                  </select>
+                </label>
+              </div>
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginTop: 12,
+                  fontSize: 13,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={editRecalc}
+                  onChange={(e) => setEditRecalc(e.target.checked)}
+                />
+                Recalcular salida tentativa = corte + {DIAS_DESVERDIZADO} días
+              </label>
+              <div style={{ display: 'flex', gap: 10, marginTop: 14, flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handleGuardarDesverdizado}
+                  style={{
+                    padding: '10px 18px',
+                    background: '#15803d',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    fontWeight: 600,
+                    cursor: busy ? 'wait' : 'pointer',
+                  }}
+                >
+                  Guardar cambios
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={cancelEditDesverdizado}
+                  style={{
+                    padding: '10px 18px',
+                    background: '#64748b',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+
           {desverdizado.length === 0 ? (
             <p style={{ color: '#64748b' }}>No hay lotes con bins en desverdizado.</p>
           ) : (
@@ -440,15 +625,21 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                     <th style={th}>ID</th>
                     <th style={th}>Lote</th>
                     <th style={th}>Bins</th>
-                    <th style={th}>Recepción</th>
+                    <th style={th}>Corte</th>
                     <th style={th}>Salida tent.</th>
                     <th style={th}>Estado</th>
-                    <th style={th}></th>
+                    <th style={th}>Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
                   {desverdizado.map((d) => (
-                    <tr key={d.id} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                    <tr
+                      key={d.id}
+                      style={{
+                        borderBottom: '1px solid #f1f5f9',
+                        background: editDesv?.id === d.id ? '#dcfce7' : 'white',
+                      }}
+                    >
                       <td style={td}>#{d.id}</td>
                       <td style={td}>
                         <strong>{d.lote}</strong>
@@ -458,23 +649,61 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       <td style={td}>{formatFecha(d.fecha_tentativa_salida || '')}</td>
                       <td style={td}>{d.estado || '—'}</td>
                       <td style={td}>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleEliminarDesverdizado(d)}
-                          style={{
-                            padding: '6px 12px',
-                            background: '#dc2626',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: 6,
-                            cursor: busy ? 'wait' : 'pointer',
-                            fontWeight: 600,
-                            fontSize: 13,
-                          }}
-                        >
-                          Eliminar
-                        </button>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => openEditDesverdizado(d)}
+                            style={{
+                              padding: '6px 12px',
+                              background: '#0369a1',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: 6,
+                              cursor: busy ? 'wait' : 'pointer',
+                              fontWeight: 600,
+                              fontSize: 13,
+                            }}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleEliminarDesverdizado(d, true)}
+                            title="Solo este registro (esta fecha de corte)"
+                            style={{
+                              padding: '6px 12px',
+                              background: '#ea580c',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: 6,
+                              cursor: busy ? 'wait' : 'pointer',
+                              fontWeight: 600,
+                              fontSize: 13,
+                            }}
+                          >
+                            Borrar este
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleEliminarDesverdizado(d, false)}
+                            title="Todas las recepciones de este nombre de lote"
+                            style={{
+                              padding: '6px 12px',
+                              background: '#dc2626',
+                              color: 'white',
+                              border: 'none',
+                              borderRadius: 6,
+                              cursor: busy ? 'wait' : 'pointer',
+                              fontWeight: 600,
+                              fontSize: 13,
+                            }}
+                          >
+                            Borrar lote
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -498,4 +727,19 @@ const th: CSSProperties = {
 const td: CSSProperties = {
   padding: '10px 12px',
   borderBottom: '1px solid #f1f5f9',
+};
+
+const editLabel: CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  fontSize: 13,
+  gap: 4,
+};
+
+const editInput: CSSProperties = {
+  padding: 8,
+  border: '1px solid #cbd5e1',
+  borderRadius: 6,
+  background: 'white',
+  color: '#0f172a',
 };

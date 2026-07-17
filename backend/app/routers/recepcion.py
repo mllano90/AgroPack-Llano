@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import require_roles
@@ -10,6 +11,28 @@ from app.core.constants import DIAS_DESVERDIZADO
 from datetime import datetime, timedelta, date
 
 router = APIRouter(tags=["Recepción"])
+
+
+class DesverdizadoUpdate(BaseModel):
+    """Edición admin de un registro de desverdizado."""
+    lote: str | None = None
+    cantidad_bins: int | None = Field(default=None, ge=0)
+    fecha_recepcion: str | None = None  # YYYY-MM-DD o DD/MM/YYYY
+    fecha_tentativa_salida: str | None = None
+    estado: str | None = None  # en_desverdizado | listo_empaque
+    recalcular_tentativa: bool = True  # si cambia fecha_recepcion y no mandan tentativa
+
+
+def _parse_date_flex(s: str | None) -> date | None:
+    if not s:
+        return None
+    s = s.strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    raise HTTPException(status_code=400, detail=f"Fecha inválida: {s}")
 
 @router.post("/", response_model=RecepcionCampoResponse)
 def crear_recepcion(
@@ -197,6 +220,74 @@ def _purge_desverdizado_rows(db: Session, rows: list) -> tuple[int, int, list[in
         db.delete(r)
     db.commit()
     return len(ids), bins_total, ids
+
+
+@router.patch("/admin/desverdizado/{desverdizado_id}")
+def editar_desverdizado_admin(
+    desverdizado_id: int,
+    body: DesverdizadoUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Edita un registro de desverdizado (lote, bins, fechas, estado).
+    Solo admin. Si cambia fecha de corte/recepción y recalcular_tentativa=True,
+    actualiza salida tentativa = recepción + DIAS_DESVERDIZADO.
+    """
+    des = db.query(InventarioDesverdizado).filter(InventarioDesverdizado.id == desverdizado_id).first()
+    if not des:
+        raise HTTPException(status_code=404, detail="Lote de desverdizado no encontrado")
+    if (des.estado or "") == "eliminado":
+        raise HTTPException(status_code=400, detail="Este registro ya fue eliminado")
+
+    if body.lote is not None:
+        lote_new = body.lote.strip()
+        if not lote_new:
+            raise HTTPException(status_code=400, detail="El lote no puede quedar vacío")
+        des.lote = lote_new
+
+    if body.cantidad_bins is not None:
+        des.cantidad_bins = int(body.cantidad_bins)
+
+    fecha_rec_changed = False
+    if body.fecha_recepcion is not None:
+        fr = _parse_date_flex(body.fecha_recepcion)
+        if fr:
+            des.fecha_recepcion = fr
+            fecha_rec_changed = True
+
+    if body.fecha_tentativa_salida is not None:
+        ft = _parse_date_flex(body.fecha_tentativa_salida)
+        if ft:
+            des.fecha_tentativa_salida = ft
+    elif fecha_rec_changed and body.recalcular_tentativa and des.fecha_recepcion:
+        des.fecha_tentativa_salida = des.fecha_recepcion + timedelta(days=DIAS_DESVERDIZADO)
+
+    if body.estado is not None:
+        est = body.estado.strip().lower()
+        allowed = {"en_desverdizado", "listo_empaque", "empaquetado"}
+        if est not in allowed:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Estado inválido. Use: {', '.join(sorted(allowed))}",
+            )
+        des.estado = est
+
+    if des.cantidad_bins == 0 and des.estado not in ("empaquetado", "eliminado"):
+        # 0 bins: no debe listarse en empaque
+        des.estado = "empaquetado"
+
+    db.commit()
+    db.refresh(des)
+    return {
+        "message": f"Desverdizado #{des.id} actualizado",
+        "id": des.id,
+        "lote": des.lote,
+        "cantidad_bins_disponibles": des.cantidad_bins,
+        "fecha_recepcion": str(des.fecha_recepcion) if des.fecha_recepcion else None,
+        "fecha_tentativa_salida": str(des.fecha_tentativa_salida) if des.fecha_tentativa_salida else None,
+        "estado": des.estado,
+    }
 
 
 @router.delete("/admin/desverdizado/{desverdizado_id}")

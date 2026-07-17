@@ -141,10 +141,32 @@ export async function getDesverdizadoAdmin(token: string): Promise<DesverdizadoA
   return res.data;
 }
 
+/** Edita un registro de desverdizado (admin) */
+export async function editarDesverdizado(
+  token: string,
+  desverdizadoId: number,
+  data: {
+    lote?: string;
+    cantidad_bins?: number;
+    fecha_recepcion?: string | null;
+    fecha_tentativa_salida?: string | null;
+    estado?: string;
+    recalcular_tentativa?: boolean;
+  }
+): Promise<DesverdizadoAdminItem & { message?: string }> {
+  const res = await api.patch<DesverdizadoAdminItem & { message?: string }>(
+    `/api/recepcion/admin/desverdizado/${desverdizadoId}`,
+    data,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
 /** Elimina un lote de desverdizado (todas las filas con ese lote por defecto) */
 export async function eliminarDesverdizado(
   token: string,
-  desverdizadoId: number
+  desverdizadoId: number,
+  todoElLote = true
 ): Promise<{
   message: string;
   id: number;
@@ -162,7 +184,7 @@ export async function eliminarDesverdizado(
     ids_eliminados?: number[];
   }>(`/api/recepcion/admin/desverdizado/${desverdizadoId}`, {
     headers: { Authorization: `Bearer ${token}` },
-    params: { todo_el_lote: true },
+    params: { todo_el_lote: todoElLote },
   });
   return res.data;
 }
