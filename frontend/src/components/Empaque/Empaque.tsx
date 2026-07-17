@@ -66,15 +66,31 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
     return `${d} ${mes} ${y}`;
   };
 
+  const cargarDesverdizado = () => {
+    if (!token) return;
+    const base = getApiBaseUrl().replace(/\/$/, '');
+    fetch(`${base}/api/recepcion/desverdizado`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        const list = Array.isArray(data)
+          ? data.filter(
+              (d: any) =>
+                (d.cantidad_bins_disponibles || 0) > 0 &&
+                d.estado !== 'eliminado' &&
+                d.estado !== 'empaquetado'
+            )
+          : [];
+        setDesverdizadoList(list);
+      })
+      .catch(() => setDesverdizadoList([]));
+  };
+
   useEffect(() => {
     if (productoEmpaque === 'limon_amarillo' && token) {
-      const base = getApiBaseUrl();
-      fetch(`${base}/api/recepcion/desverdizado`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
-        .then((r) => r.json())
-        .then(setDesverdizadoList)
-        .catch(() => setDesverdizadoList([]));
+      cargarDesverdizado();
     }
   }, [productoEmpaque, token]);
 
@@ -284,7 +300,16 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
       {productoEmpaque === 'limon_amarillo' && (
         <>
           <div style={{ margin: '8px 0' }}>
-            <strong>Inventario Desverdizado (bins de {PESO_BIN_CAMPO_KG} kg):</strong>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+              <strong>Inventario Desverdizado (bins de {PESO_BIN_CAMPO_KG} kg):</strong>
+              <button
+                type="button"
+                onClick={cargarDesverdizado}
+                style={{ padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}
+              >
+                Actualizar lista
+              </button>
+            </div>
             {desverdizadoList.length === 0 && (
               <div style={{ color: '#666' }}>No hay lotes disponibles</div>
             )}

@@ -120,8 +120,10 @@ def listar_desverdizado(db: Session = Depends(get_db)):
     """Lista el inventario actual en desverdizado para selección en empaque."""
     items = db.query(InventarioDesverdizado).filter(
         InventarioDesverdizado.estado.in_(["en_desverdizado", "listo_empaque"]),
-        InventarioDesverdizado.cantidad_bins > 0
+        InventarioDesverdizado.cantidad_bins > 0,
     ).all()
+    # Excluir eliminados por si quedó estado raro
+    items = [d for d in items if (d.estado or "") != "eliminado" and (d.cantidad_bins or 0) > 0]
     return [
         {
             "id": d.id,
@@ -165,7 +167,7 @@ def listar_desverdizado_admin(
         db.query(InventarioDesverdizado)
         .filter(InventarioDesverdizado.cantidad_bins > 0)
         .order_by(InventarioDesverdizado.fecha_recepcion.desc(), InventarioDesverdizado.id.desc())
-        .limit(100)
+        .limit(200)
         .all()
     )
     return [
@@ -181,27 +183,83 @@ def listar_desverdizado_admin(
     ]
 
 
+def _purge_desverdizado_rows(db: Session, rows: list) -> tuple[int, int, list[int]]:
+    """Pone bins en 0, marca eliminado y borra filas. Returns (n_rows, bins, ids)."""
+    if not rows:
+        return 0, 0, []
+    ids = [r.id for r in rows]
+    bins_total = sum(int(r.cantidad_bins or 0) for r in rows)
+    for r in rows:
+        r.cantidad_bins = 0
+        r.estado = "eliminado"
+    db.flush()
+    for r in rows:
+        db.delete(r)
+    db.commit()
+    return len(ids), bins_total, ids
+
+
 @router.delete("/admin/desverdizado/{desverdizado_id}")
 def eliminar_desverdizado_admin(
     desverdizado_id: int,
+    todo_el_lote: bool = True,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
-    Elimina un lote de desverdizado mal dado de alta.
-    Solo admin. No revierte recepción de campo (solo quita el stock de desverdizado).
+    Elimina registro(s) de desverdizado mal dados de alta.
+    Por defecto borra TODAS las filas con el mismo nombre de lote (puede haber
+    varias recepciones del mismo lote). Empaque y dashboard dejan de verlas.
     """
     des = db.query(InventarioDesverdizado).filter(InventarioDesverdizado.id == desverdizado_id).first()
     if not des:
         raise HTTPException(status_code=404, detail="Lote de desverdizado no encontrado")
 
-    lote = des.lote
-    bins = des.cantidad_bins
-    db.delete(des)
-    db.commit()
+    lote = (des.lote or "").strip()
+    if todo_el_lote and lote:
+        # Todas las filas del mismo lote (puede haber varias recepciones)
+        all_rows = db.query(InventarioDesverdizado).all()
+        rows = [r for r in all_rows if (r.lote or "").strip() == lote]
+        if not rows:
+            rows = [des]
+    else:
+        rows = [des]
+
+    n, bins_total, ids = _purge_desverdizado_rows(db, rows)
     return {
-        "message": f"Lote {lote} eliminado de desverdizado ({bins} bins)",
+        "message": (
+            f"Eliminado lote '{lote}': {n} registro(s), {bins_total} bins. "
+            f"Ya no aparece en empaque ni inventarios."
+        ),
         "id": desverdizado_id,
+        "ids_eliminados": ids,
         "lote": lote,
-        "bins_eliminados": bins,
+        "bins_eliminados": bins_total,
+        "registros_eliminados": n,
+    }
+
+
+@router.delete("/admin/desverdizado-por-lote")
+def eliminar_desverdizado_por_lote(
+    lote: str,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """Elimina por nombre de lote (todas las filas con ese lote)."""
+    lote_clean = (lote or "").strip()
+    if not lote_clean:
+        raise HTTPException(status_code=400, detail="Indica el nombre del lote")
+
+    all_rows = db.query(InventarioDesverdizado).all()
+    rows = [r for r in all_rows if (r.lote or "").strip() == lote_clean]
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"No hay desverdizado para lote '{lote_clean}'")
+
+    n, bins_total, ids = _purge_desverdizado_rows(db, rows)
+    return {
+        "message": f"Eliminado lote '{lote_clean}': {n} registro(s), {bins_total} bins",
+        "ids_eliminados": ids,
+        "lote": lote_clean,
+        "bins_eliminados": bins_total,
+        "registros_eliminados": n,
     }

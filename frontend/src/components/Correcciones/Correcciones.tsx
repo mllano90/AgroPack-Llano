@@ -134,11 +134,15 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   };
 
   const handleEliminarDesverdizado = async (d: DesverdizadoAdminItem) => {
+    const mismos = desverdizado.filter((x) => (x.lote || '').trim() === (d.lote || '').trim());
+    const binsTotal = mismos.reduce((s, x) => s + (x.cantidad_bins_disponibles || 0), 0);
     if (
       !confirm(
-        `¿Eliminar de desverdizado el lote "${d.lote}" (${d.cantidad_bins_disponibles} bins)?\n\n` +
-          `Úsalo si se dio de alta mal en recepción.\n` +
-          `No revierte el registro de recepción; solo quita esos bins del inventario de desverdizado.`
+        `¿Eliminar el lote "${d.lote}" de desverdizado en TODO el sistema?\n\n` +
+          `Registros: ${mismos.length} · Bins totales: ${binsTotal}\n` +
+          `(Si el mismo lote se recibió varias veces, se borran todas las filas.)\n\n` +
+          `Desaparecerá de Empaque, Inventarios y Proyección.\n` +
+          `No borra el historial de recepción, solo el stock de desverdizado.`
       )
     ) {
       return;

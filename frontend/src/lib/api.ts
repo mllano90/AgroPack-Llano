@@ -141,18 +141,28 @@ export async function getDesverdizadoAdmin(token: string): Promise<DesverdizadoA
   return res.data;
 }
 
-/** Elimina un lote de desverdizado mal registrado (admin) */
+/** Elimina un lote de desverdizado (todas las filas con ese lote por defecto) */
 export async function eliminarDesverdizado(
   token: string,
   desverdizadoId: number
-): Promise<{ message: string; id: number; lote: string; bins_eliminados: number }> {
+): Promise<{
+  message: string;
+  id: number;
+  lote: string;
+  bins_eliminados: number;
+  registros_eliminados?: number;
+  ids_eliminados?: number[];
+}> {
   const res = await api.delete<{
     message: string;
     id: number;
     lote: string;
     bins_eliminados: number;
+    registros_eliminados?: number;
+    ids_eliminados?: number[];
   }>(`/api/recepcion/admin/desverdizado/${desverdizadoId}`, {
     headers: { Authorization: `Bearer ${token}` },
+    params: { todo_el_lote: true },
   });
   return res.data;
 }

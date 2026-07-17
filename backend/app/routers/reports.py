@@ -410,7 +410,7 @@ def obtener_dashboard(db: Session = Depends(get_db)):
 
     # Inventario en Desverdizado (bins de limón en proceso)
     desverdizado_raw = db.query(InventarioDesverdizado).filter(
-        InventarioDesverdizado.cantidad_bins > 0
+        InventarioDesverdizado.cantidad_bins > 0,
     ).order_by(InventarioDesverdizado.fecha_recepcion.desc()).all()
 
     desverdizado_list = [
@@ -422,6 +422,7 @@ def obtener_dashboard(db: Session = Depends(get_db)):
             estado=d.estado
         )
         for d in desverdizado_raw
+        if (d.cantidad_bins or 0) > 0 and (d.estado or "") != "eliminado"
     ]
     
     return DashboardResponse(
@@ -673,10 +674,14 @@ def proyeccion_inventario(
 
     desvs = (
         db.query(InventarioDesverdizado)
-        .filter(InventarioDesverdizado.cantidad_bins > 0)
+        .filter(
+            InventarioDesverdizado.cantidad_bins > 0,
+            InventarioDesverdizado.estado != "eliminado",
+        )
         .order_by(InventarioDesverdizado.fecha_tentativa_salida.asc())
         .all()
     )
+    desvs = [d for d in desvs if (d.cantidad_bins or 0) > 0 and (d.estado or "") != "eliminado"]
 
     por_lote: list[ProyeccionLoteItem] = []
     by_fecha: dict[str, dict] = defaultdict(
