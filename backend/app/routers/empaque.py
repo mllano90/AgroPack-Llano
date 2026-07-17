@@ -3,7 +3,15 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import require_roles
 from app.models.enums import Rol
-from app.schemas.empaque import EmpaqueCreate, EmpaqueResponse, AgregarConsumoRequest, AnularEmpaqueResponse
+from datetime import datetime, date as date_cls
+from app.schemas.empaque import (
+    EmpaqueCreate,
+    EmpaqueResponse,
+    AgregarConsumoRequest,
+    AnularEmpaqueResponse,
+    EmpaqueEditRequest,
+)
+from app.models.enums import TipoMercado
 from app.models.inventory import Empaque, InventarioCampo, InventarioFinal, InventarioDesverdizado
 from app.models.enums import Producto
 from app.models.enums import Producto as ProductoEnum
@@ -376,6 +384,146 @@ def listar_empaques_admin(
         .limit(50)
         .all()
     )
+
+
+def _parse_fecha_empaque(s: str | None):
+    if not s:
+        return None
+    s = s.strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    raise HTTPException(status_code=400, detail=f"Fecha inválida: {s}")
+
+
+def _norm_consumos(raw: list | None) -> list[dict]:
+    out = []
+    for c in raw or []:
+        lote = str(c.get("lote") or "").strip()
+        bins = int(c.get("bins") or 0)
+        if not lote or bins <= 0:
+            continue
+        out.append({"lote": lote, "bins": bins})
+    return out
+
+
+def _norm_produccion(raw: list | None) -> list[dict]:
+    out = []
+    for p in raw or []:
+        pres = str(p.get("presentacion") or "").strip()
+        cant = int(p.get("cantidad") or 0)
+        if not pres or cant <= 0:
+            continue
+        talla = p.get("talla")
+        if pres == "bins_jugo":
+            talla = None
+        elif talla is not None:
+            talla = str(talla)
+        out.append({"presentacion": pres, "talla": talla, "cantidad": cant})
+    return out
+
+
+@router.put("/{empaque_id}/editar", response_model=EmpaqueResponse)
+def editar_empaque_completo(
+    empaque_id: int,
+    body: EmpaqueEditRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Edición completa de empaque limón:
+    - Reemplaza consumos (lotes/bins): devuelve los viejos y descuenta los nuevos.
+    - Reemplaza producción: resta del inventario final lo anterior y suma lo nuevo.
+    - Opcional: fecha, empacador, mercado.
+    """
+    emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empaque no encontrado")
+    if emp.producto != Producto.LIMON_AMARILLO:
+        raise HTTPException(status_code=400, detail="Edición completa solo para limón por ahora")
+
+    detalle = emp.detalle_corrida if isinstance(emp.detalle_corrida, dict) else {}
+    if detalle.get("anulado"):
+        raise HTTPException(status_code=400, detail="El empaque está anulado; no se puede editar")
+
+    old_consumos = _norm_consumos(detalle.get("consumos"))
+    if not old_consumos and emp.bins_desverdizado_usados:
+        old_consumos = [{
+            "lote": emp.lote_desverdizado or "SIN_LOTE",
+            "bins": int(emp.bins_desverdizado_usados),
+        }]
+    old_produccion = _norm_produccion(detalle.get("produccion"))
+    if not old_produccion and emp.presentacion and emp.cantidad_producida:
+        old_produccion = [{
+            "presentacion": emp.presentacion,
+            "talla": emp.talla,
+            "cantidad": emp.cantidad_producida,
+        }]
+
+    new_consumos = (
+        _norm_consumos(body.consumos)
+        if body.consumos is not None
+        else old_consumos
+    )
+    new_produccion = (
+        _norm_produccion(body.produccion)
+        if body.produccion is not None
+        else old_produccion
+    )
+
+    if body.consumos is not None and not new_consumos:
+        raise HTTPException(status_code=400, detail="Debe haber al menos un consumo (lote + bins > 0)")
+    if body.produccion is not None and not new_produccion:
+        raise HTTPException(status_code=400, detail="Debe haber al menos una línea de producción")
+
+    # 1) Devolver consumos viejos al desverdizado
+    for c in old_consumos:
+        _devolver_bins_lote(db, c["lote"], c["bins"])
+
+    # 2) Restar producción vieja del inventario final
+    if old_produccion:
+        _ajustar_inventario_final(db, emp.producto, emp.mercado, old_produccion, signo=-1)
+
+    # 3) Consumir nuevos lotes
+    for c in new_consumos:
+        _consumir_bins_lote(db, c["lote"], c["bins"])
+
+    # 4) Sumar nueva producción
+    if new_produccion:
+        _ajustar_inventario_final(db, emp.producto, emp.mercado, new_produccion, signo=+1)
+
+    bins_total = sum(c["bins"] for c in new_consumos)
+    lotes = ", ".join(f"{c['lote']}:{c['bins']}" for c in new_consumos)
+    detalle = {
+        **detalle,
+        "consumos": new_consumos,
+        "produccion": new_produccion,
+        "bins_campo": bins_total,
+        "lotes_resumen": lotes,
+        "editado_por": getattr(current_user, "username", None),
+    }
+    emp.detalle_corrida = detalle
+    emp.bins_desverdizado_usados = bins_total
+    emp.lote_desverdizado = new_consumos[0]["lote"] if new_consumos else emp.lote_desverdizado
+
+    if body.numero_empacador is not None:
+        emp.numero_empacador = body.numero_empacador.strip() or emp.numero_empacador
+    if body.mercado is not None:
+        emp.mercado = body.mercado
+    if body.fecha is not None:
+        f = _parse_fecha_empaque(body.fecha)
+        if f:
+            emp.fecha = f
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    flag_modified(emp, "detalle_corrida")
+    _renumerar_tandas(db)
+    db.commit()
+    db.refresh(emp)
+    return emp
 
 
 @router.post("/{empaque_id}/agregar-consumo", response_model=EmpaqueResponse)

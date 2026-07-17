@@ -455,6 +455,24 @@ export async function agregarConsumoEmpaque(
   return res.data;
 }
 
+/** Edición completa de empaque limón (consumos + producción + datos) */
+export async function editarEmpaqueCompleto(
+  token: string,
+  empaqueId: number,
+  data: {
+    consumos?: Array<{ lote: string; bins: number }>;
+    produccion?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
+    fecha?: string | null;
+    numero_empacador?: string | null;
+    mercado?: string | null;
+  }
+): Promise<EmpaqueRecord> {
+  const res = await api.put<EmpaqueRecord>(`/api/empaque/${empaqueId}/editar`, data, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
 /** Anula empaque de limón y revierte inventario */
 export async function anularEmpaque(
   token: string,

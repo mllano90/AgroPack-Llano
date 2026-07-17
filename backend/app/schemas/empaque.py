@@ -62,3 +62,15 @@ class AgregarConsumoRequest(BaseModel):
 class AnularEmpaqueResponse(BaseModel):
     message: str
     id: int
+
+
+class EmpaqueEditRequest(BaseModel):
+    """
+    Edición completa de empaque limón (admin).
+    Reemplaza consumos y producción ajustando inventarios.
+    """
+    consumos: list[dict] | None = None  # [{"lote": "...", "bins": N}, ...]
+    produccion: list[dict] | None = None  # [{"presentacion", "talla", "cantidad"}, ...]
+    fecha: str | None = None  # YYYY-MM-DD
+    numero_empacador: str | None = None
+    mercado: TipoMercado | None = None

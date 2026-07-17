@@ -1,8 +1,8 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import {
   getEmpaquesAdmin,
-  agregarConsumoEmpaque,
   anularEmpaque,
+  editarEmpaqueCompleto,
   getDesverdizadoAdmin,
   eliminarDesverdizado,
   editarDesverdizado,
@@ -14,9 +14,12 @@ import {
   type DesverdizadoAdminItem,
   type HistorialMovimiento,
 } from '../../lib/api';
-import { DIAS_DESVERDIZADO } from '../../lib/constants';
+import { DIAS_DESVERDIZADO, PRESENTACIONES_LIMON, TALLAS_LIMON } from '../../lib/constants';
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
 import type { EmpaqueRecord } from '../../types';
+
+type ConsumoEdit = { lote: string; bins: string };
+type ProdEdit = { presentacion: string; talla: string; cantidad: string };
 
 interface CorreccionesProps {
   token: string;
@@ -41,9 +44,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const [okMsg, setOkMsg] = useState('');
 
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [lote, setLote] = useState('');
-  const [bins, setBins] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Borrador edición empaque
+  const [editFecha, setEditFecha] = useState('');
+  const [editEmpacador, setEditEmpacador] = useState('');
+  const [editMercado, setEditMercado] = useState<'nacional' | 'exportacion'>('nacional');
+  const [editConsumos, setEditConsumos] = useState<ConsumoEdit[]>([]);
+  const [editProduccion, setEditProduccion] = useState<ProdEdit[]>([]);
 
   // Edición desverdizado
   const [editDesv, setEditDesv] = useState<DesverdizadoAdminItem | null>(null);
@@ -103,15 +111,56 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const selected = empaques.find((e) => e.id === selectedId) || null;
   const anulado = Boolean(selected?.detalle_corrida?.anulado);
 
-  const handleAgregarConsumo = async () => {
-    if (!selectedId) return alert('Selecciona un empaque');
-    if (!lote.trim()) return alert('Indica el lote');
-    const n = parseInt(bins, 10);
-    if (!n || n <= 0) return alert('Bins debe ser un número mayor a 0');
+  const loadEmpaqueDraft = (e: EmpaqueRecord) => {
+    setSelectedId(e.id);
+    setEditFecha(toInputDate(e.fecha));
+    setEditEmpacador(e.numero_empacador || '');
+    setEditMercado((e.mercado as 'nacional' | 'exportacion') || 'nacional');
+    const cons =
+      e.detalle_corrida?.consumos ||
+      (e.lote_desverdizado
+        ? [{ lote: e.lote_desverdizado, bins: e.bins_desverdizado_usados || 0 }]
+        : []);
+    setEditConsumos(
+      cons.map((c) => ({ lote: String(c.lote || ''), bins: String(c.bins ?? '') }))
+    );
+    const prod = e.detalle_corrida?.produccion || [];
+    setEditProduccion(
+      prod.map((p) => ({
+        presentacion: String(p.presentacion || ''),
+        talla: p.talla != null ? String(p.talla) : '',
+        cantidad: String(p.cantidad ?? ''),
+      }))
+    );
+    setOkMsg('');
+    setError('');
+  };
+
+  const handleGuardarEmpaque = async () => {
+    if (!selectedId || !selected) return;
+    if (selected.producto !== 'limon_amarillo') {
+      return alert('Edición completa solo para limón por ahora');
+    }
+    if (anulado) return alert('El empaque está anulado');
+
+    const consumos = editConsumos
+      .map((c) => ({ lote: c.lote.trim(), bins: parseInt(c.bins, 10) || 0 }))
+      .filter((c) => c.lote && c.bins > 0);
+    const produccion = editProduccion
+      .map((p) => ({
+        presentacion: p.presentacion.trim(),
+        talla: p.presentacion === 'bins_jugo' ? null : p.talla.trim() || null,
+        cantidad: parseInt(p.cantidad, 10) || 0,
+      }))
+      .filter((p) => p.presentacion && p.cantidad > 0);
+
+    if (consumos.length === 0) return alert('Debe haber al menos un lote con bins > 0');
+    if (produccion.length === 0) return alert('Debe haber al menos una línea de producción');
 
     if (
       !confirm(
-        `¿Descontar ${n} bins del lote "${lote.trim()}" del desverdizado y agregarlos al empaque #${selectedId}?`
+        `¿Guardar cambios del empaque #${selectedId}?\n\n` +
+          `Se ajustarán desverdizado e inventario final según los nuevos datos.`
       )
     ) {
       return;
@@ -121,14 +170,22 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setError('');
     setOkMsg('');
     try {
-      await agregarConsumoEmpaque(token, selectedId, lote.trim(), n);
-      setOkMsg(`Consumo agregado: ${n} bins de lote ${lote.trim()} al empaque #${selectedId}`);
-      setLote('');
-      setBins('');
+      const updated = await editarEmpaqueCompleto(token, selectedId, {
+        consumos,
+        produccion,
+        fecha: editFecha || null,
+        numero_empacador: editEmpacador || null,
+        mercado: editMercado,
+      });
+      setOkMsg(`Empaque #${selectedId} actualizado`);
       await load();
+      // recargar draft desde lista actualizada
+      const again = (await getEmpaquesAdmin(token)).find((x) => x.id === selectedId);
+      if (again) loadEmpaqueDraft(again);
+      else if (updated) loadEmpaqueDraft(updated as EmpaqueRecord);
       onCorregido?.();
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'No se pudo agregar el consumo');
+      setError(err?.response?.data?.detail || 'No se pudo guardar el empaque');
     } finally {
       setBusy(false);
     }
@@ -338,9 +395,15 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       return;
     }
     if (m.modulo === 'empaque') {
-      setSelectedId(m.id);
       setVistaSeccion('empaques');
-      setOkMsg(`Empaque #${m.id} seleccionado para corregir (agregar lote / anular).`);
+      const emp = empaques.find((x) => x.id === m.id);
+      if (emp) {
+        loadEmpaqueDraft(emp);
+        setOkMsg(`Empaque #${m.id} listo para editar abajo.`);
+      } else {
+        setSelectedId(m.id);
+        setOkMsg(`Empaque #${m.id} — actualiza la lista si no aparece el formulario.`);
+      }
     }
   };
 
@@ -391,10 +454,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       const res = await eliminarDesverdizado(token, d.id, !soloEste);
       setOkMsg(res.message || `Lote ${d.lote} eliminado`);
       if (editDesv?.id === d.id) setEditDesv(null);
-      if (lote === d.lote) {
-        setLote('');
-        setBins('');
-      }
       await load();
       onCorregido?.();
     } catch (err: any) {
@@ -403,13 +462,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       setBusy(false);
     }
   };
-
-  const consumos =
-    selected?.detalle_corrida?.consumos ||
-    (selected?.lote_desverdizado
-      ? [{ lote: selected.lote_desverdizado, bins: selected.bins_desverdizado_usados || 0 }]
-      : []);
-  const produccion = selected?.detalle_corrida?.produccion || [];
 
   const moduloLabel = (m: string) => {
     const map: Record<string, string> = {
@@ -772,11 +824,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                     return (
                       <tr
                         key={e.id}
-                        onClick={() => {
-                          setSelectedId(e.id);
-                          setOkMsg('');
-                          setError('');
-                        }}
+                        onClick={() => loadEmpaqueDraft(e)}
                         style={{
                           cursor: 'pointer',
                           background: isSel ? '#dcfce7' : isAnul ? '#fef2f2' : 'white',
@@ -814,106 +862,282 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             }}
           >
             {!selected ? (
-              <p style={{ color: '#64748b' }}>Selecciona un empaque de la lista para corregirlo.</p>
+              <p style={{ color: '#64748b' }}>Selecciona un empaque de la lista para editarlo.</p>
             ) : (
               <>
                 <h3 style={{ marginTop: 0 }}>
-                  Empaque #{selected.id} — {labelProducto(selected.producto)}
+                  Editar empaque #{selected.id} — {labelProducto(selected.producto)}
                 </h3>
-                <p style={{ margin: '4px 0', fontSize: 14 }}>
-                  <strong>Fecha:</strong> {formatFecha(selected.fecha)} · <strong>Empacador:</strong>{' '}
-                  {selected.numero_empacador || '—'} · <strong>Mercado:</strong> {selected.mercado}
-                </p>
                 {anulado && (
                   <p style={{ color: '#b91c1c', fontWeight: 600 }}>
                     Anulado
                     {selected.detalle_corrida?.anulado_por
                       ? ` por ${selected.detalle_corrida.anulado_por}`
-                      : ''}
+                      : ''}{' '}
+                    — no editable
                   </p>
-                )}
-
-                <div style={{ marginTop: 16 }}>
-                  <strong>Consumos de desverdizado</strong>
-                  {consumos.length === 0 ? (
-                    <p style={{ color: '#64748b', fontSize: 14 }}>Sin consumos registrados.</p>
-                  ) : (
-                    <ul style={{ margin: '8px 0', paddingLeft: 20 }}>
-                      {consumos.map((c, i) => (
-                        <li key={i}>
-                          Lote <strong>{c.lote}</strong>: {c.bins} bins
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-                {produccion.length > 0 && (
-                  <div style={{ marginTop: 12 }}>
-                    <strong>Producción</strong>
-                    <ul style={{ margin: '8px 0', paddingLeft: 20 }}>
-                      {produccion.map((p, i) => (
-                        <li key={i}>
-                          {p.presentacion}
-                          {p.talla ? ` talla ${p.talla}` : ''}: {p.cantidad}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
                 )}
 
                 {selected.producto === 'limon_amarillo' && !anulado && (
                   <>
-                    <hr style={{ margin: '20px 0', border: 'none', borderTop: '1px solid #e2e8f0' }} />
-                    <h4 style={{ marginBottom: 8 }}>Agregar lote olvidado</h4>
-                    <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
-                      Descuenta bins del desverdizado y los asocia a este empaque (no cambia la
-                      producción ya registrada).
-                    </p>
-                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'flex-end' }}>
-                      <label style={{ display: 'flex', flexDirection: 'column', fontSize: 13 }}>
-                        Lote
+                    <div
+                      style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+                        gap: 10,
+                        marginTop: 12,
+                      }}
+                    >
+                      <label style={editLabel}>
+                        Fecha
+                        <input
+                          type="date"
+                          value={editFecha}
+                          onChange={(e) => setEditFecha(e.target.value)}
+                          style={editInput}
+                        />
+                      </label>
+                      <label style={editLabel}>
+                        Empacador
+                        <input
+                          value={editEmpacador}
+                          onChange={(e) => setEditEmpacador(e.target.value)}
+                          style={editInput}
+                        />
+                      </label>
+                      <label style={editLabel}>
+                        Mercado
                         <select
-                          value={lote}
-                          onChange={(e) => setLote(e.target.value)}
-                          style={{ padding: 8, minWidth: 160, marginTop: 4 }}
+                          value={editMercado}
+                          onChange={(e) =>
+                            setEditMercado(e.target.value as 'nacional' | 'exportacion')
+                          }
+                          style={editInput}
                         >
-                          <option value="">— seleccionar o escribir —</option>
-                          {desverdizado
-                            .filter((d) => (d.cantidad_bins_disponibles || 0) > 0)
-                            .map((d) => (
-                              <option key={d.id} value={d.lote}>
-                                {d.lote} ({d.cantidad_bins_disponibles} bins)
-                              </option>
-                            ))}
+                          <option value="nacional">nacional</option>
+                          <option value="exportacion">exportacion</option>
                         </select>
                       </label>
-                      <label style={{ display: 'flex', flexDirection: 'column', fontSize: 13 }}>
-                        Lote (manual)
-                        <input
-                          value={lote}
-                          onChange={(e) => setLote(e.target.value)}
-                          placeholder="ej. L-001"
-                          style={{ padding: 8, minWidth: 120, marginTop: 4 }}
-                        />
-                      </label>
-                      <label style={{ display: 'flex', flexDirection: 'column', fontSize: 13 }}>
-                        Bins
-                        <input
-                          type="number"
-                          min={1}
-                          value={bins}
-                          onChange={(e) => setBins(e.target.value)}
-                          style={{ padding: 8, width: 90, marginTop: 4 }}
-                        />
-                      </label>
+                    </div>
+
+                    <h4 style={{ marginBottom: 8, marginTop: 18 }}>Consumos (lotes / bins)</h4>
+                    <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
+                      Edita, quita o agrega lotes. Al guardar se ajusta el desverdizado.
+                    </p>
+                    {editConsumos.map((c, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 8,
+                          marginBottom: 8,
+                          alignItems: 'flex-end',
+                        }}
+                      >
+                        <label style={editLabel}>
+                          Lote
+                          <input
+                            list={`lotes-desv-${selected.id}`}
+                            value={c.lote}
+                            onChange={(e) => {
+                              const next = [...editConsumos];
+                              next[i] = { ...next[i], lote: e.target.value };
+                              setEditConsumos(next);
+                            }}
+                            style={{ ...editInput, minWidth: 140 }}
+                          />
+                        </label>
+                        <label style={editLabel}>
+                          Bins
+                          <input
+                            type="number"
+                            min={0}
+                            value={c.bins}
+                            onChange={(e) => {
+                              const next = [...editConsumos];
+                              next[i] = { ...next[i], bins: e.target.value };
+                              setEditConsumos(next);
+                            }}
+                            style={{ ...editInput, width: 80 }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => setEditConsumos(editConsumos.filter((_, j) => j !== i))}
+                          style={{
+                            padding: '8px 12px',
+                            background: '#fee2e2',
+                            color: '#b91c1c',
+                            border: '1px solid #fecaca',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                          }}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                    <datalist id={`lotes-desv-${selected.id}`}>
+                      {desverdizado.map((d) => (
+                        <option key={d.id} value={d.lote}>
+                          {d.cantidad_bins_disponibles} bins
+                        </option>
+                      ))}
+                    </datalist>
+                    <button
+                      type="button"
+                      onClick={() => setEditConsumos([...editConsumos, { lote: '', bins: '' }])}
+                      style={{
+                        padding: '8px 14px',
+                        marginBottom: 16,
+                        background: '#e0f2fe',
+                        color: '#0c4a6e',
+                        border: '1px solid #bae6fd',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                      }}
+                    >
+                      + Agregar lote
+                    </button>
+
+                    <h4 style={{ marginBottom: 8 }}>Producción (presentación / talla / cantidad)</h4>
+                    {editProduccion.map((p, i) => (
+                      <div
+                        key={i}
+                        style={{
+                          display: 'flex',
+                          flexWrap: 'wrap',
+                          gap: 8,
+                          marginBottom: 8,
+                          alignItems: 'flex-end',
+                        }}
+                      >
+                        <label style={editLabel}>
+                          Presentación
+                          <select
+                            value={p.presentacion}
+                            onChange={(e) => {
+                              const next = [...editProduccion];
+                              next[i] = {
+                                ...next[i],
+                                presentacion: e.target.value,
+                                talla: e.target.value === 'bins_jugo' ? '' : next[i].talla,
+                              };
+                              setEditProduccion(next);
+                            }}
+                            style={{ ...editInput, minWidth: 140 }}
+                          >
+                            <option value="">—</option>
+                            {PRESENTACIONES_LIMON.map((opt) => (
+                              <option key={opt.value} value={opt.value}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        {p.presentacion !== 'bins_jugo' && (
+                          <label style={editLabel}>
+                            Talla
+                            <select
+                              value={p.talla}
+                              onChange={(e) => {
+                                const next = [...editProduccion];
+                                next[i] = { ...next[i], talla: e.target.value };
+                                setEditProduccion(next);
+                              }}
+                              style={editInput}
+                            >
+                              <option value="">—</option>
+                              {TALLAS_LIMON.map((t) => (
+                                <option key={t} value={t}>
+                                  {t}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        <label style={editLabel}>
+                          Cantidad
+                          <input
+                            type="number"
+                            min={0}
+                            value={p.cantidad}
+                            onChange={(e) => {
+                              const next = [...editProduccion];
+                              next[i] = { ...next[i], cantidad: e.target.value };
+                              setEditProduccion(next);
+                            }}
+                            style={{ ...editInput, width: 90 }}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setEditProduccion(editProduccion.filter((_, j) => j !== i))
+                          }
+                          style={{
+                            padding: '8px 12px',
+                            background: '#fee2e2',
+                            color: '#b91c1c',
+                            border: '1px solid #fecaca',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                          }}
+                        >
+                          Quitar
+                        </button>
+                      </div>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditProduccion([
+                          ...editProduccion,
+                          { presentacion: 'rpc_18', talla: '140', cantidad: '' },
+                        ])
+                      }
+                      style={{
+                        padding: '8px 14px',
+                        marginBottom: 16,
+                        background: '#e0f2fe',
+                        color: '#0c4a6e',
+                        border: '1px solid #bae6fd',
+                        borderRadius: 6,
+                        cursor: 'pointer',
+                        fontWeight: 600,
+                      }}
+                    >
+                      + Agregar producción
+                    </button>
+
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={handleAgregarConsumo}
+                        onClick={handleGuardarEmpaque}
                         style={{
-                          padding: '10px 16px',
+                          padding: '12px 20px',
                           background: '#15803d',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: 6,
+                          cursor: busy ? 'wait' : 'pointer',
+                          fontWeight: 700,
+                        }}
+                      >
+                        Guardar cambios
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={handleAnular}
+                        style={{
+                          padding: '12px 20px',
+                          background: '#dc2626',
                           color: 'white',
                           border: 'none',
                           borderRadius: 6,
@@ -921,39 +1145,19 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                           fontWeight: 600,
                         }}
                       >
-                        Agregar consumo
+                        Anular empaque completo
                       </button>
                     </div>
-
-                    <hr style={{ margin: '24px 0', border: 'none', borderTop: '1px solid #e2e8f0' }} />
-                    <h4 style={{ marginBottom: 8, color: '#b91c1c' }}>Anular empaque completo</h4>
-                    <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
-                      Devuelve todos los bins a desverdizado y resta la producción del inventario
-                      final. Úsalo si el empaque no debió registrarse.
+                    <p style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>
+                      Guardar ajusta desverdizado e inventario final. Anular revierte todo el
+                      registro.
                     </p>
-                    <button
-                      type="button"
-                      disabled={busy}
-                      onClick={handleAnular}
-                      style={{
-                        padding: '10px 16px',
-                        background: '#dc2626',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: 6,
-                        cursor: busy ? 'wait' : 'pointer',
-                        fontWeight: 600,
-                      }}
-                    >
-                      Anular empaque
-                    </button>
                   </>
                 )}
 
                 {selected.producto !== 'limon_amarillo' && (
                   <p style={{ color: '#64748b', marginTop: 16, fontSize: 14 }}>
-                    Correcciones automáticas por ahora solo para limón amarillo. Uva: contactar si
-                    se necesita.
+                    Edición completa por ahora solo para limón amarillo.
                   </p>
                 )}
               </>
