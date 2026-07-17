@@ -9,6 +9,7 @@ import {
   type DesverdizadoAdminItem,
 } from '../../lib/api';
 import { DIAS_DESVERDIZADO } from '../../lib/constants';
+import { formatFechaCorta, toInputDate } from '../../lib/dates';
 import type { EmpaqueRecord } from '../../types';
 
 interface CorreccionesProps {
@@ -17,12 +18,7 @@ interface CorreccionesProps {
 }
 
 function formatFecha(fecha: string) {
-  if (!fecha) return '—';
-  const date = new Date(fecha.includes('T') ? fecha : `${fecha}T12:00:00`);
-  if (isNaN(date.getTime())) return fecha;
-  const meses = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${d} ${meses[date.getMonth()]} ${date.getFullYear()}`;
+  return formatFechaCorta(fecha);
 }
 
 function labelProducto(p: string) {
@@ -142,13 +138,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     } finally {
       setBusy(false);
     }
-  };
-
-  const toInputDate = (s?: string | null) => {
-    if (!s) return '';
-    // already YYYY-MM-DD
-    if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
-    return s;
   };
 
   const openEditDesverdizado = (d: DesverdizadoAdminItem) => {

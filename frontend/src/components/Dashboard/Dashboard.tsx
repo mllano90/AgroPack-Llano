@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { InventarioCampoItem, InventarioFinalItem, DesverdizadoItem } from '../../types';
+import { formatFechaCorta } from '../../lib/dates';
 
 interface DashboardProps {
   inventarioCampo: InventarioCampoItem[];
@@ -11,18 +12,6 @@ const calcularParrillas = (cajas: number) => {
   const parrillas = Math.floor(cajas / 90);
   const sueltas = cajas % 90;
   return { parrillas, sueltas };
-};
-
-const formatFechaCorta = (fecha: string) => {
-  if (!fecha) return '';
-  // Handle both 'YYYY-MM-DD' and other possible formats robustly
-  const date = new Date(fecha);
-  if (isNaN(date.getTime())) return fecha;
-  const meses = ['ENE','FEB','MAR','ABR','MAY','JUN','JUL','AGO','SEP','OCT','NOV','DIC'];
-  const d = String(date.getDate()).padStart(2, '0');
-  const mes = meses[date.getMonth()];
-  const y = date.getFullYear();
-  return `${d} ${mes} ${y}`;
 };
 
 export default function Dashboard({ inventarioCampo, inventarioCarton, desverdizado = [] }: DashboardProps) {

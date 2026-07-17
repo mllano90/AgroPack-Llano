@@ -10,6 +10,7 @@ import {
   esPresentacionRpc,
   esPresentacionCarton,
 } from '../../lib/constants';
+import { formatFechaCorta } from '../../lib/dates';
 
 interface EmpaqueProps {
   token: string;
@@ -54,17 +55,6 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
   >([]);
 
   const createEmpaqueMutation = useCreateEmpaque(token);
-
-  const formatFechaCorta = (fecha: string) => {
-    if (!fecha) return '';
-    const date = new Date(fecha);
-    if (isNaN(date.getTime())) return fecha;
-    const meses = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
-    const d = String(date.getDate()).padStart(2, '0');
-    const mes = meses[date.getMonth()];
-    const y = date.getFullYear();
-    return `${d} ${mes} ${y}`;
-  };
 
   const cargarDesverdizado = () => {
     if (!token) return;
@@ -472,7 +462,15 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                         onChange={(e) =>
                           setTallaCantidades({ ...tallaCantidades, [t]: e.target.value })
                         }
-                        style={{ width: '100%', padding: '8px', boxSizing: 'border-box' }}
+                        style={{
+                          width: '100%',
+                          padding: '8px',
+                          boxSizing: 'border-box',
+                          background: 'white',
+                          color: '#0f172a',
+                          border: '1px solid #cbd5e1',
+                          borderRadius: 4,
+                        }}
                       />
                     </div>
                   ))}
