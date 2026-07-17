@@ -6,7 +6,11 @@ import {
   getDesverdizadoAdmin,
   eliminarDesverdizado,
   editarDesverdizado,
+  getHistorialMovimientos,
+  eliminarRecepcionAdmin,
+  eliminarEmbarqueAdmin,
   type DesverdizadoAdminItem,
+  type HistorialMovimiento,
 } from '../../lib/api';
 import { DIAS_DESVERDIZADO } from '../../lib/constants';
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
@@ -48,16 +52,28 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const [editEstado, setEditEstado] = useState('en_desverdizado');
   const [editRecalc, setEditRecalc] = useState(true);
 
+  // Historial unificado
+  const [historial, setHistorial] = useState<HistorialMovimiento[]>([]);
+  const [filtroModulo, setFiltroModulo] = useState<string>('todos');
+  const [vistaSeccion, setVistaSeccion] = useState<'historial' | 'empaques' | 'desverdizado'>(
+    'historial'
+  );
+
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const [list, desv] = await Promise.all([
+      const [list, desv, hist] = await Promise.all([
         getEmpaquesAdmin(token),
         getDesverdizadoAdmin(token).catch(() => [] as DesverdizadoAdminItem[]),
+        getHistorialMovimientos(token, filtroModulo, 200).catch(() => ({
+          total: 0,
+          items: [] as HistorialMovimiento[],
+        })),
       ]);
       setEmpaques(list);
       setDesverdizado(Array.isArray(desv) ? desv : []);
+      setHistorial(hist.items || []);
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       setError(
@@ -65,7 +81,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           ? detail
           : err?.response?.status === 403
             ? 'Solo administradores pueden ver correcciones.'
-            : 'Error cargando empaques'
+            : 'Error cargando datos'
       );
     } finally {
       setLoading(false);
@@ -74,7 +90,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   useEffect(() => {
     load();
-  }, [token]);
+  }, [token, filtroModulo]);
 
   const selected = empaques.find((e) => e.id === selectedId) || null;
   const anulado = Boolean(selected?.detalle_corrida?.anulado);
@@ -185,6 +201,120 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
+  const handleHistorialEliminar = async (m: HistorialMovimiento) => {
+    if (m.modulo === 'empaque') {
+      if (!confirm(`¿Anular empaque #${m.id}? Revierte inventario de limón.`)) return;
+      setBusy(true);
+      setError('');
+      setOkMsg('');
+      try {
+        const res = await anularEmpaque(token, m.id);
+        setOkMsg(res.message || `Empaque #${m.id} anulado`);
+        await load();
+        onCorregido?.();
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'No se pudo anular el empaque');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (m.modulo === 'desverdizado') {
+      const d = desverdizado.find((x) => x.id === m.id);
+      if (d) {
+        await handleEliminarDesverdizado(d, true);
+      } else {
+        // sin stock en lista admin; intentar borrar por id
+        setBusy(true);
+        try {
+          const res = await eliminarDesverdizado(token, m.id, false);
+          setOkMsg(res.message);
+          await load();
+          onCorregido?.();
+        } catch (err: any) {
+          setError(err?.response?.data?.detail || 'No se pudo eliminar desverdizado');
+        } finally {
+          setBusy(false);
+        }
+      }
+      return;
+    }
+    if (m.modulo === 'recepcion') {
+      if (
+        !confirm(
+          `¿Eliminar recepción #${m.id}?\n\nUva: revierte inventario si hay stock.\nLimón: solo borra el registro de recepción (corrige desverdizado aparte).`
+        )
+      ) {
+        return;
+      }
+      setBusy(true);
+      setError('');
+      setOkMsg('');
+      try {
+        const res = await eliminarRecepcionAdmin(token, m.id);
+        setOkMsg(res.message);
+        await load();
+        onCorregido?.();
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'No se pudo eliminar la recepción');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+    if (m.modulo === 'embarque') {
+      if (
+        !confirm(
+          `¿Eliminar embarque #${m.id}?\n\nSe devuelven las cajas/bins al inventario final.`
+        )
+      ) {
+        return;
+      }
+      setBusy(true);
+      setError('');
+      setOkMsg('');
+      try {
+        const res = await eliminarEmbarqueAdmin(token, m.id);
+        setOkMsg(res.message);
+        await load();
+        onCorregido?.();
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'No se pudo eliminar el embarque');
+      } finally {
+        setBusy(false);
+      }
+    }
+  };
+
+  const handleHistorialEditar = (m: HistorialMovimiento) => {
+    if (m.modulo === 'desverdizado') {
+      const d = desverdizado.find((x) => x.id === m.id);
+      if (d) {
+        openEditDesverdizado(d);
+        setVistaSeccion('desverdizado');
+      } else {
+        // Construir item mínimo desde meta
+        const meta = m.meta || {};
+        openEditDesverdizado({
+          id: m.id,
+          lote: String(meta.lote || ''),
+          cantidad_bins_disponibles: Number(meta.cantidad_bins || 0),
+          fecha_recepcion: (meta.fecha_recepcion as string) || m.fecha,
+          fecha_tentativa_salida: (meta.fecha_tentativa_salida as string) || null,
+          estado: (meta.estado as string) || 'en_desverdizado',
+          numero_tanda: (meta.numero_tanda as number) || null,
+        });
+        setVistaSeccion('desverdizado');
+      }
+      return;
+    }
+    if (m.modulo === 'empaque') {
+      setSelectedId(m.id);
+      setVistaSeccion('empaques');
+      setOkMsg(`Empaque #${m.id} seleccionado abajo para corregir (agregar lote / anular).`);
+    }
+  };
+
   const handleEliminarDesverdizado = async (d: DesverdizadoAdminItem, soloEste = false) => {
     const mismos = desverdizado.filter((x) => (x.lote || '').trim() === (d.lote || '').trim());
     const binsTotal = mismos.reduce((s, x) => s + (x.cantidad_bins_disponibles || 0), 0);
@@ -223,12 +353,42 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       : []);
   const produccion = selected?.detalle_corrida?.produccion || [];
 
+  const moduloLabel = (m: string) => {
+    const map: Record<string, string> = {
+      recepcion: 'Recepción',
+      desverdizado: 'Desverdizado',
+      empaque: 'Empaque',
+      embarque: 'Embarque',
+    };
+    return map[m] || m;
+  };
+
+  const moduloColor = (m: string) => {
+    const map: Record<string, string> = {
+      recepcion: '#dbeafe',
+      desverdizado: '#fef9c3',
+      empaque: '#dcfce7',
+      embarque: '#fce7f3',
+    };
+    return map[m] || '#f1f5f9';
+  };
+
+  const secBtn = (id: typeof vistaSeccion): CSSProperties => ({
+    padding: '8px 14px',
+    border: 'none',
+    borderRadius: 6,
+    cursor: 'pointer',
+    fontWeight: vistaSeccion === id ? 700 : 400,
+    background: vistaSeccion === id ? '#15803d' : '#f1f5f9',
+    color: vistaSeccion === id ? 'white' : '#334155',
+  });
+
   return (
     <div>
       <h2 style={{ marginBottom: 8 }}>Correcciones (solo admin)</h2>
-      <p style={{ color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-        Corrige empaques mal registrados (agregar lote olvidado / anular) o elimina lotes de
-        desverdizado dados de alta por error. Los cambios actualizan inventario automáticamente.
+      <p style={{ color: '#64748b', marginTop: 0, maxWidth: 800 }}>
+        Historial de movimientos de todos los módulos. Revisa dónde está el error y edita o elimina
+        el registro. Los cambios actualizan el inventario automáticamente.
       </p>
 
       {error && (
@@ -238,9 +398,165 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         <p style={{ color: '#15803d', background: '#f0fdf4', padding: 12, borderRadius: 8 }}>{okMsg}</p>
       )}
 
-      {loading ? (
-        <p>Cargando empaques…</p>
-      ) : (
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <button type="button" style={secBtn('historial')} onClick={() => setVistaSeccion('historial')}>
+          Historial de movimientos
+        </button>
+        <button type="button" style={secBtn('empaques')} onClick={() => setVistaSeccion('empaques')}>
+          Corregir empaques
+        </button>
+        <button
+          type="button"
+          style={secBtn('desverdizado')}
+          onClick={() => setVistaSeccion('desverdizado')}
+        >
+          Desverdizado
+        </button>
+        <button type="button" onClick={load} style={{ padding: '8px 14px', cursor: 'pointer' }}>
+          Actualizar
+        </button>
+      </div>
+
+      {/* ===== HISTORIAL ===== */}
+      {vistaSeccion === 'historial' && (
+        <div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
+            <strong style={{ fontSize: 14 }}>Filtrar módulo:</strong>
+            {(
+              [
+                ['todos', 'Todos'],
+                ['recepcion', 'Recepción'],
+                ['desverdizado', 'Desverdizado'],
+                ['empaque', 'Empaque'],
+                ['embarque', 'Embarque'],
+              ] as const
+            ).map(([val, lab]) => (
+              <button
+                key={val}
+                type="button"
+                onClick={() => setFiltroModulo(val)}
+                style={{
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  border: '1px solid #cbd5e1',
+                  background: filtroModulo === val ? '#0f172a' : 'white',
+                  color: filtroModulo === val ? 'white' : '#0f172a',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                }}
+              >
+                {lab}
+              </button>
+            ))}
+          </div>
+
+          {loading ? (
+            <p>Cargando historial…</p>
+          ) : historial.length === 0 ? (
+            <p style={{ color: '#64748b' }}>No hay movimientos para este filtro.</p>
+          ) : (
+            <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 900 }}>
+                <thead>
+                  <tr style={{ background: '#f8fafc', textAlign: 'left' }}>
+                    <th style={th}>Módulo</th>
+                    <th style={th}>Fecha</th>
+                    <th style={th}>Registro</th>
+                    <th style={th}>Resumen</th>
+                    <th style={th}>Detalle</th>
+                    <th style={th}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {historial.map((m) => (
+                    <tr key={`${m.modulo}-${m.id}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
+                      <td style={td}>
+                        <span
+                          style={{
+                            background: moduloColor(m.modulo),
+                            padding: '3px 8px',
+                            borderRadius: 4,
+                            fontWeight: 600,
+                            fontSize: 12,
+                            color: '#0f172a',
+                          }}
+                        >
+                          {moduloLabel(m.modulo)}
+                        </span>
+                      </td>
+                      <td style={td}>{formatFecha(m.fecha || '')}</td>
+                      <td style={td}>
+                        <strong>{m.titulo}</strong>
+                      </td>
+                      <td style={td}>{m.resumen}</td>
+                      <td style={{ ...td, maxWidth: 280, fontSize: 12, color: '#64748b' }}>
+                        {m.detalle}
+                      </td>
+                      <td style={td}>
+                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                          {m.puede_editar && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleHistorialEditar(m)}
+                              style={{
+                                padding: '5px 10px',
+                                background: '#0369a1',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: 5,
+                                cursor: 'pointer',
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                            >
+                              Editar / Corregir
+                            </button>
+                          )}
+                          {m.puede_eliminar && (
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => handleHistorialEliminar(m)}
+                              style={{
+                                padding: '5px 10px',
+                                background: '#dc2626',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: 5,
+                                cursor: busy ? 'wait' : 'pointer',
+                                fontSize: 12,
+                                fontWeight: 600,
+                              }}
+                            >
+                              Eliminar
+                            </button>
+                          )}
+                          {!m.puede_editar && !m.puede_eliminar && (
+                            <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <p style={{ fontSize: 12, color: '#64748b', marginTop: 12 }}>
+            <strong>Empaque:</strong> Eliminar = anular (revierte inventarios).{' '}
+            <strong>Embarque:</strong> devuelve stock al inventario final.{' '}
+            <strong>Desverdizado:</strong> quita bins de cámara. Para detalle de empaque (agregar
+            lote) usa «Editar / Corregir» o la pestaña Corregir empaques.
+          </p>
+        </div>
+      )}
+
+      {/* ===== EMPAQUES (detalle) ===== */}
+      {vistaSeccion === 'empaques' && (
+        loading ? (
+          <p>Cargando empaques…</p>
+        ) : (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24, alignItems: 'start' }}>
           {/* Lista */}
           <div>
@@ -462,13 +778,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             )}
           </div>
         </div>
+        )
       )}
 
       {/* Lotes desverdizado */}
-      {!loading && (
+      {vistaSeccion === 'desverdizado' && !loading && (
         <div
           style={{
-            marginTop: 32,
+            marginTop: 8,
             padding: 20,
             border: '1px solid #fecaca',
             borderRadius: 12,

@@ -163,6 +163,54 @@ export async function editarDesverdizado(
   return res.data;
 }
 
+// ============================================
+// Correcciones / Historial unificado
+// ============================================
+export interface HistorialMovimiento {
+  modulo: 'recepcion' | 'desverdizado' | 'empaque' | 'embarque' | string;
+  id: number;
+  fecha?: string | null;
+  hora?: string | null;
+  titulo: string;
+  resumen: string;
+  detalle: string;
+  producto?: string | null;
+  puede_editar: boolean;
+  puede_eliminar: boolean;
+  meta?: Record<string, unknown>;
+}
+
+export async function getHistorialMovimientos(
+  token: string,
+  modulo?: string,
+  limit = 150
+): Promise<{ total: number; items: HistorialMovimiento[] }> {
+  const res = await api.get<{ total: number; items: HistorialMovimiento[] }>(
+    '/api/correcciones/historial',
+    {
+      headers: { Authorization: `Bearer ${token}` },
+      params: { modulo: modulo || 'todos', limit },
+    }
+  );
+  return res.data;
+}
+
+export async function eliminarRecepcionAdmin(token: string, id: number) {
+  const res = await api.delete<{ message: string; id: number }>(
+    `/api/correcciones/recepcion/${id}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
+export async function eliminarEmbarqueAdmin(token: string, id: number) {
+  const res = await api.delete<{ message: string; id: number }>(
+    `/api/correcciones/embarque/${id}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
 /** Elimina un lote de desverdizado (todas las filas con ese lote por defecto) */
 export async function eliminarDesverdizado(
   token: string,
