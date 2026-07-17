@@ -80,5 +80,23 @@ def ensure_schema():
                             )
                         )
                 print("✅ Columna inventario_desverdizado.numero_tanda agregada")
+
+        if "recepcion_campo" in tables:
+            rcols = {c["name"] for c in insp.get_columns("recepcion_campo")}
+            for col, ddl_sqlite, ddl_pg in [
+                ("lote", "ALTER TABLE recepcion_campo ADD COLUMN lote VARCHAR",
+                 "ALTER TABLE recepcion_campo ADD COLUMN IF NOT EXISTS lote VARCHAR"),
+                ("cantidad_bins", "ALTER TABLE recepcion_campo ADD COLUMN cantidad_bins INTEGER DEFAULT 0",
+                 "ALTER TABLE recepcion_campo ADD COLUMN IF NOT EXISTS cantidad_bins INTEGER DEFAULT 0"),
+                ("fecha_corte", "ALTER TABLE recepcion_campo ADD COLUMN fecha_corte DATE",
+                 "ALTER TABLE recepcion_campo ADD COLUMN IF NOT EXISTS fecha_corte DATE"),
+            ]:
+                if col not in rcols:
+                    with engine.begin() as conn:
+                        if DATABASE_URL.startswith("sqlite"):
+                            conn.execute(text(ddl_sqlite))
+                        else:
+                            conn.execute(text(ddl_pg))
+                    print(f"✅ Columna recepcion_campo.{col} agregada")
     except Exception as e:
         print(f"⚠️ ensure_schema: {e}")

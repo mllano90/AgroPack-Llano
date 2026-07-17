@@ -43,10 +43,10 @@ def crear_recepcion(
 ):
     
     # Crear registro de recepción
-    fecha_recepcion = recepcion.fecha_corte
-    if isinstance(fecha_recepcion, str):
-        fecha_recepcion = date.fromisoformat(fecha_recepcion)
-    fecha_recepcion = fecha_recepcion or date.today()
+    fecha_corte = recepcion.fecha_corte
+    if isinstance(fecha_corte, str):
+        fecha_corte = date.fromisoformat(fecha_corte)
+    fecha_corte = fecha_corte or date.today()
     
     nueva_recepcion = RecepcionCampo(
         producto=recepcion.producto,
@@ -55,6 +55,11 @@ def crear_recepcion(
         cantidad_cajas_carton=recepcion.cantidad_cajas_carton,
         tipo_cultivo_carton=recepcion.tipo_cultivo_carton,
         mercado=recepcion.mercado,
+        # Limón: persistir para historial / cruce con desverdizado
+        lote=recepcion.lote,
+        cantidad_bins=recepcion.cantidad_bins or 0,
+        fecha_corte=fecha_corte if recepcion.producto == Producto.LIMON_AMARILLO else None,
+        fecha=fecha_corte if recepcion.producto == Producto.LIMON_AMARILLO else date.today(),
         usuario_id=current_user.id if hasattr(current_user, 'id') else None,
     )
     db.add(nueva_recepcion)
@@ -113,11 +118,11 @@ def crear_recepcion(
         if recepcion.cantidad_bins <= 0 or not recepcion.lote:
             raise HTTPException(status_code=400, detail="Para Limón se requiere cantidad_bins > 0 y lote")
         
-        # Fecha de recepción = fecha de corte; salida tentativa = + DIAS_DESVERDIZADO
-        fecha_recepcion = recepcion.fecha_corte or date.today()
+        # Fecha de recepción/corte; salida tentativa = + DIAS_DESVERDIZADO
+        fecha_recepcion = fecha_corte
         fecha_tentativa = fecha_recepcion + timedelta(days=DIAS_DESVERDIZADO)
         
-        # Crear entrada en inventario de desverdizado (automático)
+        # Crear entrada en inventario de desverdizado (ligada a esta recepción)
         inv_desv = InventarioDesverdizado(
             producto=Producto.LIMON_AMARILLO,
             cantidad_bins=recepcion.cantidad_bins,
@@ -125,7 +130,7 @@ def crear_recepcion(
             fecha_recepcion=fecha_recepcion,
             fecha_tentativa_salida=fecha_tentativa,
             estado="en_desverdizado",
-            # recepcion_id not set to avoid potential relationship issues
+            recepcion_id=nueva_recepcion.id,
             usuario_id=current_user.id if hasattr(current_user, 'id') else None
         )
         db.add(inv_desv)

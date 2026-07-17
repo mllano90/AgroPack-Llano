@@ -240,9 +240,22 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       return;
     }
     if (m.modulo === 'recepcion') {
+      const meta = m.meta || {};
+      const lote = meta.lote ? String(meta.lote) : '—';
+      const bins = meta.cantidad_bins ?? '—';
+      const corte = meta.fecha_corte || m.fecha || '—';
+      const desvIds = Array.isArray(meta.desverdizado_ids)
+        ? meta.desverdizado_ids.join(', ')
+        : '—';
       if (
         !confirm(
-          `¿Eliminar recepción #${m.id}?\n\nUva: revierte inventario si hay stock.\nLimón: solo borra el registro de recepción (corrige desverdizado aparte).`
+          `¿Eliminar recepción #${m.id}?\n\n` +
+            `Fecha corte/recepción: ${corte}\n` +
+            `Lote: ${lote}\n` +
+            `Bins recibidos: ${bins}\n` +
+            `Desverdizado ID(s): ${desvIds}\n\n` +
+            `Uva: revierte inventario.\n` +
+            `Limón: también elimina el desverdizado ligado (mismos bins en cámara).`
         )
       ) {
         return;
@@ -484,12 +497,28 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                           {moduloLabel(m.modulo)}
                         </span>
                       </td>
-                      <td style={td}>{formatFecha(m.fecha || '')}</td>
+                      <td style={td}>
+                        <strong>{formatFecha(m.fecha || '')}</strong>
+                        {m.modulo === 'recepcion' && m.meta?.cantidad_bins != null && (
+                          <div style={{ fontSize: 11, color: '#0369a1', marginTop: 2 }}>
+                            {String(m.meta.cantidad_bins)} bins
+                            {m.meta.lote ? ` · ${String(m.meta.lote)}` : ''}
+                          </div>
+                        )}
+                        {m.modulo === 'desverdizado' && m.meta?.cantidad_bins != null && (
+                          <div style={{ fontSize: 11, color: '#a16207', marginTop: 2 }}>
+                            {String(m.meta.cantidad_bins)} bins en cámara
+                            {m.meta.recepcion_id
+                              ? ` · Rec. #${String(m.meta.recepcion_id)}`
+                              : ''}
+                          </div>
+                        )}
+                      </td>
                       <td style={td}>
                         <strong>{m.titulo}</strong>
                       </td>
                       <td style={td}>{m.resumen}</td>
-                      <td style={{ ...td, maxWidth: 280, fontSize: 12, color: '#64748b' }}>
+                      <td style={{ ...td, maxWidth: 320, fontSize: 12, color: '#475569' }}>
                         {m.detalle}
                       </td>
                       <td style={td}>

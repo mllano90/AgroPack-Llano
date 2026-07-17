@@ -19,6 +19,11 @@ class RecepcionCampo(Base):
     cantidad_cajas_carton = Column(Integer, nullable=True, default=0)
     tipo_cultivo_carton = Column(SQLEnum(TipoCultivo), nullable=True)
     mercado = Column(SQLEnum(TipoMercado), nullable=True)   # Opcional por ahora
+
+    # Limón: guardados en la recepción para identificar con desverdizado
+    lote = Column(String, nullable=True)
+    cantidad_bins = Column(Integer, nullable=True, default=0)
+    fecha_corte = Column(Date, nullable=True)
     
     usuario_id = Column(Integer, ForeignKey("users.id"))
     usuario = relationship("User")
