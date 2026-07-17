@@ -1,14 +1,19 @@
 """
 Historial unificado de movimientos (admin) para depurar y corregir errores.
+
+Recepción limón = captura de lote/bins/fecha; el desverdizado es el inventario
+generado por esa recepción (no es un módulo de captura aparte).
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session, joinedload
 
 from app.core.database import get_db
 from app.core.security import require_roles
+from app.core.constants import DIAS_DESVERDIZADO
 from app.models.enums import Rol, Producto
 from app.models.inventory import (
     RecepcionCampo,
@@ -30,6 +35,11 @@ def _pval(x) -> str:
     return getattr(x, "value", None) or str(x)
 
 
+def _es_limon(prod) -> bool:
+    p = _pval(prod).lower()
+    return p == "limon_amarillo" or "limon" in p
+
+
 def _match_inv_limon(db: Session, presentacion: str | None, talla: str | None):
     all_inv = db.query(InventarioFinal).filter(
         InventarioFinal.producto == Producto.LIMON_AMARILLO
@@ -46,71 +56,323 @@ def _match_inv_limon(db: Session, presentacion: str | None, talla: str | None):
     )
 
 
+def _fill_recepcion_from_desv(r: RecepcionCampo, d: InventarioDesverdizado) -> None:
+    """Copia lote/bins/fecha del desverdizado a la recepción si faltan (datos viejos)."""
+    if d.lote and not (getattr(r, "lote", None) or "").strip():
+        r.lote = d.lote
+    # Solo rellenar bins en recepción si está vacío (no pisar el original tras empaque)
+    if not getattr(r, "cantidad_bins", None):
+        r.cantidad_bins = int(d.cantidad_bins or 0)
+    if d.fecha_recepcion and not getattr(r, "fecha_corte", None):
+        r.fecha_corte = d.fecha_recepcion
+        r.fecha = d.fecha_recepcion
+
+
+def sincronizar_recepcion_desverdizado(db: Session) -> dict:
+    """
+    Enlaza y rellena recepciones limón con su inventario de desverdizado.
+    - Si hay recepcion_id, sincroniza campos de la recepción.
+    - Si no, empareja por orden (id) y/o misma fecha de corte.
+    """
+    desvs = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.estado != "eliminado")
+        .order_by(InventarioDesverdizado.id.asc())
+        .all()
+    )
+    recs = [
+        r
+        for r in db.query(RecepcionCampo).order_by(RecepcionCampo.id.asc()).all()
+        if _es_limon(r.producto)
+    ]
+
+    linked_desv_ids: set[int] = set()
+
+    # 1) Ya ligados por FK
+    for d in desvs:
+        if d.recepcion_id:
+            r = next((x for x in recs if x.id == d.recepcion_id), None)
+            if r:
+                _fill_recepcion_from_desv(r, d)
+                linked_desv_ids.add(d.id)
+
+    # 2) Recepciones con desv sin FK pero misma fecha + lote (si hay lote)
+    unpaired_desv = [d for d in desvs if d.id not in linked_desv_ids]
+    for r in recs:
+        already = any(d.recepcion_id == r.id for d in desvs)
+        if already:
+            continue
+        lote_r = (getattr(r, "lote", None) or "").strip()
+        fecha_r = getattr(r, "fecha_corte", None) or r.fecha
+        match = None
+        if lote_r and fecha_r:
+            match = next(
+                (
+                    d
+                    for d in unpaired_desv
+                    if (d.lote or "").strip() == lote_r and d.fecha_recepcion == fecha_r
+                ),
+                None,
+            )
+        if not match and fecha_r:
+            match = next(
+                (d for d in unpaired_desv if d.fecha_recepcion == fecha_r),
+                None,
+            )
+        if match:
+            match.recepcion_id = r.id
+            _fill_recepcion_from_desv(r, match)
+            linked_desv_ids.add(match.id)
+            unpaired_desv = [d for d in unpaired_desv if d.id != match.id]
+
+    # 3) Emparejar resto 1:1 por orden de id (captura cronológica)
+    unpaired_rec = [
+        r
+        for r in recs
+        if not any(d.recepcion_id == r.id for d in desvs)
+    ]
+    unpaired_desv = [d for d in desvs if d.id not in linked_desv_ids]
+    for r, d in zip(unpaired_rec, unpaired_desv):
+        d.recepcion_id = r.id
+        _fill_recepcion_from_desv(r, d)
+        linked_desv_ids.add(d.id)
+
+    # 4) Desverdizado huérfano (sin recepción): crear recepción espejo para poder editarlo
+    huerfanos = [d for d in desvs if d.id not in linked_desv_ids and not d.recepcion_id]
+    creadas = 0
+    for d in huerfanos:
+        r = RecepcionCampo(
+            producto=Producto.LIMON_AMARILLO,
+            variedad=None,
+            cantidad_cajas_campo=0,
+            cantidad_cajas_carton=0,
+            mercado=None,
+            lote=d.lote,
+            cantidad_bins=int(d.cantidad_bins or 0),
+            fecha_corte=d.fecha_recepcion,
+            fecha=d.fecha_recepcion or date.today(),
+        )
+        db.add(r)
+        db.flush()
+        d.recepcion_id = r.id
+        creadas += 1
+
+    reasignar_numeros_tanda(db)
+    db.commit()
+    return {
+        "desverdizados": len(desvs),
+        "recepciones_limon": len(recs),
+        "huerfanos_convertidos": creadas,
+    }
+
+
+class RecepcionLimonUpdate(BaseModel):
+    """Editar captura de recepción limón (y sincroniza inventario desverdizado)."""
+    lote: str | None = None
+    cantidad_bins: int | None = Field(default=None, ge=0)
+    fecha_corte: str | None = None  # YYYY-MM-DD
+    recalcular_tentativa: bool = True
+
+
+def _parse_date_flex(s: str | None) -> date | None:
+    if not s:
+        return None
+    s = s.strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt).date()
+        except ValueError:
+            continue
+    raise HTTPException(status_code=400, detail=f"Fecha inválida: {s}")
+
+
+@router.post("/sincronizar-recepcion-desverdizado")
+def api_sincronizar(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """Fuerza enlace y relleno de lote/bins/fecha en recepciones limón."""
+    return sincronizar_recepcion_desverdizado(db)
+
+
+@router.patch("/recepcion/{recepcion_id}")
+def editar_recepcion_limon(
+    recepcion_id: int,
+    body: RecepcionLimonUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Edita lote, bins y fecha de una recepción de limón y actualiza
+    el inventario de desverdizado ligado (es el mismo registro de negocio).
+    """
+    r = db.query(RecepcionCampo).filter(RecepcionCampo.id == recepcion_id).first()
+    if not r:
+        raise HTTPException(status_code=404, detail="Recepción no encontrada")
+    if not _es_limon(r.producto):
+        raise HTTPException(status_code=400, detail="Solo se edita recepción de limón aquí")
+
+    desvs = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.recepcion_id == recepcion_id)
+        .all()
+    )
+    if not desvs:
+        # Crear desverdizado si no existe
+        fr = getattr(r, "fecha_corte", None) or r.fecha or date.today()
+        d = InventarioDesverdizado(
+            producto=Producto.LIMON_AMARILLO,
+            cantidad_bins=int(getattr(r, "cantidad_bins", None) or 0),
+            lote=getattr(r, "lote", None) or "SIN_LOTE",
+            fecha_recepcion=fr,
+            fecha_tentativa_salida=fr + timedelta(days=DIAS_DESVERDIZADO),
+            estado="en_desverdizado",
+            recepcion_id=r.id,
+        )
+        db.add(d)
+        db.flush()
+        desvs = [d]
+
+    if body.lote is not None:
+        lote = body.lote.strip()
+        if not lote:
+            raise HTTPException(status_code=400, detail="Lote no puede quedar vacío")
+        r.lote = lote
+        for d in desvs:
+            d.lote = lote
+
+    if body.cantidad_bins is not None:
+        r.cantidad_bins = int(body.cantidad_bins)
+        # Si hay un solo desv ligado, es la captura; actualizar stock
+        if len(desvs) == 1:
+            desvs[0].cantidad_bins = int(body.cantidad_bins)
+            if desvs[0].cantidad_bins == 0:
+                desvs[0].estado = "empaquetado"
+            elif desvs[0].estado in ("empaquetado", "eliminado"):
+                desvs[0].estado = "en_desverdizado"
+        else:
+            # Varios: poner todo en el primero y cero en el resto (raro)
+            desvs[0].cantidad_bins = int(body.cantidad_bins)
+            for d in desvs[1:]:
+                d.cantidad_bins = 0
+                d.estado = "empaquetado"
+
+    if body.fecha_corte is not None:
+        fr = _parse_date_flex(body.fecha_corte)
+        if fr:
+            r.fecha_corte = fr
+            r.fecha = fr
+            for d in desvs:
+                d.fecha_recepcion = fr
+                if body.recalcular_tentativa:
+                    d.fecha_tentativa_salida = fr + timedelta(days=DIAS_DESVERDIZADO)
+
+    reasignar_numeros_tanda(db)
+    db.commit()
+    db.refresh(r)
+    desvs = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.recepcion_id == r.id)
+        .all()
+    )
+    d0 = desvs[0] if desvs else None
+    return {
+        "message": f"Recepción #{r.id} actualizada (desverdizado sincronizado)",
+        "id": r.id,
+        "lote": r.lote,
+        "cantidad_bins": r.cantidad_bins,
+        "fecha_corte": str(r.fecha_corte) if r.fecha_corte else None,
+        "desverdizado_ids": [d.id for d in desvs],
+        "numero_tanda": d0.numero_tanda if d0 else None,
+        "bins_en_camara": sum(int(d.cantidad_bins or 0) for d in desvs),
+    }
+
+
 @router.get("/historial")
 def historial_movimientos(
     modulo: str | None = Query(
         None,
-        description="recepcion | desverdizado | empaque | embarque | todos",
+        description="recepcion | empaque | embarque | todos",
     ),
     limit: int = Query(150, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
-    Lista movimientos de todos los módulos (más recientes primero).
-    Cada ítem indica si se puede editar/eliminar desde Correcciones.
+    Lista movimientos. Recepción limón muestra lote/bins/fecha (captura real);
+    el desverdizado se sincroniza al cargar y no se lista como módulo aparte
+    en 'todos' (evita confusión).
     """
     mod = (modulo or "todos").lower().strip()
+    # Siempre reenlazar y rellenar datos limón
+    try:
+        sincronizar_recepcion_desverdizado(db)
+    except Exception:
+        db.rollback()
+
     items: list[dict] = []
 
-    if mod in ("todos", "recepcion"):
+    if mod in ("todos", "recepcion", "desverdizado"):
+        # "desverdizado" redirige a recepciones limón (mismo dato de negocio)
         for r in db.query(RecepcionCampo).order_by(RecepcionCampo.id.desc()).limit(limit).all():
             prod = _pval(r.producto)
-            es_limon = prod == "limon_amarillo" or "limon" in prod.lower()
+            es_limon = _es_limon(r.producto)
 
-            # Desverdizado ligado por FK o por coincidencia lote+fecha (datos viejos)
             desvs = (
                 db.query(InventarioDesverdizado)
                 .filter(InventarioDesverdizado.recepcion_id == r.id)
                 .all()
             )
-            if not desvs and es_limon:
-                lote_r = (getattr(r, "lote", None) or "").strip()
-                fecha_ref = getattr(r, "fecha_corte", None) or r.fecha
-                q = db.query(InventarioDesverdizado).filter(
-                    InventarioDesverdizado.estado != "eliminado"
-                )
-                if lote_r:
-                    q = q.filter(InventarioDesverdizado.lote == lote_r)
-                if fecha_ref:
-                    q = q.filter(InventarioDesverdizado.fecha_recepcion == fecha_ref)
-                desvs = q.order_by(InventarioDesverdizado.id.desc()).limit(5).all()
 
             if es_limon:
-                lote = getattr(r, "lote", None) or (
-                    desvs[0].lote if desvs else None
-                )
-                bins_rec = getattr(r, "cantidad_bins", None) or 0
-                if not bins_rec and desvs:
+                lote = getattr(r, "lote", None) or (desvs[0].lote if desvs else None)
+                bins_rec = int(getattr(r, "cantidad_bins", None) or 0)
+                if bins_rec <= 0 and desvs:
                     bins_rec = sum(int(d.cantidad_bins or 0) for d in desvs)
                 fecha_corte = getattr(r, "fecha_corte", None) or r.fecha
-                if desvs and not fecha_corte:
+                if desvs and getattr(desvs[0], "fecha_recepcion", None):
                     fecha_corte = desvs[0].fecha_recepcion
-                bins_ahora = sum(int(d.cantidad_bins or 0) for d in desvs) if desvs else None
-                tandas = ", ".join(
-                    f"#{d.numero_tanda}" for d in desvs if d.numero_tanda
-                ) or "—"
-                desv_ids = ", ".join(str(d.id) for d in desvs) if desvs else "—"
+                bins_ahora = sum(int(d.cantidad_bins or 0) for d in desvs) if desvs else 0
+                tanda = desvs[0].numero_tanda if desvs else None
+                desv_ids = [d.id for d in desvs]
                 resumen = (
-                    f"Limón · Lote {lote or '—'} · {bins_rec} bins recibidos · "
-                    f"corte {fecha_corte}"
+                    f"Lote {lote or '—'} · {bins_rec} bins · "
+                    f"corte {fecha_corte} · en cámara {bins_ahora} bins"
                 )
                 detalle = (
-                    f"Fecha recepción/corte: {fecha_corte} · "
-                    f"Bins en desverdizado ahora: {bins_ahora if bins_ahora is not None else '—'} · "
-                    f"Desverdizado ID(s): {desv_ids} · Tanda(s): {tandas}"
+                    f"Fecha corte: {fecha_corte} · "
+                    f"Bins registrados: {bins_rec} · "
+                    f"Bins en desverdizado ahora: {bins_ahora} · "
+                    f"Tanda #{tanda or '—'} · "
+                    f"Inv.desv. ID: {', '.join(map(str, desv_ids)) if desv_ids else '—'}"
                 )
-            else:
+                items.append(
+                    {
+                        "modulo": "recepcion",
+                        "id": r.id,
+                        "fecha": str(fecha_corte) if fecha_corte else None,
+                        "hora": str(r.hora) if r.hora else None,
+                        "titulo": f"Recepción #{r.id}"
+                        + (f" · Tanda #{tanda}" if tanda else "")
+                        + (f" · {lote}" if lote else ""),
+                        "resumen": resumen,
+                        "detalle": detalle,
+                        "producto": prod,
+                        "puede_editar": True,
+                        "puede_eliminar": True,
+                        "meta": {
+                            "lote": lote,
+                            "cantidad_bins": bins_rec,
+                            "fecha_corte": str(fecha_corte) if fecha_corte else None,
+                            "fecha_recepcion": str(fecha_corte) if fecha_corte else None,
+                            "bins_desverdizado_actual": bins_ahora,
+                            "desverdizado_ids": desv_ids,
+                            "numero_tanda": tanda,
+                            "tandas": [tanda] if tanda else [],
+                        },
+                    }
+                )
+            elif mod != "desverdizado":
                 resumen = (
                     f"Recepción uva · campo {r.cantidad_cajas_campo or 0} · "
                     f"cartón {r.cantidad_cajas_carton or 0}"
@@ -119,86 +381,26 @@ def historial_movimientos(
                     f"Fecha {r.fecha} · {_pval(r.variedad)} · {_pval(r.mercado)} · "
                     f"cultivo cartón {_pval(r.tipo_cultivo_carton) or '—'}"
                 )
-                lote = None
-                bins_rec = None
-                fecha_corte = r.fecha
-                bins_ahora = None
-                desv_ids = None
-
-            items.append(
-                {
-                    "modulo": "recepcion",
-                    "id": r.id,
-                    "fecha": str(
-                        getattr(r, "fecha_corte", None) or r.fecha
-                    )
-                    if (getattr(r, "fecha_corte", None) or r.fecha)
-                    else None,
-                    "hora": str(r.hora) if r.hora else None,
-                    "titulo": f"Recepción #{r.id}"
-                    + (f" · {lote}" if lote else ""),
-                    "resumen": resumen,
-                    "detalle": detalle,
-                    "producto": prod,
-                    "puede_editar": False,
-                    "puede_eliminar": True,
-                    "meta": {
-                        "variedad": _pval(r.variedad) or None,
-                        "mercado": _pval(r.mercado) or None,
-                        "cantidad_cajas_campo": r.cantidad_cajas_campo,
-                        "cantidad_cajas_carton": r.cantidad_cajas_carton,
-                        "lote": lote,
-                        "cantidad_bins": bins_rec,
-                        "fecha_corte": str(fecha_corte) if fecha_corte else None,
-                        "fecha_recepcion": str(r.fecha) if r.fecha else None,
-                        "bins_desverdizado_actual": bins_ahora,
-                        "desverdizado_ids": [d.id for d in desvs] if desvs else [],
-                        "tandas": [d.numero_tanda for d in desvs if d.numero_tanda],
-                    },
-                }
-            )
-
-    if mod in ("todos", "desverdizado"):
-        # Incluir con y sin stock (historial de tandas)
-        q = db.query(InventarioDesverdizado).order_by(InventarioDesverdizado.id.desc()).limit(limit)
-        for d in q.all():
-            if (d.estado or "") == "eliminado":
-                continue
-            rec_txt = f"Recepción #{d.recepcion_id}" if d.recepcion_id else "Sin recepción ligada"
-            items.append(
-                {
-                    "modulo": "desverdizado",
-                    "id": d.id,
-                    "fecha": str(d.fecha_recepcion) if d.fecha_recepcion else None,
-                    "hora": None,
-                    "titulo": f"Tanda #{d.numero_tanda or '—'} · {d.lote}",
-                    "resumen": (
-                        f"{d.cantidad_bins or 0} bins · estado {d.estado} · "
-                        f"corte {d.fecha_recepcion}"
-                    ),
-                    "detalle": (
-                        f"Fecha corte/recepción: {d.fecha_recepcion} · "
-                        f"Bins: {d.cantidad_bins or 0} · "
-                        f"Salida tent.: {d.fecha_tentativa_salida} · "
-                        f"{rec_txt}"
-                    ),
-                    "producto": "limon_amarillo",
-                    "puede_editar": True,
-                    "puede_eliminar": (d.cantidad_bins or 0) > 0,
-                    "meta": {
-                        "lote": d.lote,
-                        "cantidad_bins": d.cantidad_bins,
-                        "numero_tanda": d.numero_tanda,
-                        "estado": d.estado,
-                        "fecha_recepcion": str(d.fecha_recepcion) if d.fecha_recepcion else None,
-                        "fecha_corte": str(d.fecha_recepcion) if d.fecha_recepcion else None,
-                        "fecha_tentativa_salida": (
-                            str(d.fecha_tentativa_salida) if d.fecha_tentativa_salida else None
-                        ),
-                        "recepcion_id": d.recepcion_id,
-                    },
-                }
-            )
+                items.append(
+                    {
+                        "modulo": "recepcion",
+                        "id": r.id,
+                        "fecha": str(r.fecha) if r.fecha else None,
+                        "hora": str(r.hora) if r.hora else None,
+                        "titulo": f"Recepción #{r.id}",
+                        "resumen": resumen,
+                        "detalle": detalle,
+                        "producto": prod,
+                        "puede_editar": False,
+                        "puede_eliminar": True,
+                        "meta": {
+                            "variedad": _pval(r.variedad) or None,
+                            "mercado": _pval(r.mercado) or None,
+                            "cantidad_cajas_campo": r.cantidad_cajas_campo,
+                            "cantidad_cajas_carton": r.cantidad_cajas_carton,
+                        },
+                    }
+                )
 
     if mod in ("todos", "empaque"):
         for e in db.query(Empaque).order_by(Empaque.id.desc()).limit(limit).all():

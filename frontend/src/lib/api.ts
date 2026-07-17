@@ -195,6 +195,31 @@ export async function getHistorialMovimientos(
   return res.data;
 }
 
+export async function sincronizarRecepcionDesverdizado(token: string) {
+  const res = await api.post(
+    '/api/correcciones/sincronizar-recepcion-desverdizado',
+    {},
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
+export async function editarRecepcionLimon(
+  token: string,
+  id: number,
+  data: {
+    lote?: string;
+    cantidad_bins?: number;
+    fecha_corte?: string | null;
+    recalcular_tentativa?: boolean;
+  }
+) {
+  const res = await api.patch(`/api/correcciones/recepcion/${id}`, data, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
 export async function eliminarRecepcionAdmin(token: string, id: number) {
   const res = await api.delete<{ message: string; id: number }>(
     `/api/correcciones/recepcion/${id}`,

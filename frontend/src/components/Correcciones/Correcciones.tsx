@@ -9,6 +9,8 @@ import {
   getHistorialMovimientos,
   eliminarRecepcionAdmin,
   eliminarEmbarqueAdmin,
+  editarRecepcionLimon,
+  sincronizarRecepcionDesverdizado,
   type DesverdizadoAdminItem,
   type HistorialMovimiento,
 } from '../../lib/api';
@@ -54,10 +56,16 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   // Historial unificado
   const [historial, setHistorial] = useState<HistorialMovimiento[]>([]);
-  const [filtroModulo, setFiltroModulo] = useState<string>('todos');
+  const [filtroModulo, setFiltroModulo] = useState<string>('recepcion');
   const [vistaSeccion, setVistaSeccion] = useState<'historial' | 'empaques' | 'desverdizado'>(
     'historial'
   );
+
+  // Edición recepción limón (lote / bins / fecha)
+  const [editRec, setEditRec] = useState<HistorialMovimiento | null>(null);
+  const [editRecLote, setEditRecLote] = useState('');
+  const [editRecBins, setEditRecBins] = useState('');
+  const [editRecFecha, setEditRecFecha] = useState('');
 
   const load = async () => {
     setLoading(true);
@@ -300,23 +308,31 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   };
 
   const handleHistorialEditar = (m: HistorialMovimiento) => {
+    if (m.modulo === 'recepcion') {
+      const meta = m.meta || {};
+      setEditRec(m);
+      setEditRecLote(String(meta.lote || ''));
+      setEditRecBins(String(meta.cantidad_bins ?? meta.bins_desverdizado_actual ?? 0));
+      setEditRecFecha(toInputDate((meta.fecha_corte as string) || m.fecha));
+      setOkMsg('');
+      setError('');
+      return;
+    }
     if (m.modulo === 'desverdizado') {
+      // Compat: redirigir a recepción si hay recepcion_id
+      const rid = m.meta?.recepcion_id as number | undefined;
+      if (rid) {
+        const fake: HistorialMovimiento = {
+          ...m,
+          modulo: 'recepcion',
+          id: rid,
+        };
+        handleHistorialEditar(fake);
+        return;
+      }
       const d = desverdizado.find((x) => x.id === m.id);
       if (d) {
         openEditDesverdizado(d);
-        setVistaSeccion('desverdizado');
-      } else {
-        // Construir item mínimo desde meta
-        const meta = m.meta || {};
-        openEditDesverdizado({
-          id: m.id,
-          lote: String(meta.lote || ''),
-          cantidad_bins_disponibles: Number(meta.cantidad_bins || 0),
-          fecha_recepcion: (meta.fecha_recepcion as string) || m.fecha,
-          fecha_tentativa_salida: (meta.fecha_tentativa_salida as string) || null,
-          estado: (meta.estado as string) || 'en_desverdizado',
-          numero_tanda: (meta.numero_tanda as number) || null,
-        });
         setVistaSeccion('desverdizado');
       }
       return;
@@ -324,7 +340,36 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     if (m.modulo === 'empaque') {
       setSelectedId(m.id);
       setVistaSeccion('empaques');
-      setOkMsg(`Empaque #${m.id} seleccionado abajo para corregir (agregar lote / anular).`);
+      setOkMsg(`Empaque #${m.id} seleccionado para corregir (agregar lote / anular).`);
+    }
+  };
+
+  const handleGuardarRecepcion = async () => {
+    if (!editRec) return;
+    const binsNum = parseInt(editRecBins, 10);
+    if (!editRecLote.trim()) return alert('Indica el lote');
+    if (isNaN(binsNum) || binsNum < 0) return alert('Bins inválido');
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const res = await editarRecepcionLimon(token, editRec.id, {
+        lote: editRecLote.trim(),
+        cantidad_bins: binsNum,
+        fecha_corte: editRecFecha || null,
+        recalcular_tentativa: true,
+      });
+      setOkMsg(
+        (res as any).message ||
+          `Recepción #${editRec.id} actualizada · Tanda #${(res as any).numero_tanda ?? '—'}`
+      );
+      setEditRec(null);
+      await load();
+      onCorregido?.();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'No se pudo editar la recepción');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -399,9 +444,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   return (
     <div>
       <h2 style={{ marginBottom: 8 }}>Correcciones (solo admin)</h2>
-      <p style={{ color: '#64748b', marginTop: 0, maxWidth: 800 }}>
-        Historial de movimientos de todos los módulos. Revisa dónde está el error y edita o elimina
-        el registro. Los cambios actualizan el inventario automáticamente.
+      <p style={{ color: '#64748b', marginTop: 0, maxWidth: 820 }}>
+        <strong>Recepción limón</strong> es donde se capturan lote, bins y fecha de corte; eso alimenta
+        el inventario de desverdizado (no es un registro aparte). Edita o elimina desde Recepción.
+        Empaque y Embarque se corrigen en sus filtros.
       </p>
 
       {error && (
@@ -434,14 +480,13 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       {vistaSeccion === 'historial' && (
         <div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12, alignItems: 'center' }}>
-            <strong style={{ fontSize: 14 }}>Filtrar módulo:</strong>
+            <strong style={{ fontSize: 14 }}>Filtrar:</strong>
             {(
               [
-                ['todos', 'Todos'],
-                ['recepcion', 'Recepción'],
-                ['desverdizado', 'Desverdizado'],
+                ['recepcion', 'Recepción (lote / bins / fecha)'],
                 ['empaque', 'Empaque'],
                 ['embarque', 'Embarque'],
+                ['todos', 'Todos'],
               ] as const
             ).map(([val, lab]) => (
               <button
@@ -461,7 +506,115 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                 {lab}
               </button>
             ))}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  await sincronizarRecepcionDesverdizado(token);
+                  setOkMsg('Recepciones enlazadas con desverdizado (lote/bins/fecha rellenados).');
+                  await load();
+                } catch (err: any) {
+                  setError(err?.response?.data?.detail || 'Error al sincronizar');
+                } finally {
+                  setBusy(false);
+                }
+              }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: 6,
+                border: '1px solid #15803d',
+                background: '#f0fdf4',
+                color: '#166534',
+                cursor: 'pointer',
+                fontSize: 13,
+                fontWeight: 600,
+              }}
+            >
+              Re-enlazar recepción ↔ inventario
+            </button>
           </div>
+
+          {editRec && (
+            <div
+              style={{
+                marginBottom: 16,
+                padding: 16,
+                background: '#f0fdf4',
+                border: '1px solid #86efac',
+                borderRadius: 10,
+              }}
+            >
+              <h4 style={{ marginTop: 0 }}>Editar recepción #{editRec.id} (lote / bins / fecha)</h4>
+              <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
+                Esto actualiza también el inventario de desverdizado ligado (misma captura).
+              </p>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))',
+                  gap: 12,
+                }}
+              >
+                <label style={editLabel}>
+                  Lote
+                  <input value={editRecLote} onChange={(e) => setEditRecLote(e.target.value)} style={editInput} />
+                </label>
+                <label style={editLabel}>
+                  Bins
+                  <input
+                    type="number"
+                    min={0}
+                    value={editRecBins}
+                    onChange={(e) => setEditRecBins(e.target.value)}
+                    style={editInput}
+                  />
+                </label>
+                <label style={editLabel}>
+                  Fecha de corte
+                  <input
+                    type="date"
+                    value={editRecFecha}
+                    onChange={(e) => setEditRecFecha(e.target.value)}
+                    style={editInput}
+                  />
+                </label>
+              </div>
+              <div style={{ display: 'flex', gap: 10, marginTop: 14 }}>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={handleGuardarRecepcion}
+                  style={{
+                    padding: '10px 18px',
+                    background: '#15803d',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    fontWeight: 600,
+                    cursor: busy ? 'wait' : 'pointer',
+                  }}
+                >
+                  Guardar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setEditRec(null)}
+                  style={{
+                    padding: '10px 18px',
+                    background: '#64748b',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    cursor: 'pointer',
+                  }}
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
 
           {loading ? (
             <p>Cargando historial…</p>
@@ -573,10 +726,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             </div>
           )}
           <p style={{ fontSize: 12, color: '#64748b', marginTop: 12 }}>
+            <strong>Recepción:</strong> Editar = lote, bins y fecha de corte (actualiza desverdizado).
+            Eliminar = borra recepción y el inventario de desverdizado ligado.{' '}
             <strong>Empaque:</strong> Eliminar = anular (revierte inventarios).{' '}
-            <strong>Embarque:</strong> devuelve stock al inventario final.{' '}
-            <strong>Desverdizado:</strong> quita bins de cámara. Para detalle de empaque (agregar
-            lote) usa «Editar / Corregir» o la pestaña Corregir empaques.
+            <strong>Embarque:</strong> devuelve stock al inventario final.
           </p>
         </div>
       )}
