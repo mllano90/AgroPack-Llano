@@ -339,6 +339,7 @@ export interface RendimientosLimonApi {
   por_presentacion?: PresentacionRendimientoApi[];
   acumulado: CorridaRendimientoApi;
   hectareas?: number;
+  hectareas_por_lote?: number;
   factores_proyeccion?: FactoresProyeccionApi | null;
 }
 

@@ -84,6 +84,7 @@ class LoteRendimiento(BaseModel):
     parrillas_primera: float = 0.0
     parrillas_total: float
     bins_por_parrilla: float | None = None  # bins / parrillas 1ra
+    # kg/ha por lote: kg / HECTAREAS_POR_LOTE (8 ha por lote)
     kg_por_ha: float | None = None
     kg_primera_por_ha: float | None = None
     kg_segunda_por_ha: float | None = None
@@ -181,5 +182,6 @@ class RendimientosLimonResponse(BaseModel):
     por_talla: List[TallaRendimiento] = []
     por_presentacion: List[PresentacionRendimiento] = []
     acumulado: CorridaRendimiento
-    hectareas: float = 64.0
+    hectareas: float = 64.0  # rancho total (acumulado / corrida)
+    hectareas_por_lote: float = 8.0  # superficie por lote para kg/ha por lote
     factores_proyeccion: FactoresProyeccion | None = None

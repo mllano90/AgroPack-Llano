@@ -35,8 +35,10 @@ KG_POR_PRESENTACION = {
 }
 CAJAS_POR_PARRILLA_RPC = 45  # RPC 12 y 18
 CAJAS_POR_PARRILLA_CARTON = 63  # cartón / 40lbs
-# Superficie total del rancho (para kg/ha en reportes)
+# Superficie total del rancho (para kg/ha acumulado / corrida)
 HECTAREAS_RANCHO = 64.0
+# Cada lote de campo se trata como 8 ha (kg/ha más real por lote)
+HECTAREAS_POR_LOTE = 8.0
 
 
 def _kg_por_ha(kg: float, hectareas: float = HECTAREAS_RANCHO) -> float | None:
@@ -361,9 +363,9 @@ def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
                 bins_por_parrilla=(
                     round(bins_campo / parrillas_primera, 2) if parrillas_primera > 0 else None
                 ),
-                kg_por_ha=_kg_por_ha(kg_salida),
-                kg_primera_por_ha=_kg_por_ha(kg_primera),
-                kg_segunda_por_ha=_kg_por_ha(kg_segunda),
+                kg_por_ha=_kg_por_ha(kg_salida, HECTAREAS_POR_LOTE),
+                kg_primera_por_ha=_kg_por_ha(kg_primera, HECTAREAS_POR_LOTE),
+                kg_segunda_por_ha=_kg_por_ha(kg_segunda, HECTAREAS_POR_LOTE),
                 parrillas_total=parrillas_total,
                 num_corridas=len(row["corrida_ids"]),
                 prorrateado=bool(row["prorrateado"]),
@@ -717,6 +719,7 @@ def rendimientos_limon(
         por_presentacion=por_pres,
         acumulado=_acumular(corridas, hectareas=HECTAREAS_RANCHO),
         hectareas=HECTAREAS_RANCHO,
+        hectareas_por_lote=HECTAREAS_POR_LOTE,
         factores_proyeccion=factores,
     )
 

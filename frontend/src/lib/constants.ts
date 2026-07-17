@@ -21,8 +21,11 @@ export const TIPO_CULTIVO_OPTIONS: Array<{ value: TipoCultivo; label: string }> 
 /** Peso de bin de campo limón (kg) */
 export const PESO_BIN_CAMPO_KG = 260;
 
-/** Superficie total del rancho (ha) para kg/ha en reportes */
+/** Superficie total del rancho (ha) para kg/ha acumulado / corrida */
 export const HECTAREAS_RANCHO = 64;
+
+/** Superficie por lote de campo (ha) — kg/ha más real en rendimiento por lote */
+export const HECTAREAS_POR_LOTE = 8;
 
 /** Días de desverdizado limón (fecha tentativa = recepción + N) */
 export const DIAS_DESVERDIZADO = 7;

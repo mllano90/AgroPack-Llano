@@ -8,7 +8,12 @@ import {
   type TallaRendimientoApi,
   type ProyeccionInventarioApi,
 } from '../../lib/api';
-import { PESO_BIN_CAMPO_KG, HECTAREAS_RANCHO, DIAS_DESVERDIZADO } from '../../lib/constants';
+import {
+  PESO_BIN_CAMPO_KG,
+  HECTAREAS_RANCHO,
+  HECTAREAS_POR_LOTE,
+  DIAS_DESVERDIZADO,
+} from '../../lib/constants';
 import type { EmpaqueRecord } from '../../types';
 
 type Corrida = CorridaRendimientoApi;
@@ -88,7 +93,7 @@ function enrichCorrida(c: Corrida, ha: number): Corrida {
   };
 }
 
-function enrichLote(l: Lote, ha: number): Lote {
+function enrichLote(l: Lote, haPorLote: number = HECTAREAS_POR_LOTE): Lote {
   const parrPrimera =
     l.parrillas_primera != null
       ? l.parrillas_primera
@@ -97,6 +102,7 @@ function enrichLote(l: Lote, ha: number): Lote {
           const pCarton = l.cajas_carton ? l.cajas_carton / CAJAS_PARRILLA_CARTON : 0;
           return Math.round((pRpc + pCarton) * 100) / 100;
         })();
+  // kg/ha por lote siempre sobre 8 ha (no el rancho completo)
   return {
     ...l,
     parrillas_primera: parrPrimera,
@@ -104,9 +110,9 @@ function enrichLote(l: Lote, ha: number): Lote {
       parrPrimera > 0
         ? Math.round((l.bins_campo / parrPrimera) * 100) / 100
         : null,
-    kg_por_ha: l.kg_por_ha ?? kgHa(l.kg_salida, ha),
-    kg_primera_por_ha: l.kg_primera_por_ha ?? kgHa(l.kg_primera, ha),
-    kg_segunda_por_ha: l.kg_segunda_por_ha ?? kgHa(l.kg_segunda, ha),
+    kg_por_ha: kgHa(l.kg_salida, haPorLote),
+    kg_primera_por_ha: kgHa(l.kg_primera, haPorLote),
+    kg_segunda_por_ha: kgHa(l.kg_segunda, haPorLote),
   };
 }
 
@@ -431,6 +437,7 @@ export default function Reportes({ token }: ReportesProps) {
   const [proyeccion, setProyeccion] = useState<ProyeccionInventarioApi | null>(null);
   const [acumulado, setAcumulado] = useState<Corrida | null>(null);
   const [hectareas, setHectareas] = useState(HECTAREAS_RANCHO);
+  const [hectareasPorLote, setHectareasPorLote] = useState(HECTAREAS_POR_LOTE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
@@ -454,9 +461,11 @@ export default function Reportes({ token }: ReportesProps) {
       try {
         const apiData = await getRendimientosLimon(token);
         ha = apiData.hectareas ?? HECTAREAS_RANCHO;
+        const haLote = apiData.hectareas_por_lote ?? HECTAREAS_POR_LOTE;
+        setHectareasPorLote(haLote);
         data = {
           corridas: (apiData.corridas || []).map((c) => enrichCorrida(c, ha)),
-          por_lote: (apiData.por_lote || []).map((l) => enrichLote(l, ha)),
+          por_lote: (apiData.por_lote || []).map((l) => enrichLote(l, haLote)),
           por_talla: apiData.por_talla || apiData.factores_proyeccion?.mix_tallas || [],
           acumulado: apiData.acumulado ? enrichCorrida(apiData.acumulado, ha) : null,
         };
@@ -481,11 +490,14 @@ export default function Reportes({ token }: ReportesProps) {
         );
         const computed = computeFromEmpaques(empaques, ha);
         const tallasLocal = computeTallasFromEmpaques(empaques);
+        const porLoteRecalc = (computed.por_lote || []).map((l) =>
+          enrichLote(l, HECTAREAS_POR_LOTE)
+        );
         if (computed.corridas.length > 0) {
-          data = { ...computed, por_talla: tallasLocal };
+          data = { ...computed, por_lote: porLoteRecalc, por_talla: tallasLocal };
           if (!aviso) setAviso('Datos calculados desde registros de empaque.');
         } else if (!data) {
-          data = { ...computed, por_talla: tallasLocal };
+          data = { ...computed, por_lote: porLoteRecalc, por_talla: tallasLocal };
         }
       }
 
@@ -561,8 +573,9 @@ export default function Reportes({ token }: ReportesProps) {
       </div>
 
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
-        Rancho = <strong>{hectareas} ha</strong> · Bin campo = {PESO_BIN_CAMPO_KG} kg · RPC 12 = 12 kg ·
-        RPC 18 / cartón = 18 kg · Bin jugo = 900 kg · Parrilla RPC = 45 cajas · Cartón = 63 ·{' '}
+        Rancho = <strong>{hectareas} ha</strong> · Por lote = <strong>{hectareasPorLote} ha</strong> (kg/ha
+        por lote) · Bin campo = {PESO_BIN_CAMPO_KG} kg · RPC 12 = 12 kg · RPC 18 / cartón = 18 kg · Bin
+        jugo = 900 kg · Parrilla RPC = 45 · Cartón = 63 ·{' '}
         <strong>Bins/parrilla = bins campo ÷ parrillas de 1ra</strong> (sin jugo)
       </p>
 
@@ -898,8 +911,9 @@ export default function Reportes({ token }: ReportesProps) {
         <>
           <h3 style={{ marginTop: 8 }}>Rendimiento por lote</h3>
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
-            Principales: % 1ra, % 2da, bins/parrilla (solo 1ra). Kg y kg/ha como referencia.
-            Multi-lote: producción prorrateada por bins.
+            Principales: % 1ra, % 2da, bins/parrilla (solo 1ra). Kg/ha por lote = kg ÷{' '}
+            <strong>{hectareasPorLote} ha</strong> (cada lote = {hectareasPorLote} ha). Multi-lote:
+            producción prorrateada por bins.
           </p>
           {porLote.length === 0 ? (
             <div>
@@ -923,7 +937,7 @@ export default function Reportes({ token }: ReportesProps) {
                     <th style={thPrimary}>% 1ra</th>
                     <th style={thPrimary}>% 2da</th>
                     <th style={thPrimary}>Bins/parr. 1ra</th>
-                    <th style={th}>kg/ha total</th>
+                    <th style={th}>kg/ha ({hectareasPorLote} ha)</th>
                     <th style={th}>kg 1ra</th>
                     <th style={th}>kg 2da</th>
                     <th style={th}>kg total</th>
@@ -949,7 +963,10 @@ export default function Reportes({ token }: ReportesProps) {
                       <td style={{ ...td, background: '#e0f2fe', fontWeight: 700, fontSize: 15 }}>
                         {l.bins_por_parrilla != null ? l.bins_por_parrilla : '—'}
                       </td>
-                      <td style={td}>{fmtNum(l.kg_por_ha)}</td>
+                      <td style={td}>
+                        <strong>{fmtNum(l.kg_por_ha)}</strong>
+                        <div style={{ fontSize: 11, color: '#94a3b8' }}>/ {hectareasPorLote} ha</div>
+                      </td>
                       <td style={td}>
                         <span style={{ color: '#64748b' }}>{fmtKg(l.kg_primera)}</span>
                         <div style={{ fontSize: 11, color: '#94a3b8' }}>{fmtNum(l.kg_primera_por_ha)} /ha</div>
