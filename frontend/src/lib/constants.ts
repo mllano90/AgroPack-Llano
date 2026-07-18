@@ -55,7 +55,9 @@ export const KG_POR_PRESENTACION: Record<string, number> = {
 export function tallasParaPresentacion(presentacion: string): readonly string[] {
   if (presentacion === 'caja_40lbs') return TALLAS_CARTON;
   if (presentacion === 'rpc_12' || presentacion === 'rpc_18') return TALLAS_RPC;
-  // rpc_granel y bins_jugo: sin talla
+  // RPC a granel: ya viene sorteado por tamaño (todas las tallas 1ra)
+  if (presentacion === 'rpc_granel') return TALLAS_LIMON;
+  // bins_jugo: sin talla
   return [];
 }
 
@@ -95,7 +97,7 @@ export const LOTES_LIMON = [
 ] as const;
 
 export const PRESENTACIONES_LIMON = [
-  { value: 'rpc_granel', label: 'RPC a granel 22 kg (1ra en proceso)' },
+  { value: 'rpc_granel', label: 'RPC a granel 22 kg (por talla, 1ra en proceso)' },
   { value: 'rpc_18', label: 'RPC 18 bolsas 2lbs (tallas 140+)' },
   { value: 'rpc_12', label: 'RPC 12 bolsas 2lbs (tallas 140+)' },
   { value: 'caja_40lbs', label: 'Caja 40 lbs granel (tallas ≤140)' },

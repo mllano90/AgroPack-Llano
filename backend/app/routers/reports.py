@@ -484,16 +484,21 @@ def _iter_produccion_empaques(empaques: list):
                 if cant_g <= 0:
                     continue
                 kg_g = KG_POR_PRESENTACION.get("rpc_granel", 22) * cant_g
-                key_g = ("rpc_granel", None)
+                talla_g = g.get("talla")
+                talla_g = str(talla_g) if talla_g is not None and str(talla_g).strip() else None
+                key_g = ("rpc_granel", talla_g)
                 agg_pres[key_g]["cajas"] -= cant_g
                 agg_pres[key_g]["kg"] -= kg_g
                 kg1_total -= kg_g
+                if talla_g:
+                    kg_por_talla[talla_g] -= kg_g
+                    cajas_por_talla[talla_g] -= cant_g
             for p in produccion or []:
                 pres = p.get("presentacion") or ""
                 cant = int(p.get("cantidad") or 0)
                 if cant <= 0 or not pres:
                     continue
-                talla = p.get("talla") if pres not in ("bins_jugo", "rpc_granel") else None
+                talla = p.get("talla") if pres != "bins_jugo" else None
                 if talla is not None:
                     talla = str(talla)
                 kg_unit = KG_POR_PRESENTACION.get(pres, 0)
@@ -519,7 +524,7 @@ def _iter_produccion_empaques(empaques: list):
             cant = int(p.get("cantidad") or 0)
             if cant <= 0 or not pres:
                 continue
-            talla = p.get("talla") if pres not in ("bins_jugo", "rpc_granel") else None
+            talla = p.get("talla") if pres != "bins_jugo" else None
             if talla is not None:
                 talla = str(talla)
             kg_unit = KG_POR_PRESENTACION.get(pres, 0)

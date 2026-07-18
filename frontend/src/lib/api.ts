@@ -486,12 +486,14 @@ export async function anularEmpaque(
   return res.data;
 }
 
-/** Convierte RPC a granel → RPC 12/18 o cartón */
+/** Convierte RPC a granel (por talla) → RPC 12/18 o cartón */
 export async function convertirRpcGranel(
   token: string,
   data: {
     mercado: string;
-    cantidad_rpc_granel: number;
+    consumos_granel?: Array<{ talla?: string | null; cantidad: number }>;
+    /** @deprecated prefer consumos_granel por talla */
+    cantidad_rpc_granel?: number;
     produccion: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
     numero_empacador?: string;
     notas?: string | null;
@@ -500,6 +502,7 @@ export async function convertirRpcGranel(
   message: string;
   empaque_id: number | null;
   rpc_granel_consumido: number;
+  consumos_granel?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
   produccion: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
 }> {
   const res = await api.post('/api/empaque/convertir-granel', data, {

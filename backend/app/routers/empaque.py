@@ -94,8 +94,8 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
 
 
 def _talla_for_pres(pres: str | None, talla) -> str | None:
-    """rpc_granel y bins_jugo no usan talla."""
-    if not pres or pres in ("bins_jugo", "rpc_granel"):
+    """bins_jugo no usa talla. rpc_granel y finales sí (inventario por tamaño)."""
+    if not pres or pres == "bins_jugo":
         return None
     return str(talla) if talla is not None and str(talla).strip() != "" else None
 
@@ -636,6 +636,25 @@ def anular_empaque(
     return AnularEmpaqueResponse(message="Empaque anulado; inventario revertido", id=empaque_id)
 
 
+def _norm_consumos_granel(raw: list | None) -> list[dict]:
+    """[{"talla": "165", "cantidad": 10}] → líneas presentacion rpc_granel."""
+    out = []
+    for c in raw or []:
+        cant = int(c.get("cantidad") or 0)
+        if cant <= 0:
+            continue
+        talla = c.get("talla")
+        talla_val = str(talla).strip() if talla is not None and str(talla).strip() != "" else None
+        out.append(
+            {
+                "presentacion": "rpc_granel",
+                "talla": talla_val,
+                "cantidad": cant,
+            }
+        )
+    return out
+
+
 @router.post("/convertir-granel", response_model=ConvertirGranelResponse)
 def convertir_rpc_granel(
     body: ConvertirGranelRequest,
@@ -643,11 +662,25 @@ def convertir_rpc_granel(
     current_user=Depends(require_roles([Rol.ADMIN, Rol.RECEPCION_EMPACADOR, Rol.EMPACADOR])),
 ):
     """
-    Consume RPC a granel (22 kg) del inventario final y produce RPC 12/18 o cartón.
+    Consume RPC a granel (22 kg, por talla) del inventario y produce RPC 12/18 o cartón.
     No consume bins de campo: el granel ya se generó en un empaque previo.
     """
-    if body.cantidad_rpc_granel <= 0:
-        raise HTTPException(status_code=400, detail="cantidad_rpc_granel debe ser > 0")
+    consumos_g = _norm_consumos_granel(body.consumos_granel)
+    if not consumos_g and body.cantidad_rpc_granel > 0:
+        # Legacy: total sin talla
+        consumos_g = [
+            {
+                "presentacion": "rpc_granel",
+                "talla": None,
+                "cantidad": int(body.cantidad_rpc_granel),
+            }
+        ]
+    if not consumos_g:
+        raise HTTPException(
+            status_code=400,
+            detail="Indica consumos de RPC a granel por talla (o cantidad_rpc_granel)",
+        )
+
     produccion = _norm_produccion(body.produccion)
     if not produccion:
         raise HTTPException(status_code=400, detail="Indica producción final (RPC o cartón)")
@@ -658,25 +691,30 @@ def convertir_rpc_granel(
                 detail="La conversión debe producir RPC 12/18 o cartón (no granel ni jugo)",
             )
 
-    # 1) Descontar RPC a granel
+    total_granel = sum(int(c["cantidad"]) for c in consumos_g)
+
+    # 1) Descontar RPC a granel por talla
     _ajustar_inventario_final(
         db,
         Producto.LIMON_AMARILLO,
         body.mercado,
-        [{"presentacion": "rpc_granel", "talla": None, "cantidad": body.cantidad_rpc_granel}],
+        consumos_g,
         signo=-1,
     )
     # 2) Sumar producción final
     _ajustar_inventario_final(db, Producto.LIMON_AMARILLO, body.mercado, produccion, signo=+1)
 
     # 3) Auditoría: registro de empaque sin consumos de campo
+    lotes_resumen = ", ".join(
+        f"granel#{c['talla'] or 's/t'}:{c['cantidad']}" for c in consumos_g
+    )
     detalle = {
         "tipo": "conversion_rpc_granel",
         "consumos": [],
-        "consumos_granel": [{"presentacion": "rpc_granel", "cantidad": body.cantidad_rpc_granel}],
+        "consumos_granel": consumos_g,
         "produccion": produccion,
         "bins_campo": 0,
-        "lotes_resumen": f"rpc_granel:{body.cantidad_rpc_granel}",
+        "lotes_resumen": lotes_resumen,
         "notas": body.notas,
     }
     nuevo = Empaque(
@@ -698,10 +736,11 @@ def convertir_rpc_granel(
     db.refresh(nuevo)
     return ConvertirGranelResponse(
         message=(
-            f"Convertidos {body.cantidad_rpc_granel} RPC a granel → "
+            f"Convertidos {total_granel} RPC a granel → "
             f"{sum(p['cantidad'] for p in produccion)} unidades finales"
         ),
         empaque_id=nuevo.id,
-        rpc_granel_consumido=body.cantidad_rpc_granel,
+        rpc_granel_consumido=total_granel,
+        consumos_granel=consumos_g,
         produccion=produccion,
     )

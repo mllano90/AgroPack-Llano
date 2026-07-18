@@ -125,7 +125,11 @@ export interface EmpaqueRecord {
   detalle_corrida?: {
     tipo?: string | null;
     consumos?: Array<{ lote: string; bins: number }>;
-    consumos_granel?: Array<{ presentacion: string; cantidad: number }>;
+    consumos_granel?: Array<{
+      presentacion?: string;
+      talla?: string | null;
+      cantidad: number;
+    }>;
     produccion?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
     bins_campo?: number;
     lotes_resumen?: string;

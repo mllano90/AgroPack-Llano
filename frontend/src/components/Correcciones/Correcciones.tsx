@@ -149,10 +149,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     const produccion = editProduccion
       .map((p) => ({
         presentacion: p.presentacion.trim(),
-        talla:
-          p.presentacion === 'bins_jugo' || p.presentacion === 'rpc_granel'
-            ? null
-            : p.talla.trim() || null,
+        talla: p.presentacion === 'bins_jugo' ? null : p.talla.trim() || null,
         cantidad: parseInt(p.cantidad, 10) || 0,
       }))
       .filter((p) => p.presentacion && p.cantidad > 0);
@@ -1027,11 +1024,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                               next[i] = {
                                 ...next[i],
                                 presentacion: e.target.value,
-                                talla:
-                                  e.target.value === 'bins_jugo' ||
-                                  e.target.value === 'rpc_granel'
-                                    ? ''
-                                    : next[i].talla,
+                                talla: e.target.value === 'bins_jugo' ? '' : next[i].talla,
                               };
                               setEditProduccion(next);
                             }}
@@ -1045,8 +1038,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                             ))}
                           </select>
                         </label>
-                        {p.presentacion !== 'bins_jugo' &&
-                          p.presentacion !== 'rpc_granel' && (
+                        {p.presentacion !== 'bins_jugo' && (
                           <label style={editLabel}>
                             Talla
                             <select
