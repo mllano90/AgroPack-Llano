@@ -10,6 +10,8 @@ from app.schemas.empaque import (
     AgregarConsumoRequest,
     AnularEmpaqueResponse,
     EmpaqueEditRequest,
+    ConvertirGranelRequest,
+    ConvertirGranelResponse,
 )
 from app.models.enums import TipoMercado
 from app.models.inventory import Empaque, InventarioCampo, InventarioFinal, InventarioDesverdizado
@@ -91,12 +93,27 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
         )
 
 
+def _talla_for_pres(pres: str | None, talla) -> str | None:
+    """rpc_granel y bins_jugo no usan talla."""
+    if not pres or pres in ("bins_jugo", "rpc_granel"):
+        return None
+    return str(talla) if talla is not None and str(talla).strip() != "" else None
+
+
+def _calidad_pres(pres: str | None) -> str:
+    if pres == "bins_jugo":
+        return "segunda"
+    if pres == "rpc_granel":
+        return "primera"  # 1ra en proceso (pre-embolse)
+    return "primera"
+
+
 def _ajustar_inventario_final(db: Session, producto: Producto, mercado, produccion: list, signo: int) -> None:
     """suma (signo=+1) o resta (signo=-1) producción en inventario final."""
     for linea in produccion or []:
         pres = linea.get("presentacion")
         cant = int(linea.get("cantidad") or 0)
-        talla_val = linea.get("talla") if pres != "bins_jugo" else None
+        talla_val = _talla_for_pres(pres, linea.get("talla"))
         if not pres or cant <= 0:
             continue
         delta = cant * signo
@@ -119,7 +136,7 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 )
             inv_final.cantidad_stock = nuevo
         elif signo > 0:
-            calidad = "segunda" if pres == "bins_jugo" else "primera"
+            calidad = _calidad_pres(pres)
             extra = {"presentacion": pres, "calidad": calidad}
             if talla_val:
                 extra["talla"] = talla_val
@@ -209,10 +226,10 @@ def crear_empaque(
             for linea in lineas:
                 pres = linea.get("presentacion")
                 cant = linea.get("cantidad", 0)
-                talla_val = linea.get("talla") if pres != "bins_jugo" else None
+                talla_val = _talla_for_pres(pres, linea.get("talla"))
                 if cant <= 0 or not pres:
                     continue
-                calidad = "segunda" if pres == "bins_jugo" else "primera"
+                calidad = _calidad_pres(pres)
                 all_for_product = db.query(InventarioFinal).filter(
                     InventarioFinal.producto == empaque.producto
                 ).all()
@@ -254,8 +271,8 @@ def crear_empaque(
             for pres, cant in presentaciones:
                 if cant <= 0:
                     continue
-                calidad = "segunda" if pres == "bins_jugo" else "primera"
-                talla_val = None if pres == "bins_jugo" else talla
+                calidad = _calidad_pres(pres)
+                talla_val = _talla_for_pres(pres, talla)
                 all_for_product = db.query(InventarioFinal).filter(
                     InventarioFinal.producto == empaque.producto
                 ).all()
@@ -416,11 +433,7 @@ def _norm_produccion(raw: list | None) -> list[dict]:
         cant = int(p.get("cantidad") or 0)
         if not pres or cant <= 0:
             continue
-        talla = p.get("talla")
-        if pres == "bins_jugo":
-            talla = None
-        elif talla is not None:
-            talla = str(talla)
+        talla = _talla_for_pres(pres, p.get("talla"))
         out.append({"presentacion": pres, "talla": talla, "cantidad": cant})
     return out
 
@@ -621,3 +634,74 @@ def anular_empaque(
     _renumerar_tandas(db)
     db.commit()
     return AnularEmpaqueResponse(message="Empaque anulado; inventario revertido", id=empaque_id)
+
+
+@router.post("/convertir-granel", response_model=ConvertirGranelResponse)
+def convertir_rpc_granel(
+    body: ConvertirGranelRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN, Rol.RECEPCION_EMPACADOR, Rol.EMPACADOR])),
+):
+    """
+    Consume RPC a granel (22 kg) del inventario final y produce RPC 12/18 o cartón.
+    No consume bins de campo: el granel ya se generó en un empaque previo.
+    """
+    if body.cantidad_rpc_granel <= 0:
+        raise HTTPException(status_code=400, detail="cantidad_rpc_granel debe ser > 0")
+    produccion = _norm_produccion(body.produccion)
+    if not produccion:
+        raise HTTPException(status_code=400, detail="Indica producción final (RPC o cartón)")
+    for p in produccion:
+        if p["presentacion"] in ("rpc_granel", "bins_jugo"):
+            raise HTTPException(
+                status_code=400,
+                detail="La conversión debe producir RPC 12/18 o cartón (no granel ni jugo)",
+            )
+
+    # 1) Descontar RPC a granel
+    _ajustar_inventario_final(
+        db,
+        Producto.LIMON_AMARILLO,
+        body.mercado,
+        [{"presentacion": "rpc_granel", "talla": None, "cantidad": body.cantidad_rpc_granel}],
+        signo=-1,
+    )
+    # 2) Sumar producción final
+    _ajustar_inventario_final(db, Producto.LIMON_AMARILLO, body.mercado, produccion, signo=+1)
+
+    # 3) Auditoría: registro de empaque sin consumos de campo
+    detalle = {
+        "tipo": "conversion_rpc_granel",
+        "consumos": [],
+        "consumos_granel": [{"presentacion": "rpc_granel", "cantidad": body.cantidad_rpc_granel}],
+        "produccion": produccion,
+        "bins_campo": 0,
+        "lotes_resumen": f"rpc_granel:{body.cantidad_rpc_granel}",
+        "notas": body.notas,
+    }
+    nuevo = Empaque(
+        producto=Producto.LIMON_AMARILLO,
+        variedad=None,
+        tipo_cultivo=None,
+        mercado=body.mercado,
+        cantidad_cajas_campo_usadas=0,
+        cantidad_cajas_carton_producidas=0,
+        porcentaje_merma=0.0,
+        numero_empacador=body.numero_empacador or "EMP-01",
+        bins_desverdizado_usados=0,
+        lote_desverdizado=None,
+        detalle_corrida=detalle,
+        usuario_id=getattr(current_user, "id", None),
+    )
+    db.add(nuevo)
+    db.commit()
+    db.refresh(nuevo)
+    return ConvertirGranelResponse(
+        message=(
+            f"Convertidos {body.cantidad_rpc_granel} RPC a granel → "
+            f"{sum(p['cantidad'] for p in produccion)} unidades finales"
+        ),
+        empaque_id=nuevo.id,
+        rpc_granel_consumido=body.cantidad_rpc_granel,
+        produccion=produccion,
+    )

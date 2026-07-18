@@ -28,6 +28,7 @@ const KG_PRES: Record<string, number> = {
   rpc_12: 12,
   rpc_18: 18,
   caja_40lbs: 18,
+  rpc_granel: 22,
   bins_jugo: 900,
 };
 const CAJAS_PARRILLA_RPC = 45;
@@ -148,6 +149,8 @@ function computeFromEmpaques(
   for (const e of limones) {
     const det = parseDetalle(e.detalle_corrida as any);
     if (det?.anulado) continue;
+    // Conversión granel→final: no es corrida de campo (evita doble conteo de 1ra)
+    if (det?.tipo === 'conversion_rpc_granel') continue;
 
     let consumos = det?.consumos || [];
     let produccion = det?.produccion || [];
@@ -399,6 +402,7 @@ function labelPres(p: string) {
     rpc_12: 'RPC 12',
     rpc_18: 'RPC 18',
     caja_40lbs: 'Caja 40 lbs',
+    rpc_granel: 'RPC a granel 22kg',
     bins_jugo: 'Bins jugo',
   };
   return map[p] || p;

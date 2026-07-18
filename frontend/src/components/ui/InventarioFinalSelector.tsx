@@ -54,9 +54,10 @@ export default function InventarioFinalSelector({
     onChange(found || null);
   };
 
-  // Filter + sort for better UX (support both uva and limón)
+  // Filter + sort for better UX (support both uva and limón).
+  // rpc_granel es WIP intermedio: no se embarca (solo se convierte en Empaque).
   const itemsConStock = inventario
-    .filter((item) => item.cantidad_stock > 0)
+    .filter((item) => item.cantidad_stock > 0 && item.presentacion !== 'rpc_granel')
     .sort((a, b) => {
       const isLimonA = !!a.presentacion;
       const isLimonB = !!b.presentacion;
@@ -92,10 +93,18 @@ export default function InventarioFinalSelector({
         if (item.presentacion) {
           // Limón: simplificado (sin mercado, sin calidad/primera-segunda)
           const tallaPart = item.talla ? ` #${item.talla}` : '';
-          const presLabel = item.presentacion === 'rpc_12' ? 'RPC 12' :
-                            item.presentacion === 'rpc_18' ? 'RPC 18' :
-                            item.presentacion === 'caja_40lbs' ? 'Caja 40 lbs' :
-                            item.presentacion === 'bins_jugo' ? 'Bins 900kg' : item.presentacion;
+          const presLabel =
+            item.presentacion === 'rpc_granel'
+              ? 'RPC a granel 22kg'
+              : item.presentacion === 'rpc_12'
+                ? 'RPC 12'
+                : item.presentacion === 'rpc_18'
+                  ? 'RPC 18'
+                  : item.presentacion === 'caja_40lbs'
+                    ? 'Caja 40 lbs'
+                    : item.presentacion === 'bins_jugo'
+                      ? 'Bins 900kg'
+                      : item.presentacion;
           label = `${presLabel}${tallaPart} (${item.cantidad_stock})`;
         } else {
           const tipoLabel = item.tipo_cultivo === 'organica' ? 'Orgánica' : 'Convencional';

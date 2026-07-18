@@ -1,38 +1,50 @@
 import { useState, useEffect } from 'react';
-import type { TipoMercado, InventarioCampoItem, Variedad, TipoCultivo, Producto } from '../../types';
+import type {
+  TipoMercado,
+  InventarioCampoItem,
+  InventarioFinalItem,
+  Variedad,
+  TipoCultivo,
+  Producto,
+} from '../../types';
 import { TipoCultivoSelect, InventarioCampoSelector } from '../ui';
 import { useCreateEmpaque } from '../../hooks/useCreateEmpaque';
-import { getApiBaseUrl } from '../../lib/api';
+import { getApiBaseUrl, convertirRpcGranel } from '../../lib/api';
 import {
   TALLAS_LIMON,
   PESO_BIN_CAMPO_KG,
   tallasParaPresentacion,
   esPresentacionRpc,
   esPresentacionCarton,
+  labelPresentacionLimon,
+  KG_POR_PRESENTACION,
 } from '../../lib/constants';
 import { formatFechaCorta } from '../../lib/dates';
 
 interface EmpaqueProps {
   token: string;
   inventarioCampo: InventarioCampoItem[];
+  inventarioFinal?: InventarioFinalItem[];
   onEmpaqueRegistered: () => void;
 }
 
 type TallaCantidades = Record<string, string>;
+type ModoLimon = 'desverdizado' | 'granel';
 
 function emptyTallas(tallas: readonly string[] = TALLAS_LIMON): TallaCantidades {
   return Object.fromEntries(tallas.map((t) => [t, '']));
 }
 
 function labelPresentacion(p: string) {
-  if (p === 'rpc_12') return 'RPC 12';
-  if (p === 'rpc_18') return 'RPC 18';
-  if (p === 'caja_40lbs') return 'Caja 40 lbs';
-  if (p === 'bins_jugo') return 'Bins jugo';
-  return p;
+  return labelPresentacionLimon(p);
 }
 
-export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }: EmpaqueProps) {
+export default function Empaque({
+  token,
+  inventarioCampo,
+  inventarioFinal = [],
+  onEmpaqueRegistered,
+}: EmpaqueProps) {
   const [productoEmpaque, setProductoEmpaque] = useState<Producto | ''>('');
   const [variedadEmpaque, setVariedadEmpaque] = useState<Variedad | ''>('');
   const [cajasCampoUsadas, setCajasCampoUsadas] = useState('');
@@ -47,14 +59,28 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
   const [consumosDesverdizado, setConsumosDesverdizado] = useState<any[]>([]);
 
   // Producción: presentación + campos fijos de talla
+  const [modoLimon, setModoLimon] = useState<ModoLimon>('desverdizado');
   const [prodPresentacion, setProdPresentacion] = useState('');
   const [tallaCantidades, setTallaCantidades] = useState<TallaCantidades>(emptyTallas);
   const [cantidadBinsJugo, setCantidadBinsJugo] = useState('');
+  const [cantidadRpcGranel, setCantidadRpcGranel] = useState('');
+  // Conversión: cuántos RPC a granel se consumen
+  const [granelAUsar, setGranelAUsar] = useState('');
   const [lineasProduccion, setLineasProduccion] = useState<
     Array<{ presentacion: string; talla: string | null; cantidad: number }>
   >([]);
+  const [convirtiendo, setConvirtiendo] = useState(false);
 
   const createEmpaqueMutation = useCreateEmpaque(token);
+
+  const stockRpcGranel = inventarioFinal
+    .filter(
+      (i) =>
+        (i.producto === 'limon_amarillo' || !!i.presentacion) &&
+        i.presentacion === 'rpc_granel' &&
+        (i.cantidad_stock || 0) > 0
+    )
+    .reduce((s, i) => s + (i.cantidad_stock || 0), 0);
 
   const cargarDesverdizado = () => {
     if (!token) return;
@@ -97,9 +123,10 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
     const tallas = tallasParaPresentacion(presentacion || prodPresentacion);
     setTallaCantidades(emptyTallas(tallas.length ? tallas : TALLAS_LIMON));
     setCantidadBinsJugo('');
+    setCantidadRpcGranel('');
   };
 
-  /** Convierte los campos fijos de talla (o bins jugo) en líneas de producción */
+  /** Convierte los campos fijos de talla (o jugo/granel) en líneas de producción */
   const agregarPresentacionConTallas = () => {
     if (!prodPresentacion) {
       return alert('Selecciona una presentación');
@@ -113,6 +140,17 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
         { presentacion: 'bins_jugo', talla: null, cantidad: cant },
       ]);
       setCantidadBinsJugo('');
+      return;
+    }
+
+    if (prodPresentacion === 'rpc_granel') {
+      const cant = parseInt(cantidadRpcGranel, 10) || 0;
+      if (cant <= 0) return alert('Ingresa la cantidad de RPC a granel (22 kg c/u)');
+      setLineasProduccion([
+        ...lineasProduccion,
+        { presentacion: 'rpc_granel', talla: null, cantidad: cant },
+      ]);
+      setCantidadRpcGranel('');
       return;
     }
 
@@ -162,16 +200,61 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
             100
           ).toFixed(2)
         );
+      } else if (modoLimon === 'granel') {
+        // Conversión RPC a granel → final (no usa desverdizado)
+        const cantGranel = parseInt(granelAUsar, 10) || 0;
+        let produccion = [...lineasProduccion];
+        if (prodPresentacion && prodPresentacion !== 'rpc_granel' && prodPresentacion !== 'bins_jugo') {
+          for (const t of tallasParaPresentacion(prodPresentacion)) {
+            const cant = parseInt(tallaCantidades[t] || '', 10) || 0;
+            if (cant > 0) {
+              produccion.push({ presentacion: prodPresentacion, talla: t, cantidad: cant });
+            }
+          }
+        }
+        produccion = produccion.filter(
+          (p) => p.presentacion !== 'rpc_granel' && p.presentacion !== 'bins_jugo'
+        );
+        if (cantGranel <= 0) return alert('Indica cuántos RPC a granel vas a convertir');
+        if (cantGranel > stockRpcGranel) {
+          return alert(`Solo hay ${stockRpcGranel} RPC a granel en inventario`);
+        }
+        if (produccion.length === 0) {
+          return alert('Agrega producción final (RPC 12/18 o cartón) a partir del granel');
+        }
+        setConvirtiendo(true);
+        try {
+          const res = await convertirRpcGranel(token, {
+            mercado: mercadoEmpaque,
+            cantidad_rpc_granel: cantGranel,
+            produccion,
+            numero_empacador: 'EMP-01',
+          });
+          alert(`✅ ${res.message}`);
+          setGranelAUsar('');
+          setLineasProduccion([]);
+          setProdPresentacion('');
+          resetLimonProduccionForm();
+          onEmpaqueRegistered();
+        } finally {
+          setConvirtiendo(false);
+        }
+        return;
       } else {
         if (consumosDesverdizado.length === 0) {
           return alert('Agrega al menos un consumo de desverdizado');
         }
-        // Si hay tallas llenas sin "Agregar", las incluimos al registrar
+        // Si hay tallas/cantidades llenas sin "Agregar", las incluimos al registrar
         let produccion = [...lineasProduccion];
         if (prodPresentacion === 'bins_jugo') {
           const cant = parseInt(cantidadBinsJugo, 10) || 0;
           if (cant > 0) {
             produccion.push({ presentacion: 'bins_jugo', talla: null, cantidad: cant });
+          }
+        } else if (prodPresentacion === 'rpc_granel') {
+          const cant = parseInt(cantidadRpcGranel, 10) || 0;
+          if (cant > 0) {
+            produccion.push({ presentacion: 'rpc_granel', talla: null, cantidad: cant });
           }
         } else if (prodPresentacion) {
           for (const t of tallasParaPresentacion(prodPresentacion)) {
@@ -182,7 +265,9 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
           }
         }
         if (produccion.length === 0) {
-          return alert('Agrega producción: elige presentación y llena al menos una talla (o bins jugo)');
+          return alert(
+            'Agrega producción: RPC a granel, RPC/cartón final, o bins jugo'
+          );
         }
         payload.consumos_desverdizado = consumosDesverdizado;
         payload.produccion = produccion;
@@ -201,13 +286,10 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
       setSelectedBinsToUse('');
       setLineasProduccion([]);
       setProdPresentacion('');
+      setCantidadRpcGranel('');
       resetLimonProduccionForm();
       onEmpaqueRegistered();
-      const base = getApiBaseUrl();
-      fetch(`${base}/api/recepcion/desverdizado`, { headers: { Authorization: `Bearer ${token}` } })
-        .then((r) => r.json())
-        .then(setDesverdizadoList)
-        .catch(() => {});
+      cargarDesverdizado();
     } catch (err: any) {
       console.error('Full empaque error:', err);
       let message = 'Error desconocido';
@@ -226,8 +308,11 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
     }
   };
 
-  const isSubmitting = createEmpaqueMutation.isPending;
-  const esPrimera = prodPresentacion && prodPresentacion !== 'bins_jugo';
+  const isSubmitting = createEmpaqueMutation.isPending || convirtiendo;
+  const esPrimeraConTalla =
+    prodPresentacion &&
+    prodPresentacion !== 'bins_jugo' &&
+    prodPresentacion !== 'rpc_granel';
 
   return (
     <div style={{ background: 'white', padding: '25px', borderRadius: '10px' }}>
@@ -296,90 +381,189 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
 
       {productoEmpaque === 'limon_amarillo' && (
         <>
-          <div style={{ margin: '8px 0' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
-              <strong>Inventario Desverdizado (bins de {PESO_BIN_CAMPO_KG} kg):</strong>
-              <button
-                type="button"
-                onClick={cargarDesverdizado}
-                style={{ padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}
-              >
-                Actualizar lista
-              </button>
-            </div>
-            {desverdizadoList.length === 0 && (
-              <div style={{ color: '#666' }}>No hay lotes disponibles</div>
-            )}
-            {desverdizadoList.map((d: any) => (
-              <div
-                key={d.id}
-                style={{ display: 'flex', gap: 8, alignItems: 'center', margin: '4px 0', fontSize: 13 }}
-              >
-                <span>
-                  <strong style={{ color: '#15803d' }}>
-                    Tanda #{d.numero_tanda ?? '—'}
-                  </strong>
-                  {' · '}
-                  Lote: <strong>{d.lote}</strong> | Bins disp: {d.cantidad_bins_disponibles} | Corte:{' '}
-                  {formatFechaCorta(d.fecha_recepcion)}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setSelectedLote(d.lote)}
-                  style={{ padding: '2px 8px', fontSize: 12 }}
-                >
-                  Seleccionar
-                </button>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, margin: '12px 0' }}>
+            <button
+              type="button"
+              onClick={() => {
+                setModoLimon('desverdizado');
+                setLineasProduccion([]);
+                setProdPresentacion('');
+                resetLimonProduccionForm();
+              }}
+              style={{
+                padding: '10px 16px',
+                borderRadius: 8,
+                border: modoLimon === 'desverdizado' ? '2px solid #15803d' : '1px solid #cbd5e1',
+                background: modoLimon === 'desverdizado' ? '#dcfce7' : '#fff',
+                color: '#0f172a',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              1. Desde desverdizado
+              <div style={{ fontSize: 11, fontWeight: 400, color: '#64748b' }}>
+                Bins campo → RPC granel / final / jugo
               </div>
-            ))}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setModoLimon('granel');
+                setConsumosDesverdizado([]);
+                setLineasProduccion([]);
+                setProdPresentacion('');
+                resetLimonProduccionForm();
+              }}
+              style={{
+                padding: '10px 16px',
+                borderRadius: 8,
+                border: modoLimon === 'granel' ? '2px solid #0369a1' : '1px solid #cbd5e1',
+                background: modoLimon === 'granel' ? '#e0f2fe' : '#fff',
+                color: '#0f172a',
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              2. Desde RPC a granel
+              <div style={{ fontSize: 11, fontWeight: 400, color: '#64748b' }}>
+                Embolsar granel → RPC 12/18 o cartón
+              </div>
+            </button>
           </div>
 
-          {selectedLote && (
-            <div style={{ display: 'flex', gap: 8, margin: '4px 0', alignItems: 'center' }}>
-              <span>Lote: {selectedLote}</span>
+          {modoLimon === 'granel' && (
+            <div
+              style={{
+                margin: '8px 0 16px',
+                padding: 14,
+                background: '#f0f9ff',
+                border: '1px solid #bae6fd',
+                borderRadius: 8,
+              }}
+            >
+              <strong>Stock RPC a granel (22 kg): {stockRpcGranel} unidades</strong>
+              <p style={{ fontSize: 13, color: '#64748b', margin: '6px 0 10px' }}>
+                Consume granel del inventario final y genera producto embolsado/final. El granel no
+                usado permanece en inventario.
+              </p>
+              <label style={{ fontSize: 13, display: 'block', marginBottom: 4 }}>
+                RPC a granel a convertir *
+              </label>
               <input
                 type="number"
-                placeholder="Bins a usar"
-                value={selectedBinsToUse}
-                onChange={(e) => setSelectedBinsToUse(e.target.value)}
-                style={{ width: 80 }}
-              />
-              <button
-                type="button"
-                onClick={() => {
-                  const binsNum = parseInt(selectedBinsToUse) || 0;
-                  if (binsNum > 0) {
-                    setConsumosDesverdizado([
-                      ...consumosDesverdizado,
-                      { lote: selectedLote, bins: binsNum },
-                    ]);
-                    setSelectedBinsToUse('');
-                    setSelectedLote('');
-                  }
+                min={1}
+                max={stockRpcGranel}
+                value={granelAUsar}
+                onChange={(e) => setGranelAUsar(e.target.value)}
+                style={{
+                  padding: 10,
+                  width: 140,
+                  background: 'white',
+                  color: '#0f172a',
+                  border: '1px solid #cbd5e1',
+                  borderRadius: 4,
                 }}
-              >
-                Agregar
-              </button>
+              />
             </div>
           )}
 
-          {consumosDesverdizado.length > 0 && (
-            <div style={{ margin: '4px 0', fontSize: 12 }}>
-              <strong>Consumos:</strong>{' '}
-              {consumosDesverdizado.map((c, i) => (
-                <span key={i} style={{ marginRight: 8 }}>
-                  {c.lote}:{c.bins}{' '}
+          {modoLimon === 'desverdizado' && (
+            <>
+              <div style={{ margin: '8px 0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+                  <strong>Inventario Desverdizado (bins de {PESO_BIN_CAMPO_KG} kg):</strong>
                   <button
                     type="button"
-                    onClick={() =>
-                      setConsumosDesverdizado(consumosDesverdizado.filter((_, j) => j !== i))
-                    }
+                    onClick={cargarDesverdizado}
+                    style={{ padding: '2px 10px', fontSize: 12, cursor: 'pointer' }}
                   >
-                    x
+                    Actualizar lista
                   </button>
-                </span>
-              ))}
-            </div>
+                </div>
+                {desverdizadoList.length === 0 && (
+                  <div style={{ color: '#666' }}>No hay lotes disponibles</div>
+                )}
+                {desverdizadoList.map((d: any) => (
+                  <div
+                    key={d.id}
+                    style={{
+                      display: 'flex',
+                      gap: 8,
+                      alignItems: 'center',
+                      margin: '4px 0',
+                      fontSize: 13,
+                    }}
+                  >
+                    <span>
+                      <strong style={{ color: '#15803d' }}>
+                        Tanda #{d.numero_tanda ?? '—'}
+                      </strong>
+                      {' · '}
+                      Lote: <strong>{d.lote}</strong> | Bins disp:{' '}
+                      {d.cantidad_bins_disponibles} | Corte:{' '}
+                      {formatFechaCorta(d.fecha_recepcion)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLote(d.lote)}
+                      style={{ padding: '2px 8px', fontSize: 12 }}
+                    >
+                      Seleccionar
+                    </button>
+                  </div>
+                ))}
+              </div>
+
+              {selectedLote && (
+                <div style={{ display: 'flex', gap: 8, margin: '4px 0', alignItems: 'center' }}>
+                  <span>Lote: {selectedLote}</span>
+                  <input
+                    type="number"
+                    placeholder="Bins a usar"
+                    value={selectedBinsToUse}
+                    onChange={(e) => setSelectedBinsToUse(e.target.value)}
+                    style={{ width: 80 }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const binsNum = parseInt(selectedBinsToUse) || 0;
+                      if (binsNum > 0) {
+                        setConsumosDesverdizado([
+                          ...consumosDesverdizado,
+                          { lote: selectedLote, bins: binsNum },
+                        ]);
+                        setSelectedBinsToUse('');
+                        setSelectedLote('');
+                      }
+                    }}
+                  >
+                    Agregar
+                  </button>
+                </div>
+              )}
+
+              {consumosDesverdizado.length > 0 && (
+                <div style={{ margin: '4px 0', fontSize: 12 }}>
+                  <strong>Consumos:</strong>{' '}
+                  {consumosDesverdizado.map((c, i) => (
+                    <span key={i} style={{ marginRight: 8 }}>
+                      {c.lote}:{c.bins}{' '}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setConsumosDesverdizado(
+                            consumosDesverdizado.filter((_, j) => j !== i)
+                          )
+                        }
+                      >
+                        x
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+            </>
           )}
 
           {/* Presentación + tallas filtradas */}
@@ -392,20 +576,39 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
               background: '#fafafa',
             }}
           >
-            <strong>Producción 1ra / 2da</strong>
+            <strong>
+              {modoLimon === 'desverdizado'
+                ? 'Producción (desde bins de campo)'
+                : 'Producción final (desde RPC a granel)'}
+            </strong>
             <p style={{ fontSize: 13, color: '#64748b', margin: '6px 0 12px' }}>
-              <strong>RPC</strong> → tallas 140, 165, 200, 235 · <strong>Cartón 40 lbs</strong> → tallas
-              75, 95, 115, 140. Solo la <strong>140</strong> se puede empacar en RPC o cartón.
+              {modoLimon === 'desverdizado' ? (
+                <>
+                  Flujo: lavado → <strong>RPC a granel (22 kg)</strong> y/o final; 2da = bins jugo.
+                  El granel no embolsado queda en inventario. RPC final: tallas 140+ · Cartón: ≤140.
+                </>
+              ) : (
+                <>
+                  Embolsa RPC a granel en <strong>RPC 12 / 18</strong> o <strong>cartón</strong>. No
+                  se consumen bins de desverdizado.
+                </>
+              )}
             </p>
 
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginBottom: 12 }}>
-              {(
-                [
-                  { value: 'rpc_18', label: 'RPC 18', hint: 'tallas 140+' },
-                  { value: 'rpc_12', label: 'RPC 12', hint: 'tallas 140+' },
-                  { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas ≤140' },
-                  { value: 'bins_jugo', label: 'Bins jugo (2da)', hint: 'sin talla' },
-                ] as const
+              {(modoLimon === 'desverdizado'
+                ? ([
+                    { value: 'rpc_granel', label: 'RPC a granel', hint: '22 kg · 1ra en proceso' },
+                    { value: 'rpc_18', label: 'RPC 18', hint: 'tallas 140+' },
+                    { value: 'rpc_12', label: 'RPC 12', hint: 'tallas 140+' },
+                    { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas ≤140' },
+                    { value: 'bins_jugo', label: 'Bins jugo (2da)', hint: '900 kg' },
+                  ] as const)
+                : ([
+                    { value: 'rpc_18', label: 'RPC 18', hint: 'tallas 140+' },
+                    { value: 'rpc_12', label: 'RPC 12', hint: 'tallas 140+' },
+                    { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas ≤140' },
+                  ] as const)
               ).map((opt) => {
                 const active = prodPresentacion === opt.value;
                 return (
@@ -434,7 +637,7 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
               })}
             </div>
 
-            {esPrimera && tallasActivas.length > 0 && (
+            {esPrimeraConTalla && tallasActivas.length > 0 && (
               <div>
                 <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
                   Cantidades por talla
@@ -506,7 +709,39 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                   placeholder="0"
                   value={cantidadBinsJugo}
                   onChange={(e) => setCantidadBinsJugo(e.target.value)}
-                  style={{ width: '100%', maxWidth: 200, padding: '10px' }}
+                  style={{
+                    width: '100%',
+                    maxWidth: 200,
+                    padding: '10px',
+                    background: 'white',
+                    color: '#0f172a',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: 4,
+                  }}
+                />
+              </div>
+            )}
+
+            {prodPresentacion === 'rpc_granel' && (
+              <div>
+                <label style={{ display: 'block', fontSize: 13, marginBottom: 4 }}>
+                  Cantidad RPC a granel (22 kg c/u, 1ra en proceso)
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  placeholder="0"
+                  value={cantidadRpcGranel}
+                  onChange={(e) => setCantidadRpcGranel(e.target.value)}
+                  style={{
+                    width: '100%',
+                    maxWidth: 200,
+                    padding: '10px',
+                    background: 'white',
+                    color: '#0f172a',
+                    border: '1px solid #cbd5e1',
+                    borderRadius: 4,
+                  }}
                 />
               </div>
             )}
@@ -537,7 +772,10 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                 {lineasProduccion.map((l, i) => (
                   <li key={i} style={{ marginBottom: 4 }}>
                     {labelPresentacion(l.presentacion)}
-                    {l.talla ? ` #${l.talla}` : ''} × {l.cantidad}{' '}
+                    {l.talla ? ` #${l.talla}` : ''} × {l.cantidad}
+                    {l.presentacion === 'rpc_granel'
+                      ? ` (${(KG_POR_PRESENTACION.rpc_granel || 22) * l.cantidad} kg)`
+                      : ''}{' '}
                     <button
                       type="button"
                       onClick={() => eliminarLineaProduccion(i)}
@@ -548,8 +786,10 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                   </li>
                 ))}
               </ul>
-              {/* Mini resumen RPC vs cartón */}
               {(() => {
+                const granel = lineasProduccion
+                  .filter((l) => l.presentacion === 'rpc_granel')
+                  .reduce((s, l) => s + l.cantidad, 0);
                 const rpc = lineasProduccion
                   .filter((l) => esPresentacionRpc(l.presentacion))
                   .reduce((s, l) => s + l.cantidad, 0);
@@ -559,11 +799,11 @@ export default function Empaque({ token, inventarioCampo, onEmpaqueRegistered }:
                 const jugo = lineasProduccion
                   .filter((l) => l.presentacion === 'bins_jugo')
                   .reduce((s, l) => s + l.cantidad, 0);
-                if (rpc + carton + jugo === 0) return null;
+                if (rpc + carton + jugo + granel === 0) return null;
                 return (
                   <div style={{ fontSize: 12, color: '#475569', marginTop: 6 }}>
-                    Resumen: RPC {rpc} cajas · Cartón {carton} cajas
-                    {jugo > 0 ? ` · Jugo ${jugo} bins` : ''}
+                    Resumen: Granel {granel} · RPC final {rpc} · Cartón {carton}
+                    {jugo > 0 ? ` · Jugo ${jugo}` : ''}
                   </div>
                 );
               })()}

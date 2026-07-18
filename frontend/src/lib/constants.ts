@@ -43,9 +43,19 @@ export const TALLAS_LIMON = ['75', '95', '115', '140', '165', '200', '235'] as c
 
 export type TallaLimon = (typeof TALLAS_LIMON)[number];
 
+/** Peso kg por presentación limón */
+export const KG_POR_PRESENTACION: Record<string, number> = {
+  rpc_12: 12,
+  rpc_18: 18,
+  caja_40lbs: 18,
+  rpc_granel: 22,
+  bins_jugo: 900,
+};
+
 export function tallasParaPresentacion(presentacion: string): readonly string[] {
   if (presentacion === 'caja_40lbs') return TALLAS_CARTON;
   if (presentacion === 'rpc_12' || presentacion === 'rpc_18') return TALLAS_RPC;
+  // rpc_granel y bins_jugo: sin talla
   return [];
 }
 
@@ -55,6 +65,21 @@ export function esPresentacionRpc(presentacion: string | null | undefined): bool
 
 export function esPresentacionCarton(presentacion: string | null | undefined): boolean {
   return presentacion === 'caja_40lbs';
+}
+
+export function esPresentacionGranel(presentacion: string | null | undefined): boolean {
+  return presentacion === 'rpc_granel';
+}
+
+export function labelPresentacionLimon(p: string): string {
+  const map: Record<string, string> = {
+    rpc_12: 'RPC 12',
+    rpc_18: 'RPC 18',
+    caja_40lbs: 'Caja 40 lbs',
+    rpc_granel: 'RPC a granel (22 kg)',
+    bins_jugo: 'Bins jugo 900 kg',
+  };
+  return map[p] || p;
 }
 
 /** Lotes de campo predefinidos (recepción / desverdizado) */
@@ -70,8 +95,16 @@ export const LOTES_LIMON = [
 ] as const;
 
 export const PRESENTACIONES_LIMON = [
+  { value: 'rpc_granel', label: 'RPC a granel 22 kg (1ra en proceso)' },
   { value: 'rpc_18', label: 'RPC 18 bolsas 2lbs (tallas 140+)' },
   { value: 'rpc_12', label: 'RPC 12 bolsas 2lbs (tallas 140+)' },
   { value: 'caja_40lbs', label: 'Caja 40 lbs granel (tallas ≤140)' },
   { value: 'bins_jugo', label: 'Bins 900kg (2da)' },
+] as const;
+
+/** Producto final (salida de conversión desde RPC a granel) */
+export const PRESENTACIONES_FINAL_LIMON = [
+  { value: 'rpc_18', label: 'RPC 18 bolsas 2lbs (tallas 140+)' },
+  { value: 'rpc_12', label: 'RPC 12 bolsas 2lbs (tallas 140+)' },
+  { value: 'caja_40lbs', label: 'Caja 40 lbs granel (tallas ≤140)' },
 ] as const;

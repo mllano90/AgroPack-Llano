@@ -123,12 +123,15 @@ export interface EmpaqueRecord {
   calidad?: string | null;
   cantidad_producida?: number | null;
   detalle_corrida?: {
+    tipo?: string | null;
     consumos?: Array<{ lote: string; bins: number }>;
+    consumos_granel?: Array<{ presentacion: string; cantidad: number }>;
     produccion?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
     bins_campo?: number;
     lotes_resumen?: string;
     anulado?: boolean;
     anulado_por?: string | null;
+    notas?: string | null;
   } | null;
 }
 

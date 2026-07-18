@@ -308,7 +308,12 @@ function App() {
           )}
 
           {activeTab === 'empaque' && visibleTabs.includes('empaque') && (
-            <Empaque token={token} inventarioCampo={inventarioCampo} onEmpaqueRegistered={cargarDashboard} />
+            <Empaque
+              token={token}
+              inventarioCampo={inventarioCampo}
+              inventarioFinal={inventarioCarton}
+              onEmpaqueRegistered={cargarDashboard}
+            />
           )}
 
           {activeTab === 'embarques' && visibleTabs.includes('embarques') && (

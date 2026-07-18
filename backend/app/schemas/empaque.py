@@ -74,3 +74,22 @@ class EmpaqueEditRequest(BaseModel):
     fecha: str | None = None  # YYYY-MM-DD
     numero_empacador: str | None = None
     mercado: TipoMercado | None = None
+
+
+class ConvertirGranelRequest(BaseModel):
+    """
+    Convierte inventario de RPC a granel (22 kg) en producto final
+    (rpc_12, rpc_18, caja_40lbs).
+    """
+    mercado: TipoMercado = TipoMercado.NACIONAL
+    cantidad_rpc_granel: int  # unidades de RPC a granel a consumir
+    produccion: list[dict]  # [{"presentacion": "rpc_18", "talla": "140", "cantidad": 10}, ...]
+    numero_empacador: str = "EMP-01"
+    notas: str | None = None
+
+
+class ConvertirGranelResponse(BaseModel):
+    message: str
+    empaque_id: int | None = None
+    rpc_granel_consumido: int
+    produccion: list[dict]

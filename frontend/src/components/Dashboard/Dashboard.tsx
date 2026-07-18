@@ -90,10 +90,23 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
               <strong>Bins en Desverdizado:</strong> {visibleDesverdizado.reduce((sum, d) => sum + (d.cantidad_bins_disponibles || 0), 0)} bins
             </div>
             <div style={{background: '#fefce8', padding: '12px 20px', borderRadius: '8px'}}>
-              <strong>Total Final Limón:</strong>{' '}
-              RPC: {visibleLimonFinal.filter(i => i.presentacion?.startsWith('rpc_')).reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)}{' '}
-              | Cajas: {visibleLimonFinal.filter(i => i.presentacion === 'caja_40lbs').reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)}{' '}
-              | Bins: {visibleLimonFinal.filter(i => i.presentacion === 'bins_jugo').reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)}
+              <strong>Total Limón:</strong>{' '}
+              Granel:{' '}
+              {visibleLimonFinal
+                .filter((i) => i.presentacion === 'rpc_granel')
+                .reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)}{' '}
+              | RPC:{' '}
+              {visibleLimonFinal
+                .filter((i) => i.presentacion === 'rpc_12' || i.presentacion === 'rpc_18')
+                .reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)}{' '}
+              | Cajas:{' '}
+              {visibleLimonFinal
+                .filter((i) => i.presentacion === 'caja_40lbs')
+                .reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)}{' '}
+              | Bins jugo:{' '}
+              {visibleLimonFinal
+                .filter((i) => i.presentacion === 'bins_jugo')
+                .reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)}
             </div>
           </>
         )}
@@ -191,10 +204,18 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
                 const tallaPart = item.talla ? `#${item.talla}` : '';
                 const key = `${pres}${tallaPart}`;
                 if (!acc[key]) {
-                  const base = pres === 'rpc_12' ? 'RPC 12' :
-                               pres === 'rpc_18' ? 'RPC 18' :
-                               pres === 'caja_40lbs' ? 'Caja 40 lbs' :
-                               pres === 'bins_jugo' ? 'Bins 900kg' : pres;
+                  const base =
+                    pres === 'rpc_granel'
+                      ? 'RPC a granel (22 kg)'
+                      : pres === 'rpc_12'
+                        ? 'RPC 12'
+                        : pres === 'rpc_18'
+                          ? 'RPC 18'
+                          : pres === 'caja_40lbs'
+                            ? 'Caja 40 lbs'
+                            : pres === 'bins_jugo'
+                              ? 'Bins 900kg'
+                              : pres;
                   acc[key] = { label: `${base} ${tallaPart}`.trim(), total: 0 };
                 }
                 acc[key].total += (item.cantidad_stock || 0);

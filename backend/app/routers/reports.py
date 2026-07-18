@@ -31,6 +31,7 @@ KG_POR_PRESENTACION = {
     "rpc_12": 12,
     "rpc_18": 18,
     "caja_40lbs": 18,
+    "rpc_granel": 22,  # RPC a granel (intermedio 1ra, pre-embolse)
     "bins_jugo": 900,
 }
 CAJAS_POR_PARRILLA_RPC = 45  # RPC 12 y 18
@@ -78,6 +79,9 @@ def _calcular_rendimiento(
         if pres == "bins_jugo":
             kg_segunda += kg
             bins_jugo += cant
+        elif pres == "rpc_granel":
+            # Intermedio 1ra (aún no embolsado); cuenta en 1ra pero no en RPC final/cartón
+            kg_primera += kg
         elif pres in ("rpc_12", "rpc_18"):
             kg_primera += kg
             kg_rpc += kg
@@ -252,6 +256,10 @@ def _producto_es_limon(producto) -> bool:
         return False
     val = getattr(producto, "value", None) or str(producto)
     return str(val).lower() in ("limon_amarillo", "producto.limon_amarillo")
+
+
+def _es_conversion_granel(detalle: dict | None) -> bool:
+    return bool(detalle and detalle.get("tipo") == "conversion_rpc_granel")
 
 
 def _extract_empaque_detalle(e: Empaque) -> tuple[list, list, bool]:
@@ -467,6 +475,41 @@ def _iter_produccion_empaques(empaques: list):
         consumos, produccion, anulado = _extract_empaque_detalle(e)
         if anulado:
             continue
+        detalle = _as_dict(e.detalle_corrida)
+        # Conversión: reasigna granel → final (sin bins de campo).
+        # Restar granel consumido y sumar producto final para no doblar kg 1ra.
+        if _es_conversion_granel(detalle):
+            for g in detalle.get("consumos_granel") or []:
+                cant_g = int(g.get("cantidad") or 0)
+                if cant_g <= 0:
+                    continue
+                kg_g = KG_POR_PRESENTACION.get("rpc_granel", 22) * cant_g
+                key_g = ("rpc_granel", None)
+                agg_pres[key_g]["cajas"] -= cant_g
+                agg_pres[key_g]["kg"] -= kg_g
+                kg1_total -= kg_g
+            for p in produccion or []:
+                pres = p.get("presentacion") or ""
+                cant = int(p.get("cantidad") or 0)
+                if cant <= 0 or not pres:
+                    continue
+                talla = p.get("talla") if pres not in ("bins_jugo", "rpc_granel") else None
+                if talla is not None:
+                    talla = str(talla)
+                kg_unit = KG_POR_PRESENTACION.get(pres, 0)
+                kg = kg_unit * cant
+                key = (pres, talla)
+                agg_pres[key]["cajas"] += cant
+                agg_pres[key]["kg"] += kg
+                if pres == "bins_jugo":
+                    kg2_total += kg
+                else:
+                    kg1_total += kg
+                    if talla:
+                        kg_por_talla[talla] += kg
+                        cajas_por_talla[talla] += cant
+            continue
+
         bins = sum(int(c.get("bins") or 0) for c in consumos)
         if bins <= 0 and not produccion:
             continue
@@ -476,7 +519,7 @@ def _iter_produccion_empaques(empaques: list):
             cant = int(p.get("cantidad") or 0)
             if cant <= 0 or not pres:
                 continue
-            talla = p.get("talla") if pres != "bins_jugo" else None
+            talla = p.get("talla") if pres not in ("bins_jugo", "rpc_granel") else None
             if talla is not None:
                 talla = str(talla)
             kg_unit = KG_POR_PRESENTACION.get(pres, 0)
@@ -688,6 +731,9 @@ def rendimientos_limon(
             continue
 
         detalle = _as_dict(e.detalle_corrida)
+        # Conversión granel→final no es corrida de campo (evita doble conteo de 1ra)
+        if _es_conversion_granel(detalle):
+            continue
         lotes = None
         if detalle:
             lotes = detalle.get("lotes_resumen")
