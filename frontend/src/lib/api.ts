@@ -486,6 +486,18 @@ export async function anularEmpaque(
   return res.data;
 }
 
+/** Borra permanentemente un empaque ya anulado (no toca inventarios) */
+export async function eliminarEmpaqueAnulado(
+  token: string,
+  empaqueId: number
+): Promise<{ message: string; id: number }> {
+  const res = await api.delete<{ message: string; id: number }>(
+    `/api/empaque/${empaqueId}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
 /** Convierte RPC a granel (por talla) → RPC 12/18 o cartón */
 export async function convertirRpcGranel(
   token: string,

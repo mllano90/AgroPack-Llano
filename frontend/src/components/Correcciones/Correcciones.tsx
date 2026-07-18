@@ -2,6 +2,7 @@ import { useState, useEffect, type CSSProperties } from 'react';
 import {
   getEmpaquesAdmin,
   anularEmpaque,
+  eliminarEmpaqueAnulado,
   editarEmpaqueCompleto,
   getDesverdizadoAdmin,
   eliminarDesverdizado,
@@ -221,6 +222,36 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
+  const handleBorrarAnulado = async (empaqueId?: number) => {
+    const id = empaqueId ?? selectedId;
+    if (!id) return;
+    if (
+      !confirm(
+        `¿BORRAR permanentemente empaque anulado #${id}?\n\n` +
+          `Se elimina del historial. No cambia inventarios (ya se revirtieron al anular).\n` +
+          `Esta acción no se puede deshacer.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const res = await eliminarEmpaqueAnulado(token, id);
+      setOkMsg(res.message || `Empaque #${id} borrado`);
+      if (selectedId === id) {
+        setSelectedId(null);
+      }
+      await load();
+      onCorregido?.();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'No se pudo borrar el empaque');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const openEditDesverdizado = (d: DesverdizadoAdminItem) => {
     setEditDesv(d);
     setEditLote(d.lote || '');
@@ -268,7 +299,19 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   const handleHistorialEliminar = async (m: HistorialMovimiento) => {
     if (m.modulo === 'empaque') {
-      if (!confirm(`¿Anular empaque #${m.id}? Revierte inventario de limón.`)) return;
+      const yaAnulado = Boolean(m.meta?.anulado);
+      if (yaAnulado) {
+        await handleBorrarAnulado(m.id);
+        return;
+      }
+      if (
+        !confirm(
+          `¿Anular empaque #${m.id}?\n\nRevierte inventario de limón.\n` +
+            `Después podrás borrarlo del historial si ya no lo necesitas.`
+        )
+      ) {
+        return;
+      }
       setBusy(true);
       setError('');
       setOkMsg('');
@@ -754,7 +797,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                               onClick={() => handleHistorialEliminar(m)}
                               style={{
                                 padding: '5px 10px',
-                                background: '#dc2626',
+                                background: m.meta?.anulado ? '#7f1d1d' : '#dc2626',
                                 color: 'white',
                                 border: 'none',
                                 borderRadius: 5,
@@ -763,7 +806,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                                 fontWeight: 600,
                               }}
                             >
-                              Eliminar
+                              {m.modulo === 'empaque' && m.meta?.anulado
+                                ? 'Borrar'
+                                : m.modulo === 'empaque'
+                                  ? 'Anular'
+                                  : 'Eliminar'}
                             </button>
                           )}
                           {!m.puede_editar && !m.puede_eliminar && (
@@ -780,7 +827,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           <p style={{ fontSize: 12, color: '#64748b', marginTop: 12 }}>
             <strong>Recepción:</strong> Editar = lote, bins y fecha de corte (actualiza desverdizado).
             Eliminar = borra recepción y el inventario de desverdizado ligado.{' '}
-            <strong>Empaque:</strong> Eliminar = anular (revierte inventarios).{' '}
+            <strong>Empaque:</strong> Anular = revierte inventarios; si ya está anulado, Borrar =
+            lo quita del historial.{' '}
             <strong>Embarque:</strong> devuelve stock al inventario final.
           </p>
         </div>
@@ -869,13 +917,35 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   Editar empaque #{selected.id} — {labelProducto(selected.producto)}
                 </h3>
                 {anulado && (
-                  <p style={{ color: '#b91c1c', fontWeight: 600 }}>
-                    Anulado
-                    {selected.detalle_corrida?.anulado_por
-                      ? ` por ${selected.detalle_corrida.anulado_por}`
-                      : ''}{' '}
-                    — no editable
-                  </p>
+                  <div style={{ marginTop: 8 }}>
+                    <p style={{ color: '#b91c1c', fontWeight: 600, marginBottom: 12 }}>
+                      Anulado
+                      {selected.detalle_corrida?.anulado_por
+                        ? ` por ${selected.detalle_corrida.anulado_por}`
+                        : ''}{' '}
+                      — no editable
+                    </p>
+                    <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
+                      El inventario ya se revirtió al anular. Puedes borrar este registro del
+                      historial si ya no lo necesitas ver.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => handleBorrarAnulado(selected.id)}
+                      style={{
+                        padding: '12px 20px',
+                        background: '#7f1d1d',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: 6,
+                        cursor: busy ? 'wait' : 'pointer',
+                        fontWeight: 700,
+                      }}
+                    >
+                      Borrar del historial
+                    </button>
+                  </div>
                 )}
 
                 {selected.producto === 'limon_amarillo' && !anulado && (

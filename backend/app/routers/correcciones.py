@@ -435,8 +435,9 @@ def historial_movimientos(
                     "puede_editar": not anulado and (
                         prod == "limon_amarillo" or "limon" in prod.lower()
                     ),
-                    "puede_eliminar": not anulado and (
-                        prod == "limon_amarillo" or "limon" in prod.lower()
+                    # OK limón → anular; anulado → borrar permanente del historial
+                    "puede_eliminar": (
+                        prod == "limon_amarillo" or "limon" in prod.lower() or anulado
                     ),
                     "meta": {
                         "anulado": anulado,

@@ -9,6 +9,7 @@ from app.schemas.empaque import (
     EmpaqueResponse,
     AgregarConsumoRequest,
     AnularEmpaqueResponse,
+    EliminarEmpaqueResponse,
     EmpaqueEditRequest,
     ConvertirGranelRequest,
     ConvertirGranelResponse,
@@ -620,6 +621,14 @@ def anular_empaque(
 
     _ajustar_inventario_final(db, emp.producto, emp.mercado, produccion, signo=-1)
 
+    # Conversión granel→final: devolver el granel consumido
+    if detalle.get("tipo") == "conversion_rpc_granel":
+        consumos_g = detalle.get("consumos_granel") or []
+        if consumos_g:
+            _ajustar_inventario_final(
+                db, emp.producto, emp.mercado, consumos_g, signo=+1
+            )
+
     detalle = {
         **detalle,
         "consumos": consumos,
@@ -634,6 +643,38 @@ def anular_empaque(
     _renumerar_tandas(db)
     db.commit()
     return AnularEmpaqueResponse(message="Empaque anulado; inventario revertido", id=empaque_id)
+
+
+@router.delete("/{empaque_id}", response_model=EliminarEmpaqueResponse)
+def eliminar_empaque_anulado(
+    empaque_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Borra permanentemente un empaque ya anulado (limpia historial).
+    No toca inventarios: al anular ya se revirtieron.
+    """
+    emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empaque no encontrado")
+
+    detalle = emp.detalle_corrida if isinstance(emp.detalle_corrida, dict) else {}
+    if not detalle.get("anulado"):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Solo se pueden borrar empaques ANULADOS. "
+                "Primero anula el empaque (revierte inventario) y luego bórralo."
+            ),
+        )
+
+    db.delete(emp)
+    db.commit()
+    return EliminarEmpaqueResponse(
+        message=f"Empaque #{empaque_id} borrado del historial",
+        id=empaque_id,
+    )
 
 
 def _norm_consumos_granel(raw: list | None) -> list[dict]:

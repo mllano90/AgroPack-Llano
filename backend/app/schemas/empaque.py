@@ -64,6 +64,11 @@ class AnularEmpaqueResponse(BaseModel):
     id: int
 
 
+class EliminarEmpaqueResponse(BaseModel):
+    message: str
+    id: int
+
+
 class EmpaqueEditRequest(BaseModel):
     """
     Edición completa de empaque limón (admin).
