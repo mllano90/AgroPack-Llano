@@ -24,7 +24,7 @@ from app.models.inventory import (
     InventarioFinal,
     InventarioCampo,
 )
-from app.utils.tandas import reasignar_numeros_tanda, asignar_numero_tanda_nueva
+
 
 router = APIRouter(tags=["Correcciones"])
 
@@ -216,11 +216,6 @@ def sincronizar_recepcion_desverdizado(db: Session) -> dict:
         d.recepcion_id = r.id
         creadas += 1
 
-    # Solo asignar número a tandas activas sin número (no reordenar)
-    for d in desvs:
-        if (d.cantidad_bins or 0) > 0 and (d.estado or "") != "eliminado":
-            asignar_numero_tanda_nueva(db, d)
-
     db.commit()
     return {
         "desverdizados": len(desvs),
@@ -330,11 +325,6 @@ def editar_recepcion_limon(
                 if body.recalcular_tentativa:
                     d.fecha_tentativa_salida = fr + timedelta(days=DIAS_DESVERDIZADO)
 
-    # Si se reactivó stock sin número, asignar sin renumerar el resto
-    for d in desvs:
-        if (d.cantidad_bins or 0) > 0 and d.numero_tanda is None:
-            asignar_numero_tanda_nueva(db, d)
-
     db.commit()
     db.refresh(r)
     desvs = (
@@ -342,7 +332,6 @@ def editar_recepcion_limon(
         .filter(InventarioDesverdizado.recepcion_id == r.id)
         .all()
     )
-    d0 = desvs[0] if desvs else None
     nums = _numeros_recepcion_cronologicos(db)
     n_rec = nums.get(r.id) or r.id
     return {
@@ -353,7 +342,6 @@ def editar_recepcion_limon(
         "cantidad_bins": r.cantidad_bins,
         "fecha_corte": str(r.fecha_corte) if r.fecha_corte else None,
         "desverdizado_ids": [d.id for d in desvs],
-        "numero_tanda": d0.numero_tanda if d0 else None,
         "bins_en_camara": sum(int(d.cantidad_bins or 0) for d in desvs),
     }
 
@@ -403,7 +391,6 @@ def historial_movimientos(
                     bins_rec = sum(int(d.cantidad_bins or 0) for d in desvs)
                 fecha_corte = _fecha_corte_efectiva(r, desvs)
                 bins_ahora = sum(int(d.cantidad_bins or 0) for d in desvs) if desvs else 0
-                tanda = desvs[0].numero_tanda if desvs else None
                 desv_ids = [d.id for d in desvs]
                 n_rec = nums_crono.get(r.id) or r.id
                 resumen = (
@@ -414,7 +401,6 @@ def historial_movimientos(
                     f"Fecha corte: {fecha_corte} · "
                     f"Bins registrados: {bins_rec} · "
                     f"Bins en desverdizado ahora: {bins_ahora} · "
-                    f"Tanda #{tanda or '—'} · "
                     f"Inv.desv. ID: {', '.join(map(str, desv_ids)) if desv_ids else '—'} · "
                     f"ID interno: {r.id}"
                 )
@@ -425,7 +411,6 @@ def historial_movimientos(
                         "fecha": str(fecha_corte) if fecha_corte else None,
                         "hora": str(r.hora) if r.hora else None,
                         "titulo": f"Recepción #{n_rec}"
-                        + (f" · Tanda #{tanda}" if tanda else "")
                         + (f" · {lote}" if lote else ""),
                         "resumen": resumen,
                         "detalle": detalle,
@@ -439,8 +424,6 @@ def historial_movimientos(
                             "fecha_recepcion": str(fecha_corte) if fecha_corte else None,
                             "bins_desverdizado_actual": bins_ahora,
                             "desverdizado_ids": desv_ids,
-                            "numero_tanda": tanda,
-                            "tandas": [tanda] if tanda else [],
                             "numero_recepcion": n_rec,
                             "id_interno": r.id,
                         },
@@ -666,8 +649,6 @@ def eliminar_recepcion(
                 bins_borrados += int(d.cantidad_bins or 0)
                 db.delete(d)
                 desv_borrados += 1
-            if desv_borrados:
-                reasignar_numeros_tanda(db)
 
     nums = _numeros_recepcion_cronologicos(db)
     n_rec = nums.get(recepcion_id) or recepcion_id

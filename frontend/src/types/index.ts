@@ -39,7 +39,6 @@ export interface DesverdizadoItem {
   fecha_recepcion: string;
   fecha_tentativa_salida: string;
   estado: string;
-  numero_tanda?: number | null;
 }
 
 // --- Clientes ---

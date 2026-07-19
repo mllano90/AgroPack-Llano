@@ -128,6 +128,7 @@ export default function Empaque({
                   d.estado !== 'empaquetado'
               )
               .sort((a: any, b: any) => {
+                // Orden por fecha de corte (más antiguo primero)
                 const fa = String(a.fecha_recepcion || '');
                 const fb = String(b.fecha_recepcion || '');
                 if (fa !== fb) return fa.localeCompare(fb);
@@ -618,10 +619,6 @@ export default function Empaque({
                     }}
                   >
                     <span>
-                      <strong style={{ color: '#15803d' }}>
-                        Tanda #{d.numero_tanda ?? '—'}
-                      </strong>
-                      {' · '}
                       Lote: <strong>{d.lote}</strong> | Bins disp:{' '}
                       {d.cantidad_bins_disponibles} | Corte:{' '}
                       {formatFechaCorta(d.fecha_recepcion)}

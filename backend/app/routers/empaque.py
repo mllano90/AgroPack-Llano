@@ -61,7 +61,6 @@ def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
     """
     Descuenta bins de un lote en desverdizado.
     Match flexible de lote (strip / case); FIFO por fecha de corte.
-    Conserva numero_tanda al vaciar la tanda.
     """
     lote_n = _norm_lote(lote)
     bins = int(bins or 0)
@@ -70,7 +69,6 @@ def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
 
     candidatos = _match_desverdizado_por_lote(db, lote_n)
     desvs = [d for d in candidatos if int(d.cantidad_bins or 0) > 0]
-    # Preferir las que aún tienen stock, más antiguas primero (ya ordenadas)
     restante = bins
     disp = sum(int(d.cantidad_bins or 0) for d in desvs)
     if disp < bins:
@@ -91,7 +89,6 @@ def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
         d.cantidad_bins = hay - usar
         restante -= usar
         if d.cantidad_bins == 0:
-            # Conservar numero_tanda original
             d.estado = "empaquetado"
         elif (d.estado or "") == "en_desverdizado":
             d.estado = "listo_empaque"
@@ -133,21 +130,17 @@ def _agregar_consumos_desverdizado(db: Session, consumos: list | None) -> list[d
 def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     """
     Devuelve bins a desverdizado al anular/editar empaque.
-    Prefiere la fila empaquetada del mismo lote (conserva numero_tanda original).
-    NUNCA reasigna un número nuevo a una tanda que ya tenía numero_tanda.
+    Prefiere la fila empaquetada del mismo lote; si no hay, crea registro.
     """
     bins = int(bins or 0)
     lote_n = _norm_lote(lote)
     if bins <= 0 or not lote_n:
         return
 
-    from app.utils.tandas import asignar_numero_tanda_nueva
-
     candidatos = _match_desverdizado_por_lote(db, lote_n)
-    # Preferir: empaquetado con número (tanda original) → empaquetado → con stock → resto
+
     def sort_key(r):
         est = (r.estado or "").lower()
-        tiene_num = 0 if r.numero_tanda is not None else 1
         if est == "empaquetado":
             prio = 0
         elif est == "eliminado":
@@ -156,7 +149,7 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
             prio = 1
         else:
             prio = 2
-        return (prio, tiene_num, -(r.id or 0))
+        return (prio, -(r.id or 0))
 
     candidatos = sorted(candidatos, key=sort_key)
     des = candidatos[0] if candidatos else None
@@ -168,10 +161,6 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
             des.estado = "listo_empaque"
         elif (des.estado or "").lower() not in ("en_desverdizado", "listo_empaque"):
             des.estado = "listo_empaque"
-        # Conservar numero_tanda original; solo si NUNCA tuvo, asignar uno
-        # (caso raro: fila huérfana sin número)
-        if des.numero_tanda is None:
-            asignar_numero_tanda_nueva(db, des)
         db.flush()
         return
 
@@ -189,8 +178,6 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     )
     db.add(nuevo)
     db.flush()
-    # Solo filas realmente nuevas (sin historial de tanda) reciben número
-    asignar_numero_tanda_nueva(db, nuevo)
 
 
 def _talla_for_pres(pres: str | None, talla) -> str | None:
@@ -628,7 +615,6 @@ def editar_empaque_completo(
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
-    # No renumerar tandas al editar empaque
     db.commit()
     db.refresh(emp)
     return emp
@@ -674,7 +660,6 @@ def agregar_consumo_lote(
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
-    # No renumerar tandas al corregir consumos
     db.commit()
     db.refresh(emp)
     return emp

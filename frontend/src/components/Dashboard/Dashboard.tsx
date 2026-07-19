@@ -27,9 +27,7 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
     .filter((d) => d.cantidad_bins_disponibles > 0)
     .slice()
     .sort((a, b) => {
-      const ta = a.numero_tanda ?? 9999;
-      const tb = b.numero_tanda ?? 9999;
-      if (ta !== tb) return ta - tb;
+      // Orden original: fecha de corte ASC, luego lote
       const fa = String(a.fecha_recepcion || '');
       const fb = String(b.fecha_recepcion || '');
       if (fa !== fb) return fa.localeCompare(fb);
@@ -180,13 +178,13 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
               {visibleDesverdizado.map((d, idx) => (
                 <div key={idx} style={{padding: '10px 14px', border: '1px solid #e2e8f0', borderRadius: '6px', background: '#f8fafc'}}>
                   <div>
-                    <strong>
-                      Tanda #{d.numero_tanda ?? '—'} · Lote: {d.lote}
-                    </strong>{' '}
-                    — {d.cantidad_bins_disponibles} bins disponibles
+                    <strong>Lote: {d.lote}</strong> — {d.cantidad_bins_disponibles} bins
+                    disponibles
                   </div>
                   <div style={{fontSize: '13px', color: '#475569'}}>
-                    Corte: {formatFechaCorta(d.fecha_recepcion)} | Tentativa salida: {formatFechaCorta(d.fecha_tentativa_salida)} | Estado: <strong>{d.estado}</strong>
+                    Corte: {formatFechaCorta(d.fecha_recepcion)} | Tentativa salida:{' '}
+                    {formatFechaCorta(d.fecha_tentativa_salida)} | Estado:{' '}
+                    <strong>{d.estado}</strong>
                   </div>
                 </div>
               ))}

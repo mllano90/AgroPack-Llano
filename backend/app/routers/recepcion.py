@@ -8,7 +8,7 @@ from app.schemas.recepcion import RecepcionCampoCreate, RecepcionCampoResponse
 from app.models.inventory import RecepcionCampo, InventarioCampo, InventarioFinal, InventarioDesverdizado
 from app.models.enums import Producto
 from app.core.constants import DIAS_DESVERDIZADO
-from app.utils.tandas import reasignar_numeros_tanda, asignar_numero_tanda_nueva
+
 from datetime import datetime, timedelta, date
 
 router = APIRouter(tags=["Recepción"])
@@ -134,9 +134,6 @@ def crear_recepcion(
             usuario_id=current_user.id if hasattr(current_user, 'id') else None
         )
         db.add(inv_desv)
-        db.flush()
-        # Solo asignar número nuevo; no renumerar el resto
-        asignar_numero_tanda_nueva(db, inv_desv)
     
     db.commit()
     db.refresh(nueva_recepcion)
@@ -149,10 +146,7 @@ def listar_recepciones(db: Session = Depends(get_db)):
 
 @router.get("/desverdizado", response_model=list[dict])
 def listar_desverdizado(db: Session = Depends(get_db)):
-    """Lista el inventario actual en desverdizado para selección en empaque.
-    Orden: fecha de corte/recepción (más antiguo primero), luego id.
-    No renumeran tandas aquí (solo al eliminar en correcciones).
-    """
+    """Lista inventario en desverdizado. Orden: fecha de corte ASC, luego id."""
     items = (
         db.query(InventarioDesverdizado)
         .filter(
@@ -175,7 +169,6 @@ def listar_desverdizado(db: Session = Depends(get_db)):
             "fecha_recepcion": str(d.fecha_recepcion),
             "fecha_tentativa_salida": str(d.fecha_tentativa_salida),
             "estado": d.estado,
-            "numero_tanda": d.numero_tanda,
         }
         for d in items
     ]
@@ -225,7 +218,6 @@ def listar_desverdizado_admin(
             "fecha_recepcion": str(d.fecha_recepcion) if d.fecha_recepcion else None,
             "fecha_tentativa_salida": str(d.fecha_tentativa_salida) if d.fecha_tentativa_salida else None,
             "estado": d.estado,
-            "numero_tanda": d.numero_tanda,
         }
         for d in items
     ]
@@ -240,12 +232,10 @@ def _purge_desverdizado_rows(db: Session, rows: list) -> tuple[int, int, list[in
     for r in rows:
         r.cantidad_bins = 0
         r.estado = "eliminado"
-        r.numero_tanda = None
     db.flush()
     for r in rows:
         db.delete(r)
     db.flush()
-    reasignar_numeros_tanda(db)
     db.commit()
     return len(ids), bins_total, ids
 
@@ -302,11 +292,7 @@ def editar_desverdizado_admin(
         des.estado = est
 
     if des.cantidad_bins == 0 and des.estado not in ("empaquetado", "eliminado"):
-        # 0 bins: no listar en empaque; CONSERVAR numero_tanda
         des.estado = "empaquetado"
-    elif (des.cantidad_bins or 0) > 0 and des.numero_tanda is None:
-        # Solo si nunca tuvo número (no es rehabilitación)
-        asignar_numero_tanda_nueva(db, des)
 
     db.commit()
     db.refresh(des)
@@ -318,7 +304,6 @@ def editar_desverdizado_admin(
         "fecha_recepcion": str(des.fecha_recepcion) if des.fecha_recepcion else None,
         "fecha_tentativa_salida": str(des.fecha_tentativa_salida) if des.fecha_tentativa_salida else None,
         "estado": des.estado,
-        "numero_tanda": des.numero_tanda,
     }
 
 
