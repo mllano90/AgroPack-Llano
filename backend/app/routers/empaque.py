@@ -54,12 +54,6 @@ def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
         )
 
 
-def _renumerar_tandas(db: Session) -> None:
-    from app.utils.tandas import reasignar_numeros_tanda
-
-    reasignar_numeros_tanda(db)
-
-
 def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     """Devuelve bins a un lote (anular empaque)."""
     if bins <= 0 or not lote:
@@ -75,30 +69,44 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     )
     if des:
         des.cantidad_bins = (des.cantidad_bins or 0) + bins
-        if des.estado == "empaquetado":
+        if des.estado in ("empaquetado", "eliminado"):
             des.estado = "listo_empaque"
+        # Si reaparece stock y no tiene número, asignar sin renumerar el resto
+        if des.numero_tanda is None:
+            from app.utils.tandas import asignar_numero_tanda_nueva
+
+            asignar_numero_tanda_nueva(db, des)
     else:
         from datetime import date, timedelta
         from app.core.constants import DIAS_DESVERDIZADO
+        from app.utils.tandas import asignar_numero_tanda_nueva
 
         hoy = date.today()
-        db.add(
-            InventarioDesverdizado(
-                producto=Producto.LIMON_AMARILLO,
-                cantidad_bins=bins,
-                lote=lote,
-                fecha_recepcion=hoy,
-                fecha_tentativa_salida=hoy + timedelta(days=DIAS_DESVERDIZADO),
-                estado="listo_empaque",
-            )
+        nuevo = InventarioDesverdizado(
+            producto=Producto.LIMON_AMARILLO,
+            cantidad_bins=bins,
+            lote=lote,
+            fecha_recepcion=hoy,
+            fecha_tentativa_salida=hoy + timedelta(days=DIAS_DESVERDIZADO),
+            estado="listo_empaque",
         )
+        db.add(nuevo)
+        db.flush()
+        asignar_numero_tanda_nueva(db, nuevo)
 
 
 def _talla_for_pres(pres: str | None, talla) -> str | None:
     """bins_jugo no usa talla. rpc_granel y finales sí (inventario por tamaño)."""
     if not pres or pres == "bins_jugo":
         return None
-    return str(talla) if talla is not None and str(talla).strip() != "" else None
+    if talla is None:
+        return None
+    s = str(talla).strip()
+    if not s or s.lower() in ("none", "null"):
+        return None
+    if s.startswith("#"):
+        s = s[1:].strip()
+    return s or None
 
 
 def _calidad_pres(pres: str | None) -> str:
@@ -109,33 +117,64 @@ def _calidad_pres(pres: str | None) -> str:
     return "primera"
 
 
+def _extra_dict(inv: InventarioFinal) -> dict:
+    extra = inv.atributos_extra
+    return extra if isinstance(extra, dict) else {}
+
+
+def _find_inv_final_limon(
+    db: Session,
+    pres: str,
+    talla_val: str | None,
+    mercado=None,
+) -> InventarioFinal | None:
+    """Match robusto por presentación + talla (normaliza int/str). Prefiere mercado."""
+    pres = (pres or "").strip()
+    rows: list[InventarioFinal] = []
+    for i in db.query(InventarioFinal).all():
+        extra = _extra_dict(i)
+        if (extra.get("presentacion") or "").strip() != pres:
+            continue
+        if _talla_for_pres(pres, extra.get("talla")) != talla_val:
+            continue
+        rows.append(i)
+    if not rows:
+        return None
+    if mercado is not None:
+        mval = str(getattr(mercado, "value", mercado))
+        for r in rows:
+            if str(getattr(r.mercado, "value", r.mercado)) == mval:
+                return r
+    # preferir con stock > 0
+    for r in rows:
+        if (r.cantidad_stock or 0) > 0:
+            return r
+    return rows[0]
+
+
 def _ajustar_inventario_final(db: Session, producto: Producto, mercado, produccion: list, signo: int) -> None:
     """suma (signo=+1) o resta (signo=-1) producción en inventario final."""
     for linea in produccion or []:
-        pres = linea.get("presentacion")
+        pres = (linea.get("presentacion") or "").strip()
         cant = int(linea.get("cantidad") or 0)
         talla_val = _talla_for_pres(pres, linea.get("talla"))
         if not pres or cant <= 0:
             continue
         delta = cant * signo
-        all_for_product = db.query(InventarioFinal).filter(InventarioFinal.producto == producto).all()
-        inv_final = next(
-            (
-                i
-                for i in all_for_product
-                if (i.atributos_extra or {}).get("presentacion") == pres
-                and (i.atributos_extra or {}).get("talla") == talla_val
-            ),
-            None,
-        )
+        inv_final = _find_inv_final_limon(db, pres, talla_val, mercado=mercado)
         if inv_final:
             nuevo = (inv_final.cantidad_stock or 0) + delta
             if nuevo < 0:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"No se puede anular: stock insuficiente de {pres} talla {talla_val} (hay {inv_final.cantidad_stock})",
+                    detail=(
+                        f"Stock insuficiente de {pres}"
+                        + (f" talla {talla_val}" if talla_val else "")
+                        + f" (hay {inv_final.cantidad_stock}, delta {delta})"
+                    ),
                 )
             inv_final.cantidad_stock = nuevo
+            inv_final.fecha_actualizacion = datetime.utcnow()
         elif signo > 0:
             calidad = _calidad_pres(pres)
             extra = {"presentacion": pres, "calidad": calidad}
@@ -143,19 +182,61 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 extra["talla"] = talla_val
             db.add(
                 InventarioFinal(
-                    producto=producto,
+                    producto=producto if producto else Producto.LIMON_AMARILLO,
                     variedad=None,
                     tipo_cultivo=None,
                     mercado=mercado,
                     cantidad_stock=delta,
                     atributos_extra=extra,
+                    fecha_actualizacion=datetime.utcnow(),
                 )
             )
         else:
             raise HTTPException(
                 status_code=400,
-                detail=f"No se puede anular: no existe inventario final de {pres} talla {talla_val}",
+                detail=(
+                    f"No existe inventario final de {pres}"
+                    + (f" talla {talla_val}" if talla_val else "")
+                    + " para restar"
+                ),
             )
+
+
+def _netear_produccion(old_prod: list, new_prod: list) -> list[dict]:
+    """
+    Calcula deltas netos por (presentacion, talla) para aplicar un solo ajuste
+    (evita fallar por stock intermedio al restar todo y sumar de nuevo).
+    Returns list of {presentacion, talla, cantidad, signo} with cantidad > 0.
+    """
+    from collections import defaultdict
+
+    acc: dict[tuple[str, str | None], int] = defaultdict(int)
+    for p in old_prod or []:
+        pres = (p.get("presentacion") or "").strip()
+        if not pres:
+            continue
+        talla = _talla_for_pres(pres, p.get("talla"))
+        acc[(pres, talla)] -= int(p.get("cantidad") or 0)
+    for p in new_prod or []:
+        pres = (p.get("presentacion") or "").strip()
+        if not pres:
+            continue
+        talla = _talla_for_pres(pres, p.get("talla"))
+        acc[(pres, talla)] += int(p.get("cantidad") or 0)
+
+    out: list[dict] = []
+    for (pres, talla), delta in acc.items():
+        if delta == 0:
+            continue
+        out.append(
+            {
+                "presentacion": pres,
+                "talla": talla,
+                "cantidad": abs(delta),
+                "_signo": 1 if delta > 0 else -1,
+            }
+        )
+    return out
 
 @router.post("/", response_model=EmpaqueResponse)
 def crear_empaque(
@@ -215,94 +296,28 @@ def crear_empaque(
             if restante > 0:
                 raise HTTPException(status_code=400, detail=f"No hay suficientes bins en desverdizado para lote {lote or 'cualquiera'}")
 
-        # Renumerar tandas (filas en 0 bins salen de la secuencia)
-        from app.utils.tandas import reasignar_numeros_tanda
-
-        reasignar_numeros_tanda(db)
+        # NO renumerar tandas al empacar (solo al eliminar tandas en correcciones)
         
         # Producir a inventario final por presentación (cantidades separadas) + talla para 1ra
-        # Use structured produccion if provided (new line-based UI), else legacy flat counts + single talla
         lineas = empaque.produccion or []
-        if lineas:
-            for linea in lineas:
-                pres = linea.get("presentacion")
-                cant = linea.get("cantidad", 0)
-                talla_val = _talla_for_pres(pres, linea.get("talla"))
-                if cant <= 0 or not pres:
-                    continue
-                calidad = _calidad_pres(pres)
-                all_for_product = db.query(InventarioFinal).filter(
-                    InventarioFinal.producto == empaque.producto
-                ).all()
-                inv_final = next(
-                    (i for i in all_for_product 
-                     if (i.atributos_extra or {}).get("presentacion") == pres 
-                     and (i.atributos_extra or {}).get("talla") == talla_val),
-                    None
-                )
-                if inv_final:
-                    inv_final.cantidad_stock += cant
-                    extra = dict(inv_final.atributos_extra or {})
-                    extra["calidad"] = calidad
-                    if talla_val:
-                        extra["talla"] = talla_val
-                    inv_final.atributos_extra = extra
-                else:
-                    extra = {"presentacion": pres, "calidad": calidad}
-                    if talla_val:
-                        extra["talla"] = talla_val
-                    inv_final = InventarioFinal(
-                        producto=empaque.producto,
-                        variedad=None,
-                        tipo_cultivo=None,
-                        mercado=empaque.mercado,
-                        cantidad_stock=cant,
-                        atributos_extra=extra
-                    )
-                    db.add(inv_final)
-        else:
-            # legacy path
-            talla = getattr(empaque, 'talla', None)
-            presentaciones = [
+        if not lineas:
+            talla = getattr(empaque, "talla", None)
+            lineas = []
+            for pres, cant in [
                 ("rpc_12", empaque.cantidad_rpc12),
                 ("rpc_18", empaque.cantidad_rpc18),
                 ("caja_40lbs", empaque.cantidad_caja40lbs),
                 ("bins_jugo", empaque.cantidad_bins_jugo),
-            ]
-            for pres, cant in presentaciones:
-                if cant <= 0:
-                    continue
-                calidad = _calidad_pres(pres)
-                talla_val = _talla_for_pres(pres, talla)
-                all_for_product = db.query(InventarioFinal).filter(
-                    InventarioFinal.producto == empaque.producto
-                ).all()
-                inv_final = next(
-                    (i for i in all_for_product 
-                     if (i.atributos_extra or {}).get("presentacion") == pres 
-                     and (i.atributos_extra or {}).get("talla") == talla_val),
-                    None
-                )
-                if inv_final:
-                    inv_final.cantidad_stock += cant
-                    extra = dict(inv_final.atributos_extra or {})
-                    extra["calidad"] = calidad
-                    if talla_val:
-                        extra["talla"] = talla_val
-                    inv_final.atributos_extra = extra
-                else:
-                    extra = {"presentacion": pres, "calidad": calidad}
-                    if talla_val:
-                        extra["talla"] = talla_val
-                    inv_final = InventarioFinal(
-                        producto=empaque.producto,
-                        variedad=None,
-                        tipo_cultivo=None,
-                        mercado=empaque.mercado,
-                        cantidad_stock=cant,
-                        atributos_extra=extra
-                    )
-                    db.add(inv_final)
+            ]:
+                if cant and cant > 0:
+                    lineas.append({
+                        "presentacion": pres,
+                        "talla": None if pres == "bins_jugo" else talla,
+                        "cantidad": cant,
+                    })
+        _ajustar_inventario_final(
+            db, empaque.producto, empaque.mercado, lineas, signo=+1
+        )
     
     # 3. Crear el registro de empaque (auditoría)
     detalle_corrida = None
@@ -496,17 +511,20 @@ def editar_empaque_completo(
     for c in old_consumos:
         _devolver_bins_lote(db, c["lote"], c["bins"])
 
-    # 2) Restar producción vieja del inventario final
-    if old_produccion:
-        _ajustar_inventario_final(db, emp.producto, emp.mercado, old_produccion, signo=-1)
-
-    # 3) Consumir nuevos lotes
+    # 2) Consumir nuevos lotes
     for c in new_consumos:
         _consumir_bins_lote(db, c["lote"], c["bins"])
 
-    # 4) Sumar nueva producción
-    if new_produccion:
-        _ajustar_inventario_final(db, emp.producto, emp.mercado, new_produccion, signo=+1)
+    # 3) Ajuste NETO de producción (no restar todo y sumar: evita fallos de stock intermedio)
+    mercado_dest = body.mercado if body.mercado is not None else emp.mercado
+    for net in _netear_produccion(old_produccion, new_produccion):
+        _ajustar_inventario_final(
+            db,
+            emp.producto,
+            mercado_dest,
+            [{"presentacion": net["presentacion"], "talla": net["talla"], "cantidad": net["cantidad"]}],
+            signo=int(net["_signo"]),
+        )
 
     bins_total = sum(c["bins"] for c in new_consumos)
     lotes = ", ".join(f"{c['lote']}:{c['bins']}" for c in new_consumos)
@@ -534,7 +552,7 @@ def editar_empaque_completo(
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
-    _renumerar_tandas(db)
+    # No renumerar tandas al editar empaque
     db.commit()
     db.refresh(emp)
     return emp
@@ -580,7 +598,7 @@ def agregar_consumo_lote(
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
-    _renumerar_tandas(db)
+    # No renumerar tandas al corregir consumos
     db.commit()
     db.refresh(emp)
     return emp
@@ -640,7 +658,7 @@ def anular_empaque(
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
-    _renumerar_tandas(db)
+    # No renumerar tandas al anular empaque (se devuelven bins; números se mantienen)
     db.commit()
     return AnularEmpaqueResponse(message="Empaque anulado; inventario revertido", id=empaque_id)
 

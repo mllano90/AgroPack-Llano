@@ -425,9 +425,7 @@ def obtener_dashboard(db: Session = Depends(get_db)):
     embarques_recientes = db.query(Embarque).order_by(Embarque.fecha_salida.desc()).limit(10).all()
 
     # Inventario en Desverdizado (bins de limón en proceso)
-    from app.utils.tandas import reasignar_numeros_tanda
-
-    reasignar_numeros_tanda(db, commit=True)
+    # No renumerar tandas al consultar dashboard (solo al eliminar)
 
     desverdizado_raw = db.query(InventarioDesverdizado).filter(
         InventarioDesverdizado.cantidad_bins > 0,

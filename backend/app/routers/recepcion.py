@@ -8,7 +8,7 @@ from app.schemas.recepcion import RecepcionCampoCreate, RecepcionCampoResponse
 from app.models.inventory import RecepcionCampo, InventarioCampo, InventarioFinal, InventarioDesverdizado
 from app.models.enums import Producto
 from app.core.constants import DIAS_DESVERDIZADO
-from app.utils.tandas import reasignar_numeros_tanda
+from app.utils.tandas import reasignar_numeros_tanda, asignar_numero_tanda_nueva
 from datetime import datetime, timedelta, date
 
 router = APIRouter(tags=["Recepción"])
@@ -135,7 +135,8 @@ def crear_recepcion(
         )
         db.add(inv_desv)
         db.flush()
-        reasignar_numeros_tanda(db)
+        # Solo asignar número nuevo; no renumerar el resto
+        asignar_numero_tanda_nueva(db, inv_desv)
     
     db.commit()
     db.refresh(nueva_recepcion)
@@ -150,10 +151,8 @@ def listar_recepciones(db: Session = Depends(get_db)):
 def listar_desverdizado(db: Session = Depends(get_db)):
     """Lista el inventario actual en desverdizado para selección en empaque.
     Orden: fecha de corte/recepción (más antiguo primero), luego id.
+    No renumeran tandas aquí (solo al eliminar en correcciones).
     """
-    # Asegurar numeración coherente (p.ej. tras deploy o datos viejos)
-    reasignar_numeros_tanda(db, commit=True)
-
     items = (
         db.query(InventarioDesverdizado)
         .filter(
@@ -208,8 +207,6 @@ def listar_desverdizado_admin(
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """Lista lotes en desverdizado (con stock) para correcciones admin."""
-    reasignar_numeros_tanda(db, commit=True)
-
     items = (
         db.query(InventarioDesverdizado)
         .filter(InventarioDesverdizado.cantidad_bins > 0)
@@ -305,15 +302,15 @@ def editar_desverdizado_admin(
         des.estado = est
 
     if des.cantidad_bins == 0 and des.estado not in ("empaquetado", "eliminado"):
-        # 0 bins: no debe listarse en empaque
+        # 0 bins: no debe listarse en empaque (no renumerar otras tandas)
         des.estado = "empaquetado"
-        des.numero_tanda = None
+    elif (des.cantidad_bins or 0) > 0 and des.numero_tanda is None:
+        asignar_numero_tanda_nueva(db, des)
 
-    reasignar_numeros_tanda(db)
     db.commit()
     db.refresh(des)
     return {
-        "message": f"Desverdizado #{des.id} actualizado (tandas renumeradas)",
+        "message": f"Desverdizado #{des.id} actualizado",
         "id": des.id,
         "lote": des.lote,
         "cantidad_bins_disponibles": des.cantidad_bins,

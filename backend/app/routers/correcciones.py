@@ -24,7 +24,7 @@ from app.models.inventory import (
     InventarioFinal,
     InventarioCampo,
 )
-from app.utils.tandas import reasignar_numeros_tanda
+from app.utils.tandas import reasignar_numeros_tanda, asignar_numero_tanda_nueva
 
 router = APIRouter(tags=["Correcciones"])
 
@@ -216,7 +216,11 @@ def sincronizar_recepcion_desverdizado(db: Session) -> dict:
         d.recepcion_id = r.id
         creadas += 1
 
-    reasignar_numeros_tanda(db)
+    # Solo asignar número a tandas activas sin número (no reordenar)
+    for d in desvs:
+        if (d.cantidad_bins or 0) > 0 and (d.estado or "") != "eliminado":
+            asignar_numero_tanda_nueva(db, d)
+
     db.commit()
     return {
         "desverdizados": len(desvs),
@@ -326,7 +330,11 @@ def editar_recepcion_limon(
                 if body.recalcular_tentativa:
                     d.fecha_tentativa_salida = fr + timedelta(days=DIAS_DESVERDIZADO)
 
-    reasignar_numeros_tanda(db)
+    # Si se reactivó stock sin número, asignar sin renumerar el resto
+    for d in desvs:
+        if (d.cantidad_bins or 0) > 0 and d.numero_tanda is None:
+            asignar_numero_tanda_nueva(db, d)
+
     db.commit()
     db.refresh(r)
     desvs = (
