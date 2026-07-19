@@ -40,6 +40,53 @@ def _es_limon(prod) -> bool:
     return p == "limon_amarillo" or "limon" in p
 
 
+def _fecha_corte_efectiva(r: RecepcionCampo, desvs: list | None = None) -> date | None:
+    """Fecha de corte de negocio (prioridad: desverdizado → fecha_corte → fecha)."""
+    if desvs:
+        for d in desvs:
+            if getattr(d, "fecha_recepcion", None):
+                return d.fecha_recepcion
+    fc = getattr(r, "fecha_corte", None) or r.fecha
+    return fc
+
+
+def _numeros_recepcion_cronologicos(db: Session) -> dict[int, int]:
+    """
+    Asigna número de recepción 1..N en orden cronológico de fecha de corte
+    (luego id). Solo limón; el id de BD se mantiene para editar/borrar.
+    """
+    recs = (
+        db.query(RecepcionCampo)
+        .order_by(RecepcionCampo.id.asc())
+        .all()
+    )
+    limon = [r for r in recs if _es_limon(r.producto)]
+    if not limon:
+        return {}
+
+    # Prefetch desverdizados por recepción
+    ids = [r.id for r in limon]
+    desvs_all = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.recepcion_id.in_(ids))
+        .all()
+    )
+    by_rec: dict[int, list] = {}
+    for d in desvs_all:
+        if d.recepcion_id is None:
+            continue
+        by_rec.setdefault(int(d.recepcion_id), []).append(d)
+
+    ranked = sorted(
+        limon,
+        key=lambda r: (
+            _fecha_corte_efectiva(r, by_rec.get(r.id)) or date.min,
+            r.id or 0,
+        ),
+    )
+    return {r.id: i for i, r in enumerate(ranked, start=1)}
+
+
 def _match_inv_limon(db: Session, presentacion: str | None, talla: str | None):
     all_inv = db.query(InventarioFinal).filter(
         InventarioFinal.producto == Producto.LIMON_AMARILLO
@@ -276,9 +323,12 @@ def editar_recepcion_limon(
         .all()
     )
     d0 = desvs[0] if desvs else None
+    nums = _numeros_recepcion_cronologicos(db)
+    n_rec = nums.get(r.id) or r.id
     return {
-        "message": f"Recepción #{r.id} actualizada (desverdizado sincronizado)",
+        "message": f"Recepción #{n_rec} actualizada (desverdizado sincronizado)",
         "id": r.id,
+        "numero_recepcion": n_rec,
         "lote": r.lote,
         "cantidad_bins": r.cantidad_bins,
         "fecha_corte": str(r.fecha_corte) if r.fecha_corte else None,
@@ -313,8 +363,10 @@ def historial_movimientos(
     items: list[dict] = []
 
     if mod in ("todos", "recepcion", "desverdizado"):
-        # "desverdizado" redirige a recepciones limón (mismo dato de negocio)
-        for r in db.query(RecepcionCampo).order_by(RecepcionCampo.id.desc()).limit(limit).all():
+        # Número de recepción limón = orden cronológico por fecha de corte (no el id BD)
+        nums_crono = _numeros_recepcion_cronologicos(db)
+        # Cargar todas (el límite se aplica al final del historial unificado)
+        for r in db.query(RecepcionCampo).order_by(RecepcionCampo.id.asc()).all():
             prod = _pval(r.producto)
             es_limon = _es_limon(r.producto)
 
@@ -329,12 +381,11 @@ def historial_movimientos(
                 bins_rec = int(getattr(r, "cantidad_bins", None) or 0)
                 if bins_rec <= 0 and desvs:
                     bins_rec = sum(int(d.cantidad_bins or 0) for d in desvs)
-                fecha_corte = getattr(r, "fecha_corte", None) or r.fecha
-                if desvs and getattr(desvs[0], "fecha_recepcion", None):
-                    fecha_corte = desvs[0].fecha_recepcion
+                fecha_corte = _fecha_corte_efectiva(r, desvs)
                 bins_ahora = sum(int(d.cantidad_bins or 0) for d in desvs) if desvs else 0
                 tanda = desvs[0].numero_tanda if desvs else None
                 desv_ids = [d.id for d in desvs]
+                n_rec = nums_crono.get(r.id) or r.id
                 resumen = (
                     f"Lote {lote or '—'} · {bins_rec} bins · "
                     f"corte {fecha_corte} · en cámara {bins_ahora} bins"
@@ -344,7 +395,8 @@ def historial_movimientos(
                     f"Bins registrados: {bins_rec} · "
                     f"Bins en desverdizado ahora: {bins_ahora} · "
                     f"Tanda #{tanda or '—'} · "
-                    f"Inv.desv. ID: {', '.join(map(str, desv_ids)) if desv_ids else '—'}"
+                    f"Inv.desv. ID: {', '.join(map(str, desv_ids)) if desv_ids else '—'} · "
+                    f"ID interno: {r.id}"
                 )
                 items.append(
                     {
@@ -352,7 +404,7 @@ def historial_movimientos(
                         "id": r.id,
                         "fecha": str(fecha_corte) if fecha_corte else None,
                         "hora": str(r.hora) if r.hora else None,
-                        "titulo": f"Recepción #{r.id}"
+                        "titulo": f"Recepción #{n_rec}"
                         + (f" · Tanda #{tanda}" if tanda else "")
                         + (f" · {lote}" if lote else ""),
                         "resumen": resumen,
@@ -369,6 +421,8 @@ def historial_movimientos(
                             "desverdizado_ids": desv_ids,
                             "numero_tanda": tanda,
                             "tandas": [tanda] if tanda else [],
+                            "numero_recepcion": n_rec,
+                            "id_interno": r.id,
                         },
                     }
                 )
@@ -501,9 +555,13 @@ def historial_movimientos(
                 }
             )
 
-    # Orden unificado por fecha/id
+    # Orden unificado: fecha desc; en recepción limón usa número cronológico como desempate
     def sort_key(it: dict):
         f = it.get("fecha") or ""
+        meta = it.get("meta") or {}
+        n = meta.get("numero_recepcion")
+        if n is not None:
+            return (f, int(n))
         return (f, it.get("id") or 0)
 
     items.sort(key=sort_key, reverse=True)
@@ -591,14 +649,17 @@ def eliminar_recepcion(
             if desv_borrados:
                 reasignar_numeros_tanda(db)
 
+    nums = _numeros_recepcion_cronologicos(db)
+    n_rec = nums.get(recepcion_id) or recepcion_id
     db.delete(r)
     db.commit()
-    msg = f"Recepción #{recepcion_id} eliminada"
+    msg = f"Recepción #{n_rec} eliminada"
     if desv_borrados:
         msg += f" · {desv_borrados} desverdizado(s) ({bins_borrados} bins) también eliminados"
     return {
         "message": msg,
         "id": recepcion_id,
+        "numero_recepcion": n_rec,
         "desverdizado_eliminados": desv_borrados,
         "bins_eliminados": bins_borrados,
     }
