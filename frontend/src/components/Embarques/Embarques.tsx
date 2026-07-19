@@ -70,19 +70,89 @@ export default function Embarques({
     }
   };
 
+  /** Misma clave de inventario (presentación/talla o uva variedad+cultivo+mercado). */
+  const mismaLineaInventario = (
+    a: {
+      producto?: string | null;
+      presentacion?: string | null;
+      talla?: string | null;
+      variedad?: string | null;
+      tipo_cultivo?: string | null;
+      mercado?: string | null;
+    },
+    b: {
+      producto?: string | null;
+      presentacion?: string | null;
+      talla?: string | null;
+      variedad?: string | null;
+      tipo_cultivo?: string | null;
+      mercado?: string | null;
+    }
+  ) => {
+    const aLimon = a.producto === 'limon_amarillo' || !!a.presentacion;
+    const bLimon = b.producto === 'limon_amarillo' || !!b.presentacion;
+    if (aLimon !== bLimon) return false;
+    if (aLimon) {
+      return (
+        (a.presentacion || null) === (b.presentacion || null) &&
+        (a.talla || null) === (b.talla || null) &&
+        (a.mercado || null) === (b.mercado || null)
+      );
+    }
+    return (
+      (a.variedad || null) === (b.variedad || null) &&
+      (a.tipo_cultivo || null) === (b.tipo_cultivo || null) &&
+      (a.mercado || null) === (b.mercado || null)
+    );
+  };
+
+  /** Stock real menos lo ya cargado en las líneas del embarque actual. */
+  const stockDisponiblePara = (item: InventarioFinalItem) => {
+    const ya = detallesEmbarque
+      .filter((d) =>
+        mismaLineaInventario(
+          {
+            producto: item.producto,
+            presentacion: item.presentacion,
+            talla: item.talla,
+            variedad: item.variedad,
+            tipo_cultivo: item.tipo_cultivo,
+            mercado: item.mercado,
+          },
+          d
+        )
+      )
+      .reduce((s, d) => s + (d.cantidad_cajas || 0), 0);
+    return Math.max(0, (item.cantidad_stock || 0) - ya);
+  };
+
+  const stockDisponibleSeleccionado = selectedFinalStock
+    ? stockDisponiblePara(selectedFinalStock)
+    : 0;
+
   const agregarLineaEmbarque = () => {
     if (!selectedFinalStock || !selectedCantidad) {
       return alert('Selecciona un producto del inventario final y una cantidad');
     }
 
-    const cantidad = parseInt(selectedCantidad);
+    const cantidad = parseInt(selectedCantidad, 10);
 
     if (isNaN(cantidad) || cantidad <= 0) {
       return alert('La cantidad debe ser un número mayor a 0');
     }
 
-    if (cantidad > selectedFinalStock.cantidad_stock) {
-      return alert(`No puedes agregar más de ${selectedFinalStock.cantidad_stock} cajas disponibles`);
+    const disponible = stockDisponiblePara(selectedFinalStock);
+    if (disponible <= 0) {
+      return alert(
+        'Ya agregaste todo el stock disponible de este producto en este embarque. ' +
+          'Quita o reduce una línea si quieres reasignar.'
+      );
+    }
+    if (cantidad > disponible) {
+      return alert(
+        `Solo quedan ${disponible} cajas disponibles de este producto en el embarque ` +
+          `(stock ${selectedFinalStock.cantidad_stock}, ya agregadas ${selectedFinalStock.cantidad_stock - disponible}).`
+      );
     }
 
     const isLimon =
@@ -576,7 +646,7 @@ export default function Embarques({
       )}
 
       <h3>Agregar productos al embarque (desde Inventario Final)</h3>
-      <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', flexWrap: 'wrap' }}>
+      <div style={{ display: 'flex', gap: '10px', marginBottom: '15px', flexWrap: 'wrap', alignItems: 'center' }}>
         <InventarioFinalSelector
           inventario={inventarioFinal}
           value={selectedFinalStock}
@@ -590,23 +660,58 @@ export default function Embarques({
         <input
           type="number"
           placeholder="Cantidad"
+          min={1}
+          max={stockDisponibleSeleccionado || undefined}
           value={selectedCantidad}
           onChange={(e) => setSelectedCantidad(e.target.value)}
           style={{ padding: '10px', width: '120px' }}
-          disabled={!selectedFinalStock}
+          disabled={!selectedFinalStock || stockDisponibleSeleccionado <= 0}
         />
 
         <button
+          type="button"
           onClick={agregarLineaEmbarque}
-          disabled={!selectedFinalStock || !selectedCantidad}
+          disabled={
+            !selectedFinalStock ||
+            !selectedCantidad ||
+            stockDisponibleSeleccionado <= 0
+          }
           style={{
             padding: '10px 20px',
-            opacity: !selectedFinalStock || !selectedCantidad ? 0.6 : 1,
+            opacity:
+              !selectedFinalStock ||
+              !selectedCantidad ||
+              stockDisponibleSeleccionado <= 0
+                ? 0.6
+                : 1,
           }}
         >
           Agregar Línea
         </button>
       </div>
+      {selectedFinalStock && (
+        <p style={{ fontSize: 13, color: '#64748b', margin: '-8px 0 12px' }}>
+          Disponible para este embarque:{' '}
+          <strong style={{ color: stockDisponibleSeleccionado > 0 ? '#15803d' : '#b91c1c' }}>
+            {stockDisponibleSeleccionado}
+          </strong>
+          {' / '}
+          stock total {selectedFinalStock.cantidad_stock}
+          {stockDisponibleSeleccionado < (selectedFinalStock.cantidad_stock || 0) && (
+            <span>
+              {' '}
+              (ya en líneas:{' '}
+              {(selectedFinalStock.cantidad_stock || 0) - stockDisponibleSeleccionado})
+            </span>
+          )}
+          {stockDisponibleSeleccionado <= 0 && (
+            <span style={{ color: '#b91c1c' }}>
+              {' '}
+              — ya usaste todo este producto en las líneas de abajo
+            </span>
+          )}
+        </p>
+      )}
 
       <h4>Productos en este embarque:</h4>
 
