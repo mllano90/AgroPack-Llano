@@ -755,3 +755,299 @@ def eliminar_embarque(
         "message": f"Embarque #{embarque_id} eliminado; inventario final restaurado",
         "id": embarque_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Inventarios: corrección manual (admin) — listar / crear / editar / borrar
+# ---------------------------------------------------------------------------
+
+from app.models.enums import VariedadUva, TipoCultivo, TipoMercado
+
+
+class InvFinalAdminItem(BaseModel):
+    id: int
+    producto: str
+    variedad: str | None = None
+    tipo_cultivo: str | None = None
+    mercado: str
+    cantidad_stock: int
+    presentacion: str | None = None
+    talla: str | None = None
+    calidad: str | None = None
+    fecha_actualizacion: str | None = None
+
+
+class InvFinalCreate(BaseModel):
+    producto: Producto = Producto.LIMON_AMARILLO
+    mercado: TipoMercado = TipoMercado.NACIONAL
+    cantidad_stock: int = 0
+    variedad: VariedadUva | None = None
+    tipo_cultivo: TipoCultivo | None = None
+    presentacion: str | None = None  # limón
+    talla: str | None = None
+    calidad: str | None = None
+
+
+class InvFinalUpdate(BaseModel):
+    cantidad_stock: int | None = None
+    mercado: TipoMercado | None = None
+    variedad: VariedadUva | None = None
+    tipo_cultivo: TipoCultivo | None = None
+    presentacion: str | None = None
+    talla: str | None = None
+    calidad: str | None = None
+    # si True y se envía talla/presentacion, actualiza atributos_extra
+    reemplazar_atributos: bool = True
+
+
+class InvCampoAdminItem(BaseModel):
+    id: int
+    variedad: str
+    mercado: str
+    cantidad_disponible: int
+    fecha_actualizacion: str | None = None
+
+
+class InvCampoCreate(BaseModel):
+    variedad: VariedadUva
+    mercado: TipoMercado = TipoMercado.NACIONAL
+    cantidad_disponible: int = 0
+
+
+class InvCampoUpdate(BaseModel):
+    cantidad_disponible: int | None = None
+    variedad: VariedadUva | None = None
+    mercado: TipoMercado | None = None
+
+
+def _inv_final_to_item(item: InventarioFinal) -> dict:
+    extra = item.atributos_extra if isinstance(item.atributos_extra, dict) else {}
+    talla = extra.get("talla")
+    talla_s = None if talla is None or str(talla).strip() == "" else str(talla).strip()
+    fa = item.fecha_actualizacion
+    return {
+        "id": item.id,
+        "producto": _pval(item.producto) or "uva",
+        "variedad": _pval(item.variedad) or None,
+        "tipo_cultivo": _pval(item.tipo_cultivo) or None,
+        "mercado": _pval(item.mercado) or "nacional",
+        "cantidad_stock": int(item.cantidad_stock or 0),
+        "presentacion": extra.get("presentacion"),
+        "talla": talla_s,
+        "calidad": extra.get("calidad"),
+        "fecha_actualizacion": fa.isoformat() if fa else None,
+    }
+
+
+def _inv_campo_to_item(item: InventarioCampo) -> dict:
+    fa = item.fecha_actualizacion
+    return {
+        "id": item.id,
+        "variedad": _pval(item.variedad) or "",
+        "mercado": _pval(item.mercado) or "nacional",
+        "cantidad_disponible": int(item.cantidad_disponible or 0),
+        "fecha_actualizacion": fa.isoformat() if fa else None,
+    }
+
+
+@router.get("/inventario/final", response_model=list[InvFinalAdminItem])
+def listar_inventario_final_admin(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    rows = db.query(InventarioFinal).order_by(InventarioFinal.id.desc()).all()
+    return [_inv_final_to_item(r) for r in rows]
+
+
+@router.post("/inventario/final", response_model=InvFinalAdminItem)
+def crear_inventario_final_admin(
+    body: InvFinalCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    if body.cantidad_stock < 0:
+        raise HTTPException(status_code=400, detail="cantidad_stock no puede ser negativa")
+
+    es_limon = body.producto == Producto.LIMON_AMARILLO or bool(body.presentacion)
+    extra = None
+    if es_limon:
+        if not body.presentacion:
+            raise HTTPException(
+                status_code=400,
+                detail="Limón requiere presentación (rpc_12, rpc_18, caja_40lbs, rpc_granel, bins_jugo)",
+            )
+        calidad = body.calidad or (
+            "segunda" if body.presentacion == "bins_jugo" else "primera"
+        )
+        extra = {"presentacion": body.presentacion, "calidad": calidad}
+        if body.presentacion != "bins_jugo" and body.talla:
+            extra["talla"] = str(body.talla).strip()
+
+    inv = InventarioFinal(
+        producto=Producto.LIMON_AMARILLO if es_limon else body.producto,
+        variedad=None if es_limon else body.variedad,
+        tipo_cultivo=None if es_limon else body.tipo_cultivo,
+        mercado=body.mercado,
+        cantidad_stock=int(body.cantidad_stock),
+        atributos_extra=extra,
+        fecha_actualizacion=datetime.utcnow(),
+    )
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    return _inv_final_to_item(inv)
+
+
+@router.patch("/inventario/final/{inv_id}", response_model=InvFinalAdminItem)
+def editar_inventario_final_admin(
+    inv_id: int,
+    body: InvFinalUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    inv = db.query(InventarioFinal).filter(InventarioFinal.id == inv_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventario final no encontrado")
+
+    if body.cantidad_stock is not None:
+        if body.cantidad_stock < 0:
+            raise HTTPException(status_code=400, detail="cantidad_stock no puede ser negativa")
+        inv.cantidad_stock = int(body.cantidad_stock)
+    if body.mercado is not None:
+        inv.mercado = body.mercado
+    if body.variedad is not None:
+        inv.variedad = body.variedad
+    if body.tipo_cultivo is not None:
+        inv.tipo_cultivo = body.tipo_cultivo
+
+    extra = dict(inv.atributos_extra) if isinstance(inv.atributos_extra, dict) else {}
+    if body.reemplazar_atributos:
+        if body.presentacion is not None:
+            if body.presentacion == "":
+                extra.pop("presentacion", None)
+            else:
+                extra["presentacion"] = body.presentacion
+        if body.talla is not None:
+            if body.talla == "" or (
+                body.presentacion == "bins_jugo"
+                or extra.get("presentacion") == "bins_jugo"
+            ):
+                extra.pop("talla", None)
+            else:
+                extra["talla"] = str(body.talla).strip()
+        if body.calidad is not None:
+            if body.calidad == "":
+                extra.pop("calidad", None)
+            else:
+                extra["calidad"] = body.calidad
+        inv.atributos_extra = extra or None
+        from sqlalchemy.orm.attributes import flag_modified
+
+        flag_modified(inv, "atributos_extra")
+
+    inv.fecha_actualizacion = datetime.utcnow()
+    db.commit()
+    db.refresh(inv)
+    return _inv_final_to_item(inv)
+
+
+@router.delete("/inventario/final/{inv_id}")
+def eliminar_inventario_final_admin(
+    inv_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    inv = db.query(InventarioFinal).filter(InventarioFinal.id == inv_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventario final no encontrado")
+    snap = _inv_final_to_item(inv)
+    db.delete(inv)
+    db.commit()
+    return {
+        "message": f"Inventario final #{inv_id} eliminado",
+        "id": inv_id,
+        "eliminado": snap,
+    }
+
+
+@router.get("/inventario/campo", response_model=list[InvCampoAdminItem])
+def listar_inventario_campo_admin(
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    rows = db.query(InventarioCampo).order_by(InventarioCampo.id.desc()).all()
+    return [_inv_campo_to_item(r) for r in rows]
+
+
+@router.post("/inventario/campo", response_model=InvCampoAdminItem)
+def crear_inventario_campo_admin(
+    body: InvCampoCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    if body.cantidad_disponible < 0:
+        raise HTTPException(status_code=400, detail="cantidad no puede ser negativa")
+    # Si ya existe misma variedad+mercado, sumar / setear
+    existing = (
+        db.query(InventarioCampo)
+        .filter(
+            InventarioCampo.variedad == body.variedad,
+            InventarioCampo.mercado == body.mercado,
+        )
+        .first()
+    )
+    if existing:
+        existing.cantidad_disponible = int(body.cantidad_disponible)
+        existing.fecha_actualizacion = datetime.utcnow()
+        db.commit()
+        db.refresh(existing)
+        return _inv_campo_to_item(existing)
+
+    inv = InventarioCampo(
+        variedad=body.variedad,
+        mercado=body.mercado,
+        cantidad_disponible=int(body.cantidad_disponible),
+        fecha_actualizacion=datetime.utcnow(),
+    )
+    db.add(inv)
+    db.commit()
+    db.refresh(inv)
+    return _inv_campo_to_item(inv)
+
+
+@router.patch("/inventario/campo/{inv_id}", response_model=InvCampoAdminItem)
+def editar_inventario_campo_admin(
+    inv_id: int,
+    body: InvCampoUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    inv = db.query(InventarioCampo).filter(InventarioCampo.id == inv_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventario de campo no encontrado")
+    if body.cantidad_disponible is not None:
+        if body.cantidad_disponible < 0:
+            raise HTTPException(status_code=400, detail="cantidad no puede ser negativa")
+        inv.cantidad_disponible = int(body.cantidad_disponible)
+    if body.variedad is not None:
+        inv.variedad = body.variedad
+    if body.mercado is not None:
+        inv.mercado = body.mercado
+    inv.fecha_actualizacion = datetime.utcnow()
+    db.commit()
+    db.refresh(inv)
+    return _inv_campo_to_item(inv)
+
+
+@router.delete("/inventario/campo/{inv_id}")
+def eliminar_inventario_campo_admin(
+    inv_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    inv = db.query(InventarioCampo).filter(InventarioCampo.id == inv_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventario de campo no encontrado")
+    db.delete(inv)
+    db.commit()
+    return {"message": f"Inventario campo #{inv_id} eliminado", "id": inv_id}

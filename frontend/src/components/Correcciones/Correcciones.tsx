@@ -18,6 +18,7 @@ import {
 import { DIAS_DESVERDIZADO, PRESENTACIONES_LIMON, TALLAS_LIMON } from '../../lib/constants';
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
 import type { EmpaqueRecord } from '../../types';
+import InventariosAdmin from './InventariosAdmin';
 
 type ConsumoEdit = { lote: string; bins: string };
 type ProdEdit = { presentacion: string; talla: string; cantidad: string };
@@ -66,9 +67,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   // Historial unificado
   const [historial, setHistorial] = useState<HistorialMovimiento[]>([]);
   const [filtroModulo, setFiltroModulo] = useState<string>('recepcion');
-  const [vistaSeccion, setVistaSeccion] = useState<'historial' | 'empaques' | 'desverdizado'>(
-    'historial'
-  );
+  const [vistaSeccion, setVistaSeccion] = useState<
+    'historial' | 'empaques' | 'desverdizado' | 'inventarios'
+  >('historial');
 
   // Edición recepción limón (lote / bins / fecha)
   const [editRec, setEditRec] = useState<HistorialMovimiento | null>(null);
@@ -565,6 +566,13 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           onClick={() => setVistaSeccion('desverdizado')}
         >
           Desverdizado
+        </button>
+        <button
+          type="button"
+          style={secBtn('inventarios')}
+          onClick={() => setVistaSeccion('inventarios')}
+        >
+          Inventarios
         </button>
         <button type="button" onClick={load} style={{ padding: '8px 14px', cursor: 'pointer' }}>
           Actualizar
@@ -1235,6 +1243,16 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           </div>
         </div>
         )
+      )}
+
+      {/* Inventarios manuales */}
+      {vistaSeccion === 'inventarios' && (
+        <InventariosAdmin
+          token={token}
+          onChanged={() => {
+            onCorregido?.();
+          }}
+        />
       )}
 
       {/* Lotes desverdizado */}

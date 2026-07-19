@@ -236,6 +236,135 @@ export async function eliminarEmbarqueAdmin(token: string, id: number) {
   return res.data;
 }
 
+// ---- Inventarios admin (corrección manual) ----
+export interface InvFinalAdminItem {
+  id: number;
+  producto: string;
+  variedad?: string | null;
+  tipo_cultivo?: string | null;
+  mercado: string;
+  cantidad_stock: number;
+  presentacion?: string | null;
+  talla?: string | null;
+  calidad?: string | null;
+  fecha_actualizacion?: string | null;
+}
+
+export interface InvCampoAdminItem {
+  id: number;
+  variedad: string;
+  mercado: string;
+  cantidad_disponible: number;
+  fecha_actualizacion?: string | null;
+}
+
+export async function listarInventarioFinalAdmin(
+  token: string
+): Promise<InvFinalAdminItem[]> {
+  const res = await api.get<InvFinalAdminItem[]>('/api/correcciones/inventario/final', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+export async function crearInventarioFinalAdmin(
+  token: string,
+  data: {
+    producto: string;
+    mercado?: string;
+    cantidad_stock: number;
+    variedad?: string | null;
+    tipo_cultivo?: string | null;
+    presentacion?: string | null;
+    talla?: string | null;
+    calidad?: string | null;
+  }
+): Promise<InvFinalAdminItem> {
+  const res = await api.post<InvFinalAdminItem>('/api/correcciones/inventario/final', data, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+export async function editarInventarioFinalAdmin(
+  token: string,
+  id: number,
+  data: {
+    cantidad_stock?: number;
+    mercado?: string;
+    variedad?: string | null;
+    tipo_cultivo?: string | null;
+    presentacion?: string | null;
+    talla?: string | null;
+    calidad?: string | null;
+  }
+): Promise<InvFinalAdminItem> {
+  const res = await api.patch<InvFinalAdminItem>(
+    `/api/correcciones/inventario/final/${id}`,
+    data,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
+export async function eliminarInventarioFinalAdmin(
+  token: string,
+  id: number
+): Promise<{ message: string; id: number }> {
+  const res = await api.delete<{ message: string; id: number }>(
+    `/api/correcciones/inventario/final/${id}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
+export async function listarInventarioCampoAdmin(
+  token: string
+): Promise<InvCampoAdminItem[]> {
+  const res = await api.get<InvCampoAdminItem[]>('/api/correcciones/inventario/campo', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+export async function crearInventarioCampoAdmin(
+  token: string,
+  data: { variedad: string; mercado?: string; cantidad_disponible: number }
+): Promise<InvCampoAdminItem> {
+  const res = await api.post<InvCampoAdminItem>('/api/correcciones/inventario/campo', data, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
+export async function editarInventarioCampoAdmin(
+  token: string,
+  id: number,
+  data: {
+    cantidad_disponible?: number;
+    variedad?: string;
+    mercado?: string;
+  }
+): Promise<InvCampoAdminItem> {
+  const res = await api.patch<InvCampoAdminItem>(
+    `/api/correcciones/inventario/campo/${id}`,
+    data,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
+export async function eliminarInventarioCampoAdmin(
+  token: string,
+  id: number
+): Promise<{ message: string; id: number }> {
+  const res = await api.delete<{ message: string; id: number }>(
+    `/api/correcciones/inventario/campo/${id}`,
+    { headers: { Authorization: `Bearer ${token}` } }
+  );
+  return res.data;
+}
+
 /** Elimina un lote de desverdizado (todas las filas con ese lote por defecto) */
 export async function eliminarDesverdizado(
   token: string,
