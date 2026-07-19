@@ -22,39 +22,6 @@ from app.models.enums import Producto as ProductoEnum
 router = APIRouter(tags=["Empaque"])
 
 
-def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
-    """Descuenta bins de un lote en desverdizado."""
-    if bins <= 0 or not lote:
-        raise HTTPException(status_code=400, detail="lote y bins > 0 son requeridos")
-    query = (
-        db.query(InventarioDesverdizado)
-        .filter(
-            InventarioDesverdizado.producto == Producto.LIMON_AMARILLO,
-            InventarioDesverdizado.lote == lote,
-            InventarioDesverdizado.cantidad_bins > 0,
-        )
-        .order_by(InventarioDesverdizado.fecha_recepcion)
-    )
-    desvs = query.all()
-    restante = bins
-    for d in desvs:
-        if restante <= 0:
-            break
-        usar = min(restante, d.cantidad_bins)
-        d.cantidad_bins -= usar
-        restante -= usar
-        if d.cantidad_bins == 0:
-            # Conservar numero_tanda original (no limpiar ni renumerar)
-            d.estado = "empaquetado"
-        elif d.estado == "en_desverdizado":
-            d.estado = "listo_empaque"
-    if restante > 0:
-        raise HTTPException(
-            status_code=400,
-            detail=f"No hay suficientes bins en desverdizado para lote {lote}. Faltan {restante}",
-        )
-
-
 def _norm_lote(lote: str | None) -> str:
     return (lote or "").strip()
 
@@ -73,12 +40,94 @@ def _match_desverdizado_por_lote(db: Session, lote: str) -> list:
         )
         .all()
     )
+    # No exigir producto enum si el lote coincide (datos viejos)
+    if not rows:
+        rows = (
+            db.query(InventarioDesverdizado)
+            .order_by(
+                InventarioDesverdizado.fecha_recepcion.asc(),
+                InventarioDesverdizado.id.asc(),
+            )
+            .all()
+        )
     exact = [r for r in rows if _norm_lote(r.lote) == lote_n]
     if exact:
         return exact
-    # fallback: comparación casefold
     ln = lote_n.casefold()
     return [r for r in rows if _norm_lote(r.lote).casefold() == ln]
+
+
+def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
+    """
+    Descuenta bins de un lote en desverdizado.
+    Match flexible de lote (strip / case); FIFO por fecha de corte.
+    Conserva numero_tanda al vaciar la tanda.
+    """
+    lote_n = _norm_lote(lote)
+    bins = int(bins or 0)
+    if bins <= 0 or not lote_n:
+        raise HTTPException(status_code=400, detail="lote y bins > 0 son requeridos")
+
+    candidatos = _match_desverdizado_por_lote(db, lote_n)
+    desvs = [d for d in candidatos if int(d.cantidad_bins or 0) > 0]
+    # Preferir las que aún tienen stock, más antiguas primero (ya ordenadas)
+    restante = bins
+    disp = sum(int(d.cantidad_bins or 0) for d in desvs)
+    if disp < bins:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No hay suficientes bins en desverdizado para lote '{lote_n}'. "
+                f"Disponible: {disp}, solicitado: {bins}"
+            ),
+        )
+    for d in desvs:
+        if restante <= 0:
+            break
+        hay = int(d.cantidad_bins or 0)
+        if hay <= 0:
+            continue
+        usar = min(restante, hay)
+        d.cantidad_bins = hay - usar
+        restante -= usar
+        if d.cantidad_bins == 0:
+            # Conservar numero_tanda original
+            d.estado = "empaquetado"
+        elif (d.estado or "") == "en_desverdizado":
+            d.estado = "listo_empaque"
+    if restante > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No hay suficientes bins en desverdizado para lote '{lote_n}'. Faltan {restante}",
+        )
+    db.flush()
+
+
+def _agregar_consumos_desverdizado(db: Session, consumos: list | None) -> list[dict]:
+    """
+    Normaliza y aplica consumos de desverdizado (crea empaque / editar).
+    Agrupa por lote para no fallar con líneas duplicadas del mismo lote.
+    """
+    from collections import defaultdict
+
+    acc: dict[str, int] = defaultdict(int)
+    for c in consumos or []:
+        lo = _norm_lote(c.get("lote") if isinstance(c, dict) else None)
+        try:
+            bi = int((c.get("bins") if isinstance(c, dict) else 0) or 0)
+        except (TypeError, ValueError):
+            bi = 0
+        if lo and bi > 0:
+            acc[lo] += bi
+    if not acc:
+        raise HTTPException(
+            status_code=400,
+            detail="Indica al menos un consumo de desverdizado (lote + bins > 0)",
+        )
+    normalizados = [{"lote": lo, "bins": bi} for lo, bi in acc.items()]
+    for c in normalizados:
+        _consumir_bins_lote(db, c["lote"], c["bins"])
+    return normalizados
 
 
 def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
@@ -310,44 +359,20 @@ def crear_empaque(
         # 2. Restar del inventario de campo correcto (por mercado)
         inv_campo.cantidad_disponible -= empaque.cantidad_cajas_campo_usadas
     
+    consumos_aplicados: list[dict] = []
     if empaque.producto == Producto.LIMON_AMARILLO:
         # Consumir de inventario de desverdizado (soporta múltiples lotes)
-        consumos = empaque.consumos_desverdizado or []
-        if empaque.bins_desverdizado_usados > 0 and not consumos:
-            # legacy single lote
-            consumos = [{"lote": empaque.lote_desverdizado, "bins": empaque.bins_desverdizado_usados}]
-        
-        for consumo in consumos:
-            lote = consumo.get("lote")
-            bins = consumo.get("bins", 0)
-            if bins <= 0:
-                continue
-            query = db.query(InventarioDesverdizado).filter(
-                InventarioDesverdizado.producto == Producto.LIMON_AMARILLO,
-                InventarioDesverdizado.cantidad_bins > 0
-            )
-            if lote:
-                query = query.filter(InventarioDesverdizado.lote == lote)
-            else:
-                query = query.order_by(InventarioDesverdizado.fecha_recepcion)
-            desvs = query.all()
-            restante = bins
-            for d in desvs:
-                if restante <= 0:
-                    break
-                usar = min(restante, d.cantidad_bins)
-                d.cantidad_bins -= usar
-                restante -= usar
-                if d.cantidad_bins == 0:
-                    d.estado = "empaquetado"
-                elif d.estado == "en_desverdizado":
-                    d.estado = "listo_empaque"
-            if restante > 0:
-                raise HTTPException(status_code=400, detail=f"No hay suficientes bins en desverdizado para lote {lote or 'cualquiera'}")
+        consumos_raw = empaque.consumos_desverdizado or []
+        if empaque.bins_desverdizado_usados > 0 and not consumos_raw:
+            consumos_raw = [
+                {
+                    "lote": empaque.lote_desverdizado,
+                    "bins": empaque.bins_desverdizado_usados,
+                }
+            ]
+        consumos_aplicados = _agregar_consumos_desverdizado(db, consumos_raw)
 
-        # NO renumerar tandas al empacar (solo al eliminar tandas en correcciones)
-        
-        # Producir a inventario final por presentación (cantidades separadas) + talla para 1ra
+        # Producir a inventario final
         lineas = empaque.produccion or []
         if not lineas:
             talla = getattr(empaque, "talla", None)
@@ -372,7 +397,7 @@ def crear_empaque(
     detalle_corrida = None
     bins_usados = empaque.bins_desverdizado_usados or 0
     if empaque.producto == Producto.LIMON_AMARILLO:
-        consumos = empaque.consumos_desverdizado or []
+        consumos = consumos_aplicados or empaque.consumos_desverdizado or []
         if empaque.bins_desverdizado_usados > 0 and not consumos:
             consumos = [{"lote": empaque.lote_desverdizado, "bins": empaque.bins_desverdizado_usados}]
         lineas = empaque.produccion or []
@@ -560,9 +585,11 @@ def editar_empaque_completo(
     for c in old_consumos:
         _devolver_bins_lote(db, c["lote"], c["bins"])
 
-    # 2) Consumir nuevos lotes
-    for c in new_consumos:
-        _consumir_bins_lote(db, c["lote"], c["bins"])
+    # 2) Consumir nuevos lotes (agrupados / match flexible)
+    if new_consumos:
+        new_consumos = _agregar_consumos_desverdizado(db, new_consumos)
+    else:
+        new_consumos = []
 
     # 3) Ajuste NETO de producción (no restar todo y sumar: evita fallos de stock intermedio)
     mercado_dest = body.mercado if body.mercado is not None else emp.mercado
