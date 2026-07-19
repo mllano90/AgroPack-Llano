@@ -158,15 +158,20 @@ export default function Embarques({
     const isLimon =
       selectedFinalStock.producto === 'limon_amarillo' || !!selectedFinalStock.presentacion;
 
+    const tallaStr =
+      selectedFinalStock.talla != null && String(selectedFinalStock.talla).trim() !== ''
+        ? String(selectedFinalStock.talla).trim()
+        : null;
+
     const newDetalle: EmbarqueDetalle = {
       producto: isLimon ? 'limon_amarillo' : selectedFinalStock.producto || 'uva',
       variedad: isLimon ? undefined : selectedFinalStock.variedad,
       tipo_cultivo: isLimon ? undefined : selectedFinalStock.tipo_cultivo,
       mercado: selectedFinalStock.mercado,
       cantidad_cajas: cantidad,
-      presentacion: selectedFinalStock.presentacion,
-      talla: selectedFinalStock.talla,
-      calidad: selectedFinalStock.calidad,
+      presentacion: selectedFinalStock.presentacion || null,
+      talla: isLimon ? tallaStr : null,
+      calidad: selectedFinalStock.calidad || null,
     };
 
     setDetallesEmbarque([...detallesEmbarque, newDetalle]);

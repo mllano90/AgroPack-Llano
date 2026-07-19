@@ -87,20 +87,32 @@ def _numeros_recepcion_cronologicos(db: Session) -> dict[int, int]:
     return {r.id: i for i, r in enumerate(ranked, start=1)}
 
 
+def _norm_talla_inv(presentacion: str | None, talla) -> str | None:
+    if not presentacion or presentacion in ("bins_jugo",):
+        return None
+    if talla is None:
+        return None
+    s = str(talla).strip()
+    if not s or s.lower() in ("none", "null"):
+        return None
+    if s.startswith("#"):
+        s = s[1:].strip()
+    return s or None
+
+
 def _match_inv_limon(db: Session, presentacion: str | None, talla: str | None):
-    all_inv = db.query(InventarioFinal).filter(
-        InventarioFinal.producto == Producto.LIMON_AMARILLO
-    ).all()
-    talla_norm = talla if presentacion != "bins_jugo" else None
-    return next(
-        (
-            i
-            for i in all_inv
-            if (i.atributos_extra or {}).get("presentacion") == presentacion
-            and (i.atributos_extra or {}).get("talla") == talla_norm
-        ),
-        None,
-    )
+    """Coincide por presentación + talla (talla normalizada str)."""
+    all_inv = db.query(InventarioFinal).all()
+    talla_norm = _norm_talla_inv(presentacion, talla)
+    pres = (presentacion or "").strip() or None
+    for i in all_inv:
+        extra = i.atributos_extra if isinstance(i.atributos_extra, dict) else {}
+        if (extra.get("presentacion") or None) != pres:
+            continue
+        if _norm_talla_inv(pres, extra.get("talla")) != talla_norm:
+            continue
+        return i
+    return None
 
 
 def _fill_recepcion_from_desv(r: RecepcionCampo, d: InventarioDesverdizado) -> None:

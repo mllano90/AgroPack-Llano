@@ -392,6 +392,12 @@ def obtener_dashboard(db: Session = Depends(get_db)):
         extra = item.atributos_extra or {}
         if not isinstance(extra, dict):
             extra = {}
+        talla_raw = extra.get("talla")
+        talla_str = (
+            None
+            if talla_raw is None or str(talla_raw).strip() == ""
+            else str(talla_raw).strip()
+        )
         final_list.append(
             InventarioFinalItem(
                 producto=item.producto,
@@ -401,7 +407,7 @@ def obtener_dashboard(db: Session = Depends(get_db)):
                 cantidad_stock=item.cantidad_stock,
                 presentacion=extra.get("presentacion"),
                 calidad=extra.get("calidad"),
-                talla=extra.get("talla"),
+                talla=talla_str,
             )
         )
     
