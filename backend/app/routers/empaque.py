@@ -54,45 +54,82 @@ def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
         )
 
 
-def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
-    """Devuelve bins a un lote (anular empaque)."""
-    if bins <= 0 or not lote:
-        return
-    des = (
+def _norm_lote(lote: str | None) -> str:
+    return (lote or "").strip()
+
+
+def _match_desverdizado_por_lote(db: Session, lote: str) -> list:
+    """Filas de desverdizado del lote (match exacto o sin distinguir espacios/mayúsculas)."""
+    lote_n = _norm_lote(lote)
+    if not lote_n:
+        return []
+    rows = (
         db.query(InventarioDesverdizado)
-        .filter(
-            InventarioDesverdizado.producto == Producto.LIMON_AMARILLO,
-            InventarioDesverdizado.lote == lote,
+        .filter(InventarioDesverdizado.producto == Producto.LIMON_AMARILLO)
+        .order_by(
+            InventarioDesverdizado.fecha_recepcion.asc(),
+            InventarioDesverdizado.id.asc(),
         )
-        .order_by(InventarioDesverdizado.id.desc())
-        .first()
+        .all()
     )
+    exact = [r for r in rows if _norm_lote(r.lote) == lote_n]
+    if exact:
+        return exact
+    # fallback: comparación casefold
+    ln = lote_n.casefold()
+    return [r for r in rows if _norm_lote(r.lote).casefold() == ln]
+
+
+def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
+    """
+    Devuelve bins a desverdizado al anular/editar empaque.
+    Prefiere filas ya empaquetadas del mismo lote (las que se consumieron);
+    si no hay, crea un registro nuevo.
+    """
+    bins = int(bins or 0)
+    lote_n = _norm_lote(lote)
+    if bins <= 0 or not lote_n:
+        return
+
+    from app.utils.tandas import asignar_numero_tanda_nueva
+
+    candidatos = _match_desverdizado_por_lote(db, lote_n)
+    # Preferir: empaquetado/eliminado (se vació al empacar) → luego con stock → resto
+    def sort_key(r):
+        est = (r.estado or "").lower()
+        prio = 0 if est in ("empaquetado", "eliminado") else (1 if (r.cantidad_bins or 0) > 0 else 2)
+        return (prio, -(r.id or 0))
+
+    candidatos = sorted(candidatos, key=sort_key)
+    des = candidatos[0] if candidatos else None
+
     if des:
-        des.cantidad_bins = (des.cantidad_bins or 0) + bins
-        if des.estado in ("empaquetado", "eliminado"):
+        des.lote = _norm_lote(des.lote) or lote_n  # normalizar
+        des.cantidad_bins = int(des.cantidad_bins or 0) + bins
+        if (des.estado or "").lower() in ("empaquetado", "eliminado", ""):
             des.estado = "listo_empaque"
-        # Si reaparece stock y no tiene número, asignar sin renumerar el resto
-        if des.numero_tanda is None:
-            from app.utils.tandas import asignar_numero_tanda_nueva
-
+        elif (des.estado or "").lower() not in ("en_desverdizado", "listo_empaque"):
+            des.estado = "listo_empaque"
+        if des.numero_tanda is None and (des.cantidad_bins or 0) > 0:
             asignar_numero_tanda_nueva(db, des)
-    else:
-        from datetime import date, timedelta
-        from app.core.constants import DIAS_DESVERDIZADO
-        from app.utils.tandas import asignar_numero_tanda_nueva
-
-        hoy = date.today()
-        nuevo = InventarioDesverdizado(
-            producto=Producto.LIMON_AMARILLO,
-            cantidad_bins=bins,
-            lote=lote,
-            fecha_recepcion=hoy,
-            fecha_tentativa_salida=hoy + timedelta(days=DIAS_DESVERDIZADO),
-            estado="listo_empaque",
-        )
-        db.add(nuevo)
         db.flush()
-        asignar_numero_tanda_nueva(db, nuevo)
+        return
+
+    from datetime import date, timedelta
+    from app.core.constants import DIAS_DESVERDIZADO
+
+    hoy = date.today()
+    nuevo = InventarioDesverdizado(
+        producto=Producto.LIMON_AMARILLO,
+        cantidad_bins=bins,
+        lote=lote_n,
+        fecha_recepcion=hoy,
+        fecha_tentativa_salida=hoy + timedelta(days=DIAS_DESVERDIZADO),
+        estado="listo_empaque",
+    )
+    db.add(nuevo)
+    db.flush()
+    asignar_numero_tanda_nueva(db, nuevo)
 
 
 def _talla_for_pres(pres: str | None, talla) -> str | None:
@@ -604,6 +641,71 @@ def agregar_consumo_lote(
     return emp
 
 
+def _detalle_as_dict(raw) -> dict:
+    """detalle_corrida puede venir como dict o JSON string."""
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        import json
+
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _consumos_desde_empaque(emp: Empaque, detalle: dict) -> list[dict]:
+    """
+    Obtiene consumos de bins de campo a devolver.
+    Prioridad: detalle.consumos → bins_campo/lotes_resumen → columnas del empaque.
+    """
+    consumos = _norm_consumos(detalle.get("consumos"))
+    if consumos:
+        return consumos
+
+    # bins_campo en detalle
+    bins_campo = int(detalle.get("bins_campo") or 0)
+    lotes_resumen = (detalle.get("lotes_resumen") or "").strip()
+    if bins_campo > 0 and lotes_resumen and ":" in lotes_resumen:
+        # formato "lote1:10, lote2:5"
+        parsed = []
+        for part in lotes_resumen.split(","):
+            part = part.strip()
+            if ":" not in part:
+                continue
+            lo, bi = part.rsplit(":", 1)
+            try:
+                b = int(bi.strip())
+            except ValueError:
+                continue
+            lo = lo.strip()
+            if lo and b > 0:
+                parsed.append({"lote": lo, "bins": b})
+        if parsed:
+            return parsed
+
+    if emp.bins_desverdizado_usados and int(emp.bins_desverdizado_usados) > 0:
+        return [
+            {
+                "lote": _norm_lote(emp.lote_desverdizado) or "SIN_LOTE",
+                "bins": int(emp.bins_desverdizado_usados),
+            }
+        ]
+
+    if bins_campo > 0:
+        return [
+            {
+                "lote": _norm_lote(emp.lote_desverdizado) or "SIN_LOTE",
+                "bins": bins_campo,
+            }
+        ]
+    return []
+
+
 @router.post("/{empaque_id}/anular", response_model=AnularEmpaqueResponse)
 def anular_empaque(
     empaque_id: int,
@@ -619,14 +721,12 @@ def anular_empaque(
     if emp.producto != Producto.LIMON_AMARILLO:
         raise HTTPException(status_code=400, detail="Anular automático solo para limón por ahora")
 
-    detalle = emp.detalle_corrida if isinstance(emp.detalle_corrida, dict) else {}
+    detalle = _detalle_as_dict(emp.detalle_corrida)
     if detalle.get("anulado"):
         raise HTTPException(status_code=400, detail="Este empaque ya está anulado")
 
-    consumos = detalle.get("consumos") or []
-    produccion = detalle.get("produccion") or []
-    if not consumos and emp.bins_desverdizado_usados:
-        consumos = [{"lote": emp.lote_desverdizado or "SIN_LOTE", "bins": emp.bins_desverdizado_usados}]
+    consumos = _consumos_desde_empaque(emp, detalle)
+    produccion = _norm_produccion(detalle.get("produccion"))
     if not produccion and emp.presentacion and emp.cantidad_producida:
         produccion = [{
             "presentacion": emp.presentacion,
@@ -634,33 +734,59 @@ def anular_empaque(
             "cantidad": emp.cantidad_producida,
         }]
 
+    # 1) PRIMERO devolver bins a desverdizado (campo)
+    bins_devueltos = 0
     for c in consumos:
-        _devolver_bins_lote(db, str(c.get("lote") or "SIN_LOTE"), int(c.get("bins") or 0))
+        b = int(c.get("bins") or 0)
+        lo = _norm_lote(c.get("lote"))
+        if b > 0 and lo:
+            _devolver_bins_lote(db, lo, b)
+            bins_devueltos += b
 
-    _ajustar_inventario_final(db, emp.producto, emp.mercado, produccion, signo=-1)
+    # 2) Restar producción del inventario final
+    if produccion:
+        try:
+            _ajustar_inventario_final(db, emp.producto, emp.mercado, produccion, signo=-1)
+        except HTTPException as e:
+            # Si no hay stock final (ya se embarcó), igual devolvemos bins de campo
+            # y marcamos anulado con nota; no dejamos el empaque a medias en desverdizado.
+            if e.status_code == 400:
+                detalle["aviso_anulacion"] = str(e.detail)
+            else:
+                raise
 
-    # Conversión granel→final: devolver el granel consumido
+    # 3) Conversión granel→final: devolver el granel consumido
     if detalle.get("tipo") == "conversion_rpc_granel":
         consumos_g = detalle.get("consumos_granel") or []
         if consumos_g:
-            _ajustar_inventario_final(
-                db, emp.producto, emp.mercado, consumos_g, signo=+1
-            )
+            try:
+                _ajustar_inventario_final(
+                    db, emp.producto, emp.mercado, consumos_g, signo=+1
+                )
+            except HTTPException:
+                pass
 
     detalle = {
         **detalle,
         "consumos": consumos,
         "produccion": produccion,
+        "bins_campo": bins_devueltos or detalle.get("bins_campo") or emp.bins_desverdizado_usados,
         "anulado": True,
         "anulado_por": getattr(current_user, "username", None),
+        "bins_devueltos": bins_devueltos,
     }
     emp.detalle_corrida = detalle
     from sqlalchemy.orm.attributes import flag_modified
 
     flag_modified(emp, "detalle_corrida")
-    # No renumerar tandas al anular empaque (se devuelven bins; números se mantienen)
     db.commit()
-    return AnularEmpaqueResponse(message="Empaque anulado; inventario revertido", id=empaque_id)
+
+    msg = f"Empaque anulado; {bins_devueltos} bins devueltos a desverdizado"
+    if detalle.get("aviso_anulacion"):
+        msg += f" (aviso inventario final: {detalle['aviso_anulacion']})"
+    if bins_devueltos <= 0 and detalle.get("tipo") != "conversion_rpc_granel":
+        msg += " — no se encontraron consumos de bins en el registro"
+    return AnularEmpaqueResponse(message=msg, id=empaque_id)
 
 
 @router.delete("/{empaque_id}", response_model=EliminarEmpaqueResponse)
