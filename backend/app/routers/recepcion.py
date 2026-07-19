@@ -302,9 +302,10 @@ def editar_desverdizado_admin(
         des.estado = est
 
     if des.cantidad_bins == 0 and des.estado not in ("empaquetado", "eliminado"):
-        # 0 bins: no debe listarse en empaque (no renumerar otras tandas)
+        # 0 bins: no listar en empaque; CONSERVAR numero_tanda
         des.estado = "empaquetado"
     elif (des.cantidad_bins or 0) > 0 and des.numero_tanda is None:
+        # Solo si nunca tuvo número (no es rehabilitación)
         asignar_numero_tanda_nueva(db, des)
 
     db.commit()

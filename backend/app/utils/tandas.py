@@ -1,11 +1,13 @@
 """
 Numeración de tandas de desverdizado.
 
-Reglas:
-- numero_tanda es estable: no se renumeran al empacar (aunque queden 0 bins).
-- Al crear una tanda nueva: se asigna max(existentes)+1 sin tocar las demás.
-- Solo se reasignan 1..N al ELIMINAR una tanda (correcciones / recepción / inventarios).
-- Orden de reasignación (solo en delete): fecha de corte ASC, luego id ASC.
+Reglas de negocio:
+1) Al EMPACAR: no se toca numero_tanda (aunque quede en 0 bins / empaquetado).
+2) Al REHABILITAR (devolver bins por anular/editar empaque): se conserva el
+   numero_tanda original de esa fila; NO se asigna uno nuevo.
+3) Al ELIMINAR una tanda (correcciones / recepción): se renumeran 1..N las
+   tandas que aún tienen bins > 0 (orden: fecha corte ASC, id ASC).
+4) Al CREAR recepción nueva: solo a esa fila se le da max(existentes)+1.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ from app.models.inventory import InventarioDesverdizado
 
 
 def filas_activas_desverdizado(db: Session) -> list:
+    """Tandas con stock que se listan en empaque / dashboard."""
     rows = (
         db.query(InventarioDesverdizado)
         .filter(InventarioDesverdizado.cantidad_bins > 0)
@@ -33,22 +36,23 @@ def filas_activas_desverdizado(db: Session) -> list:
 
 
 def siguiente_numero_tanda(db: Session) -> int:
-    """Siguiente número sin reordenar las tandas existentes."""
+    """Siguiente número libre sin reordenar (solo para tandas NUEVAS de recepción)."""
     m = db.query(func.max(InventarioDesverdizado.numero_tanda)).scalar()
     return int(m or 0) + 1
 
 
 def asignar_numero_tanda_nueva(db: Session, row: InventarioDesverdizado) -> int | None:
     """
-    Asigna numero_tanda a una fila nueva/sin número (si tiene stock).
-    No renumeran las demás tandas.
+    Asigna numero_tanda SOLO si la fila es nueva y aún no tiene número.
+    Nunca pisa un numero_tanda existente (p.ej. tanda rehabilitada tras empaque).
     """
     if row is None:
         return None
-    if (row.cantidad_bins or 0) <= 0 or (row.estado or "") == "eliminado":
-        return row.numero_tanda
     if row.numero_tanda is not None:
         return row.numero_tanda
+    if (row.estado or "") == "eliminado":
+        return None
+    # Solo filas nuevas con stock (o recién creadas)
     n = siguiente_numero_tanda(db)
     row.numero_tanda = n
     db.flush()
@@ -57,24 +61,25 @@ def asignar_numero_tanda_nueva(db: Session, row: InventarioDesverdizado) -> int 
 
 def reasignar_numeros_tanda(db: Session, *, commit: bool = False) -> int:
     """
-    Recalcula numero_tanda 1..N solo para tandas activas (bins > 0).
-    Usar ÚNICAMENTE al eliminar tandas (correcciones / recepción / inventarios).
-    No llamar desde empaque.
+    Renumerar 1..N las tandas CON stock (bins > 0).
+
+    Usar ÚNICAMENTE al ELIMINAR tandas desde correcciones/recepción.
+
+    Importante: las filas en 0 bins (empaquetadas) CONSERVAN su numero_tanda
+    para que, si se rehabilitan (anular empaque), sigan con la tanda original.
+    Solo se limpia numero_tanda en estado 'eliminado'.
     """
-    activas = filas_activas_desverdizado(db)
-    # Limpiar números de filas inactivas (0 bins / eliminadas)
-    inactivas = (
+    # Limpiar solo eliminadas definitivas
+    eliminadas = (
         db.query(InventarioDesverdizado)
-        .filter(
-            (InventarioDesverdizado.cantidad_bins <= 0)
-            | (InventarioDesverdizado.estado == "eliminado")
-        )
+        .filter(InventarioDesverdizado.estado == "eliminado")
         .all()
     )
-    for r in inactivas:
+    for r in eliminadas:
         if r.numero_tanda is not None:
             r.numero_tanda = None
 
+    activas = filas_activas_desverdizado(db)
     for i, r in enumerate(activas, start=1):
         r.numero_tanda = i
 
