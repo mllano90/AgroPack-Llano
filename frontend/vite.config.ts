@@ -7,13 +7,10 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      // Proxy all /api requests to the backend during development
-      // This avoids CORS issues and allows clean relative API paths if desired
+      // Proxy /api → backend local de pruebas
       '/api': {
-        target: 'http://backend:8000',
+        target: 'http://127.0.0.1:8001',
         changeOrigin: true,
-        // Optionally rewrite if your backend expects no /api prefix (not needed here)
-        // rewrite: (path) => path.replace(/^\/api/, ''),
       },
     },
   },
