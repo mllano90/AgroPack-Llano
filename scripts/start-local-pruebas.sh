@@ -11,12 +11,29 @@ echo "  API: http://127.0.0.1:8001"
 echo "  Web: http://127.0.0.1:5173"
 echo "════════════════════════════════════════════"
 
-# Backend
+# Backend — preferir Python 3.11/3.12 (3.14 rompe pydantic-core)
 if [[ ! -d backend/.venv ]]; then
   echo "→ Creando venv backend..."
-  python3 -m venv backend/.venv
+  PY=""
+  for c in python3.11 python3.12 python3.13 python3; do
+    if command -v "$c" >/dev/null 2>&1; then
+      ver="$("$c" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+      major="${ver%%.*}"; minor="${ver#*.}"
+      if [[ "$major" -eq 3 && "$minor" -ge 11 && "$minor" -le 13 ]]; then
+        PY="$c"
+        break
+      fi
+    fi
+  done
+  if [[ -z "$PY" ]]; then
+    echo "❌ Necesitas Python 3.11–3.13 (no uses 3.14). Ej: brew install python@3.11"
+    exit 1
+  fi
+  echo "   usando: $PY ($("$PY" -V))"
+  "$PY" -m venv backend/.venv
   # shellcheck disable=SC1091
   source backend/.venv/bin/activate
+  pip install -U pip
   pip install -r backend/requirements.txt
 else
   # shellcheck disable=SC1091
