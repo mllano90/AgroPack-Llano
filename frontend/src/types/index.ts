@@ -33,6 +33,8 @@ export interface InventarioFinalItem {
   talla?: string | null;
   /** Lote de campo de origen (RPC a granel y trazabilidad) */
   lote?: string | null;
+  /** Día en que se empacó el granel (YYYY-MM-DD) — no mezclar corridas */
+  fecha_empaque?: string | null;
 }
 
 export interface DesverdizadoItem {

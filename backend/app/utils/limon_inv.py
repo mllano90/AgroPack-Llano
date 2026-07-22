@@ -32,6 +32,31 @@ def norm_lote(lote: Any) -> str | None:
     return s or None
 
 
+def norm_fecha_empaque(fecha: Any) -> str | None:
+    """Normaliza fecha de empaque a YYYY-MM-DD (clave de inventario granel por día)."""
+    if fecha is None:
+        return None
+    if hasattr(fecha, "isoformat"):
+        try:
+            return fecha.isoformat()[:10]
+        except Exception:
+            pass
+    s = str(fecha).strip()
+    if not s or s.lower() in ("none", "null"):
+        return None
+    # YYYY-MM-DD...
+    if len(s) >= 10 and s[4] == "-" and s[7] == "-":
+        return s[:10]
+    # DD/MM/YYYY
+    import re
+
+    m = re.match(r"^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$", s)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        return f"{y:04d}-{mo:02d}-{d:02d}"
+    return s or None
+
+
 def norm_talla(presentacion: str | None, talla: Any) -> str | None:
     """
     Normaliza talla a str o None.
@@ -64,15 +89,17 @@ def rows_inv_limon(
     talla: str | None,
     mercado=None,
     lote: str | None = None,
+    fecha_empaque: str | None = None,
 ) -> list[InventarioFinal]:
     """
     Filas de inventario final limón por presentación + talla.
-    rpc_granel: también filtra por lote (origen de campo).
-    Otras presentaciones: si se pasa lote, exige coincidencia; si no, ignora lote en extra.
+    rpc_granel: filtra por lote de origen y fecha de empaque (día en que se empacó).
+    Así no se mezcla granel de distintos días.
     """
     pres = norm_pres(presentacion)
     talla_n = norm_talla(pres, talla)
     lote_n = norm_lote(lote)
+    fecha_n = norm_fecha_empaque(fecha_empaque)
     if not pres:
         return []
 
@@ -84,15 +111,15 @@ def rows_inv_limon(
         if norm_talla(pres, extra.get("talla")) != talla_n:
             continue
         inv_lote = norm_lote(extra.get("lote"))
+        inv_fecha = norm_fecha_empaque(extra.get("fecha_empaque"))
         if pres == "rpc_granel":
-            # Granel siempre se identifica por lote de origen
             if lote_n is not None and inv_lote != lote_n:
                 continue
-            if lote_n is None and inv_lote is not None:
-                # búsqueda sin lote: incluir todos los lotes de esa talla
-                pass
-        elif lote_n is not None and inv_lote is not None and inv_lote != lote_n:
-            continue
+            if fecha_n is not None and inv_fecha != fecha_n:
+                continue
+        else:
+            if lote_n is not None and inv_lote is not None and inv_lote != lote_n:
+                continue
         pval = str(getattr(inv.producto, "value", inv.producto) or "").lower()
         if pval and pval not in ("limon_amarillo",) and not extra.get("presentacion"):
             continue
@@ -117,6 +144,7 @@ def find_inv_final_limon(
     talla: Any,
     mercado=None,
     lote: str | None = None,
+    fecha_empaque: str | None = None,
 ) -> InventarioFinal | None:
     """Primera fila preferida: mismo mercado, con stock > 0, o cualquier match."""
     pres = norm_pres(presentacion)
@@ -124,11 +152,19 @@ def find_inv_final_limon(
         return None
     talla_n = norm_talla(pres, talla)
     lote_n = norm_lote(lote)
-    # rpc_granel: si piden restar/sumar con lote, match estricto por lote
-    rows = rows_inv_limon(db, pres, talla_n, mercado=mercado, lote=lote_n)
-    if pres == "rpc_granel" and lote_n is not None:
-        # solo filas de ese lote
-        rows = [r for r in rows if norm_lote(extra_dict(r).get("lote")) == lote_n]
+    fecha_n = norm_fecha_empaque(fecha_empaque)
+    rows = rows_inv_limon(
+        db, pres, talla_n, mercado=mercado, lote=lote_n, fecha_empaque=fecha_n
+    )
+    if pres == "rpc_granel":
+        if lote_n is not None:
+            rows = [r for r in rows if norm_lote(extra_dict(r).get("lote")) == lote_n]
+        if fecha_n is not None:
+            rows = [
+                r
+                for r in rows
+                if norm_fecha_empaque(extra_dict(r).get("fecha_empaque")) == fecha_n
+            ]
     if not rows:
         return None
     if mercado is not None:
@@ -151,6 +187,7 @@ def stock_limon(
     talla: Any,
     mercado=None,
     lote: str | None = None,
+    fecha_empaque: str | None = None,
 ) -> int:
     rows = rows_inv_limon(
         db,
@@ -158,10 +195,8 @@ def stock_limon(
         norm_talla(presentacion, talla),
         mercado=mercado,
         lote=norm_lote(lote),
+        fecha_empaque=norm_fecha_empaque(fecha_empaque),
     )
-    if norm_pres(presentacion) == "rpc_granel" and norm_lote(lote) is not None:
-        ln = norm_lote(lote)
-        rows = [r for r in rows if norm_lote(extra_dict(r).get("lote")) == ln]
     return sum(int(r.cantidad_stock or 0) for r in rows)
 
 

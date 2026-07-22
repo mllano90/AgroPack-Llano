@@ -18,6 +18,7 @@ class InventarioFinalItem(BaseModel):
     calidad: str | None = None
     talla: str | None = None
     lote: str | None = None  # origen de campo (esp. rpc_granel)
+    fecha_empaque: str | None = None  # día en que se empacó el granel
 
 class DesverdizadoItem(BaseModel):
     lote: str

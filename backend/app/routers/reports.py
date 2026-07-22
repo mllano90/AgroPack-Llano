@@ -405,6 +405,11 @@ def obtener_dashboard(db: Session = Depends(get_db)):
                 calidad=extra.get("calidad"),
                 talla=talla_str,
                 lote=(str(extra["lote"]).strip() if extra.get("lote") else None),
+                fecha_empaque=(
+                    str(extra["fecha_empaque"]).strip()[:10]
+                    if extra.get("fecha_empaque")
+                    else None
+                ),
             )
         )
     
@@ -878,6 +883,11 @@ def proyeccion_inventario(
                 calidad=extra.get("calidad"),
                 talla=extra.get("talla"),
                 lote=(str(extra["lote"]).strip() if extra.get("lote") else None),
+                fecha_empaque=(
+                    str(extra["fecha_empaque"]).strip()[:10]
+                    if extra.get("fecha_empaque")
+                    else None
+                ),
             )
         )
 

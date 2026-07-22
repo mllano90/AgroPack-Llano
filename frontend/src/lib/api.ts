@@ -652,15 +652,17 @@ export async function convertirRpcGranel(
     consumos_granel?: Array<{
       talla?: string | null;
       lote?: string | null;
+      fecha_empaque?: string | null;
       cantidad: number;
     }>;
-    /** @deprecated prefer consumos_granel por talla/lote */
+    /** @deprecated prefer consumos_granel por talla/lote/fecha */
     cantidad_rpc_granel?: number;
     produccion: Array<{
       presentacion: string;
       talla?: string | null;
       cantidad: number;
       lote?: string | null;
+      fecha_empaque?: string | null;
     }>;
     numero_empacador?: string;
     notas?: string | null;
@@ -673,12 +675,14 @@ export async function convertirRpcGranel(
     presentacion: string;
     talla?: string | null;
     lote?: string | null;
+    fecha_empaque?: string | null;
     cantidad: number;
   }>;
   produccion: Array<{
     presentacion: string;
     talla?: string | null;
     lote?: string | null;
+    fecha_empaque?: string | null;
     cantidad: number;
   }>;
 }> {

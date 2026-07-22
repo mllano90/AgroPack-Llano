@@ -21,6 +21,7 @@ from app.models.enums import Producto as ProductoEnum
 from app.utils.limon_inv import (
     norm_talla as _talla_for_pres,
     norm_lote as _norm_lote_extra,
+    norm_fecha_empaque as _norm_fecha_emp,
     calidad_pres as _calidad_pres,
     extra_dict as _extra_dict,
     find_inv_final_limon as _find_inv_final_limon,
@@ -262,6 +263,7 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
         cant = int(linea.get("cantidad") or 0)
         talla_val = _talla_for_pres(pres, linea.get("talla"))
         lote_val = _norm_lote_extra(linea.get("lote"))
+        fecha_val = _norm_fecha_emp(linea.get("fecha_empaque") or linea.get("fecha"))
         if not pres or cant <= 0:
             continue
         if pres == "rpc_granel" and not lote_val and signo > 0:
@@ -269,15 +271,32 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 status_code=400,
                 detail="RPC a granel requiere lote de origen en cada línea de producción",
             )
+        if pres == "rpc_granel" and not fecha_val and signo > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="RPC a granel requiere fecha de empaque (día de la corrida)",
+            )
         delta = cant * signo
         inv_final = _find_inv_final_limon(
-            db, pres, talla_val, mercado=mercado, lote=lote_val
+            db,
+            pres,
+            talla_val,
+            mercado=mercado,
+            lote=lote_val,
+            fecha_empaque=fecha_val,
         )
-        # Compat: granel viejo sin lote en inventario
-        if inv_final is None and pres == "rpc_granel" and lote_val and signo < 0:
-            inv_final = _find_inv_final_limon(db, pres, talla_val, mercado=mercado, lote=None)
-            if inv_final and _norm_lote_extra(_extra_dict(inv_final).get("lote")):
-                inv_final = None  # no mezclar con otro lote
+        # Compat: granel legacy sin fecha_empaque (solo al restar)
+        if (
+            inv_final is None
+            and pres == "rpc_granel"
+            and signo < 0
+            and fecha_val
+        ):
+            inv_final = _find_inv_final_limon(
+                db, pres, talla_val, mercado=mercado, lote=lote_val, fecha_empaque=None
+            )
+            if inv_final and _norm_fecha_emp(_extra_dict(inv_final).get("fecha_empaque")):
+                inv_final = None
         if inv_final:
             nuevo = (inv_final.cantidad_stock or 0) + delta
             if nuevo < 0:
@@ -287,20 +306,12 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                         f"Stock insuficiente de {pres}"
                         + (f" talla {talla_val}" if talla_val else "")
                         + (f" lote {lote_val}" if lote_val else "")
+                        + (f" fecha {fecha_val}" if fecha_val else "")
                         + f" (hay {inv_final.cantidad_stock}, delta {delta})"
                     ),
                 )
             inv_final.cantidad_stock = nuevo
             inv_final.fecha_actualizacion = datetime.utcnow()
-            # Si era granel sin lote y ahora conocemos el lote al sumar, no reetiquetar al restar
-            if signo > 0 and lote_val and pres == "rpc_granel":
-                extra = dict(_extra_dict(inv_final))
-                if not _norm_lote_extra(extra.get("lote")):
-                    extra["lote"] = lote_val
-                    inv_final.atributos_extra = extra
-                    from sqlalchemy.orm.attributes import flag_modified
-
-                    flag_modified(inv_final, "atributos_extra")
         elif signo > 0:
             calidad = _calidad_pres(pres)
             extra = {"presentacion": pres, "calidad": calidad}
@@ -308,6 +319,11 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 extra["talla"] = talla_val
             if lote_val:
                 extra["lote"] = lote_val
+            if fecha_val and pres == "rpc_granel":
+                extra["fecha_empaque"] = fecha_val
+            elif fecha_val and lote_val:
+                # trazabilidad opcional en final
+                extra["fecha_empaque"] = fecha_val
             db.add(
                 InventarioFinal(
                     producto=producto if producto else Producto.LIMON_AMARILLO,
@@ -326,6 +342,7 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                     f"No existe inventario final de {pres}"
                     + (f" talla {talla_val}" if talla_val else "")
                     + (f" lote {lote_val}" if lote_val else "")
+                    + (f" fecha {fecha_val}" if fecha_val else "")
                     + " para restar"
                 ),
             )
@@ -342,16 +359,23 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
         cant = int(linea.get("cantidad") or 0)
         talla_val = _talla_for_pres(pres, linea.get("talla"))
         lote_val = _norm_lote_extra(linea.get("lote"))
+        fecha_val = _norm_fecha_emp(linea.get("fecha_empaque") or linea.get("fecha"))
         if not pres or cant <= 0:
             continue
         inv_final = _find_inv_final_limon(
-            db, pres, talla_val, mercado=mercado, lote=lote_val
+            db,
+            pres,
+            talla_val,
+            mercado=mercado,
+            lote=lote_val,
+            fecha_empaque=fecha_val,
         )
         if not inv_final:
             problemas.append(
                 f"No existe inventario final de {pres}"
                 + (f" talla {talla_val}" if talla_val else "")
                 + (f" lote {lote_val}" if lote_val else "")
+                + (f" fecha {fecha_val}" if fecha_val else "")
             )
             continue
         hay = int(inv_final.cantidad_stock or 0)
@@ -360,6 +384,7 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
                 f"Stock insuficiente de {pres}"
                 + (f" talla {talla_val}" if talla_val else "")
                 + (f" lote {lote_val}" if lote_val else "")
+                + (f" fecha {fecha_val}" if fecha_val else "")
                 + f" (hay {hay}, se necesitan {cant}). "
                 f"Probablemente ya se embarcó parte o todo."
             )
@@ -368,29 +393,30 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
 
 def _netear_produccion(old_prod: list, new_prod: list) -> list[dict]:
     """
-    Calcula deltas netos por (presentacion, talla, lote).
-    Returns list of {presentacion, talla, lote, cantidad, signo} with cantidad > 0.
+    Deltas netos por (presentacion, talla, lote, fecha_empaque).
     """
     from collections import defaultdict
 
-    acc: dict[tuple[str, str | None, str | None], int] = defaultdict(int)
+    acc: dict[tuple[str, str | None, str | None, str | None], int] = defaultdict(int)
     for p in old_prod or []:
         pres = (p.get("presentacion") or "").strip()
         if not pres:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
         lote = _norm_lote_extra(p.get("lote"))
-        acc[(pres, talla, lote)] -= int(p.get("cantidad") or 0)
+        fecha = _norm_fecha_emp(p.get("fecha_empaque") or p.get("fecha"))
+        acc[(pres, talla, lote, fecha)] -= int(p.get("cantidad") or 0)
     for p in new_prod or []:
         pres = (p.get("presentacion") or "").strip()
         if not pres:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
         lote = _norm_lote_extra(p.get("lote"))
-        acc[(pres, talla, lote)] += int(p.get("cantidad") or 0)
+        fecha = _norm_fecha_emp(p.get("fecha_empaque") or p.get("fecha"))
+        acc[(pres, talla, lote, fecha)] += int(p.get("cantidad") or 0)
 
     out: list[dict] = []
-    for (pres, talla, lote), delta in acc.items():
+    for (pres, talla, lote, fecha), delta in acc.items():
         if delta == 0:
             continue
         out.append(
@@ -398,6 +424,7 @@ def _netear_produccion(old_prod: list, new_prod: list) -> list[dict]:
                 "presentacion": pres,
                 "talla": talla,
                 "lote": lote,
+                "fecha_empaque": fecha,
                 "cantidad": abs(delta),
                 "_signo": 1 if delta > 0 else -1,
             }
@@ -405,13 +432,14 @@ def _netear_produccion(old_prod: list, new_prod: list) -> list[dict]:
     return out
 
 
-def _etiquetar_produccion_con_lote(lineas: list, consumos: list) -> list[dict]:
+def _etiquetar_produccion_con_lote(
+    lineas: list,
+    consumos: list,
+    fecha_empaque: str | None = None,
+) -> list[dict]:
     """
-    Asegura que rpc_granel lleve lote de origen.
-    - Si la línea ya trae lote, se respeta.
-    - Si hay un solo lote en consumos, se asigna a todo el granel.
-    - Si hay varios lotes y falta en la línea → error.
-    Producto final (no granel) hereda lote si solo hay un consumo (trazabilidad).
+    Asegura que rpc_granel lleve lote de origen y fecha_empaque (día de corrida).
+    Cada día de empaque genera filas de inventario separadas.
     """
     lotes_cons = sorted(
         {
@@ -420,6 +448,7 @@ def _etiquetar_produccion_con_lote(lineas: list, consumos: list) -> list[dict]:
             if isinstance(c, dict) and _norm_lote(c.get("lote"))
         }
     )
+    fecha_n = _norm_fecha_emp(fecha_empaque)
     out: list[dict] = []
     for p in lineas or []:
         if not isinstance(p, dict):
@@ -445,7 +474,6 @@ def _etiquetar_produccion_con_lote(lineas: list, consumos: list) -> list[dict]:
                         ),
                     )
             if lote_ln not in lotes_cons and lotes_cons:
-                # permitir si coincide casefold
                 ok = any(l.casefold() == lote_ln.casefold() for l in lotes_cons)
                 if not ok:
                     raise HTTPException(
@@ -453,9 +481,20 @@ def _etiquetar_produccion_con_lote(lineas: list, consumos: list) -> list[dict]:
                         detail=f"Lote '{lote_ln}' no está en los consumos de desverdizado",
                     )
             linea["lote"] = lote_ln
-        elif not lote_ln and len(lotes_cons) == 1:
-            # Trazabilidad opcional en final cuando hay un solo lote
-            linea["lote"] = lotes_cons[0]
+            if not _norm_fecha_emp(linea.get("fecha_empaque")):
+                if not fecha_n:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="RPC a granel requiere fecha de empaque de la corrida",
+                    )
+                linea["fecha_empaque"] = fecha_n
+            else:
+                linea["fecha_empaque"] = _norm_fecha_emp(linea.get("fecha_empaque"))
+        else:
+            if not lote_ln and len(lotes_cons) == 1:
+                linea["lote"] = lotes_cons[0]
+            if fecha_n and not _norm_fecha_emp(linea.get("fecha_empaque")):
+                linea["fecha_empaque"] = fecha_n
         out.append(linea)
     return out
 
@@ -518,7 +557,9 @@ def crear_empaque(
                         "talla": None if pres == "bins_jugo" else talla,
                         "cantidad": cant,
                     })
-        lineas = _etiquetar_produccion_con_lote(lineas, consumos_aplicados)
+        lineas = _etiquetar_produccion_con_lote(
+            lineas, consumos_aplicados, fecha_empaque=str(fecha_emp)
+        )
         _ajustar_inventario_final(
             db, empaque.producto, empaque.mercado, lineas, signo=+1
         )
@@ -547,7 +588,9 @@ def crear_empaque(
                         "talla": None if pres == "bins_jugo" else talla,
                         "cantidad": cant,
                     })
-        lineas_guardadas = _etiquetar_produccion_con_lote(lineas_guardadas, consumos)
+        lineas_guardadas = _etiquetar_produccion_con_lote(
+            lineas_guardadas, consumos, fecha_empaque=str(fecha_emp)
+        )
         bins_usados = sum(int(c.get("bins") or 0) for c in consumos)
         lotes = ", ".join(
             f"{c.get('lote')}:{c.get('bins')}" for c in consumos if c.get("lote")
@@ -665,9 +708,12 @@ def _norm_produccion(raw: list | None) -> list[dict]:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
         lote = _norm_lote_extra(p.get("lote"))
+        fecha = _norm_fecha_emp(p.get("fecha_empaque") or p.get("fecha"))
         row = {"presentacion": pres, "talla": talla, "cantidad": cant}
         if lote:
             row["lote"] = lote
+        if fecha:
+            row["fecha_empaque"] = fecha
         out.append(row)
     return out
 
@@ -719,10 +765,16 @@ def editar_empaque_completo(
         if body.produccion is not None
         else old_produccion
     )
-    # Asegurar lote en granel según consumos nuevos
+    # Asegurar lote + fecha_empaque en granel según consumos
     if body.produccion is not None:
+        fecha_edit = None
+        if body.fecha:
+            fecha_edit = _parse_fecha_empaque(body.fecha)
+        fecha_edit = fecha_edit or emp.fecha
         new_produccion = _etiquetar_produccion_con_lote(
-            new_produccion, new_consumos or old_consumos
+            new_produccion,
+            new_consumos or old_consumos,
+            fecha_empaque=str(fecha_edit) if fecha_edit else None,
         )
 
     if body.consumos is not None and not new_consumos:
@@ -751,6 +803,7 @@ def editar_empaque_completo(
                 "presentacion": net["presentacion"],
                 "talla": net["talla"],
                 "lote": net.get("lote"),
+                "fecha_empaque": net.get("fecha_empaque"),
                 "cantidad": net["cantidad"],
             }],
             signo=int(net["_signo"]),
@@ -1042,7 +1095,7 @@ def eliminar_empaque_anulado(
 
 
 def _norm_consumos_granel(raw: list | None) -> list[dict]:
-    """[{"talla","lote","cantidad"}] → líneas presentacion rpc_granel con lote."""
+    """[{"talla","lote","fecha_empaque","cantidad"}] → líneas rpc_granel."""
     out = []
     for c in raw or []:
         cant = int(c.get("cantidad") or 0)
@@ -1050,6 +1103,7 @@ def _norm_consumos_granel(raw: list | None) -> list[dict]:
             continue
         talla_val = _talla_for_pres("rpc_granel", c.get("talla"))
         lote_val = _norm_lote_extra(c.get("lote"))
+        fecha_val = _norm_fecha_emp(c.get("fecha_empaque") or c.get("fecha"))
         row = {
             "presentacion": "rpc_granel",
             "talla": talla_val,
@@ -1057,6 +1111,8 @@ def _norm_consumos_granel(raw: list | None) -> list[dict]:
         }
         if lote_val:
             row["lote"] = lote_val
+        if fecha_val:
+            row["fecha_empaque"] = fecha_val
         out.append(row)
     return out
 
@@ -1098,6 +1154,14 @@ def convertir_rpc_granel(
                 status_code=400,
                 detail="Cada consumo de granel debe indicar el lote de origen",
             )
+        if not c.get("fecha_empaque"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Cada consumo de granel debe indicar la fecha de empaque "
+                    "del día en que se generó (para no mezclar corridas)"
+                ),
+            )
 
     produccion = _norm_produccion(body.produccion)
     if not produccion:
@@ -1109,13 +1173,14 @@ def convertir_rpc_granel(
                 detail="La conversión debe producir RPC 12/18 o cartón (no granel ni jugo)",
             )
 
-    # Heredar lote del granel en producción final (un lote o el de cada línea)
+    # Heredar lote del granel; fecha de la conversión = día actual de corrida
     lotes_g = sorted({c.get("lote") for c in consumos_g if c.get("lote")})
     for p in produccion:
         if not p.get("lote"):
             if len(lotes_g) == 1:
                 p["lote"] = lotes_g[0]
-            # multi-lote: el front debería mandar lote en producción; si no, sin lote en final
+        if not p.get("fecha_empaque"):
+            p["fecha_empaque"] = str(fecha_emp)
 
     total_granel = sum(int(c["cantidad"]) for c in consumos_g)
 
@@ -1132,7 +1197,8 @@ def convertir_rpc_granel(
 
     # 3) Auditoría
     lotes_resumen = ", ".join(
-        f"granel {c.get('lote') or '?'}#{c['talla'] or 's/t'}:{c['cantidad']}"
+        f"granel {c.get('lote') or '?'}#{c['talla'] or 's/t'}"
+        f"@{c.get('fecha_empaque') or '?'}:{c['cantidad']}"
         for c in consumos_g
     )
     detalle = {

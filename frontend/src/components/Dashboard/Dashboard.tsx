@@ -202,7 +202,11 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
                 const tallaPart = item.talla ? `#${item.talla}` : '';
                 const lotePart =
                   pres === 'rpc_granel' && item.lote ? ` lote ${item.lote}` : '';
-                const key = `${pres}${tallaPart}${lotePart}`;
+                const fechaPart =
+                  pres === 'rpc_granel' && item.fecha_empaque
+                    ? ` ${formatFechaCorta(item.fecha_empaque)}`
+                    : '';
+                const key = `${pres}${tallaPart}${lotePart}${fechaPart}`;
                 if (!acc[key]) {
                   const base =
                     pres === 'rpc_granel'
@@ -216,7 +220,10 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
                             : pres === 'bins_jugo'
                               ? 'Bins 900kg'
                               : pres;
-                  acc[key] = { label: `${base} ${tallaPart}${lotePart}`.trim(), total: 0 };
+                  acc[key] = {
+                    label: `${base} ${tallaPart}${lotePart}${fechaPart}`.trim(),
+                    total: 0,
+                  };
                 }
                 acc[key].total += (item.cantidad_stock || 0);
                 return acc;
