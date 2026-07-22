@@ -31,8 +31,21 @@ const KG_PRES: Record<string, number> = {
   rpc_granel: 22,
   bins_jugo: 900,
 };
+/** Producto final 1ra (no granel ni jugo). */
+const PRES_FINAL_1RA = new Set(['rpc_12', 'rpc_18', 'caja_40lbs']);
 const CAJAS_PARRILLA_RPC = 45;
 const CAJAS_PARRILLA_CARTON = 63;
+
+/** Corrida mixta: hay final embolsado/cartón → no sumar granel al % 1ra. */
+function produccionTieneFinal(
+  produccion: { presentacion?: string; cantidad?: number }[]
+): boolean {
+  return produccion.some(
+    (p) =>
+      PRES_FINAL_1RA.has(String(p.presentacion || '')) &&
+      (Number(p.cantidad) || 0) > 0
+  );
+}
 
 const cardStyle: CSSProperties = {
   background: '#f8fafc',
@@ -181,9 +194,12 @@ function computeFromEmpaques(
     let cajasRpc = 0;
     let cajasCarton = 0;
     let binsJugo = 0;
+    // Mixta (granel + final): no sumar granel al % 1ra
+    const omitirGranel = produccionTieneFinal(produccion);
     for (const p of produccion) {
       const cant = Number(p.cantidad) || 0;
       if (cant <= 0) continue;
+      if (p.presentacion === 'rpc_granel' && omitirGranel) continue;
       const kg = (KG_PRES[p.presentacion] || 0) * cant;
       if (p.presentacion === 'bins_jugo') {
         kg2 += kg;
@@ -197,6 +213,7 @@ function computeFromEmpaques(
         kgCarton += kg;
         cajasCarton += cant;
       } else {
+        // rpc_granel (solo-granel) u otra presentación
         kg1 += kg;
       }
     }
@@ -372,10 +389,14 @@ function computeTallasFromEmpaques(empaques: EmpaqueRecord[]): TallaRendimientoA
   for (const e of empaques) {
     const det = parseDetalle(e.detalle_corrida as any);
     if (det?.anulado) continue;
+    if (det?.tipo === 'conversion_rpc_granel') continue;
     const consumos = det?.consumos || [];
+    const produccion = det?.produccion || [];
     binsTotal += consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0);
-    for (const p of det?.produccion || []) {
+    const omitirGranel = produccionTieneFinal(produccion);
+    for (const p of produccion) {
       if (p.presentacion === 'bins_jugo') continue;
+      if (p.presentacion === 'rpc_granel' && omitirGranel) continue;
       const cant = Number(p.cantidad) || 0;
       if (cant <= 0 || !p.talla) continue;
       const kg = (KG_PRES[p.presentacion] || 0) * cant;
