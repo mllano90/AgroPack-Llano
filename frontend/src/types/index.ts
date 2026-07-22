@@ -31,6 +31,8 @@ export interface InventarioFinalItem {
   presentacion?: string | null;
   calidad?: string | null;
   talla?: string | null;
+  /** Lote de campo de origen (RPC a granel y trazabilidad) */
+  lote?: string | null;
 }
 
 export interface DesverdizadoItem {
@@ -84,6 +86,8 @@ export interface EmpaquePayload {
   cantidad_cajas_campo_usadas?: number;
   tipo_cultivo?: TipoCultivo | null;
   mercado: TipoMercado;
+  /** Fecha corrida YYYY-MM-DD (obligatoria en backend) */
+  fecha?: string | null;
   cantidad_cajas_carton_producidas?: number;
   porcentaje_merma?: number;
   notas_merma?: string | null;
@@ -96,7 +100,13 @@ export interface EmpaquePayload {
   calidad?: string | null;
   cantidad_producida?: number;
   // New structured
-  consumos_desverdizado?: Array<{lote: string; bins: number}>;
+  consumos_desverdizado?: Array<{ lote: string; bins: number }>;
+  produccion?: Array<{
+    presentacion: string;
+    talla?: string | null;
+    cantidad: number;
+    lote?: string | null;
+  }>;
   cantidad_rpc12?: number;
   cantidad_rpc18?: number;
   cantidad_caja40lbs?: number;

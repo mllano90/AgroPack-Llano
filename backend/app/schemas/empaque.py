@@ -12,6 +12,8 @@ class EmpaqueCreate(BaseModel):
     porcentaje_merma: float = 0.0
     notas_merma: str | None = None
     numero_empacador: str
+    # Fecha de la corrida de empaque (obligatoria en el endpoint)
+    fecha: str | None = None  # YYYY-MM-DD
     # Limón specific
     bins_desverdizado_usados: int = 0
     lote_desverdizado: str | None = None  # legacy single
@@ -21,8 +23,9 @@ class EmpaqueCreate(BaseModel):
     cantidad_producida: int = 0
     # New for multiple lotes from desverdizado and per presentation output
     consumos_desverdizado: list[dict] | None = None  # [{"lote": "L-001", "bins": 50}, ...]
-    # Structured production lines (preferred for mixed tallas)
-    produccion: list[dict] | None = None  # [{"presentacion": "rpc_12", "talla": "165", "cantidad": 40}, ...]
+    # Structured production: granel puede llevar lote de origen
+    # [{"presentacion": "rpc_granel", "talla": "165", "cantidad": 40, "lote": "8506 S1C4"}, ...]
+    produccion: list[dict] | None = None
     # Legacy flat (kept for compatibility)
     cantidad_rpc12: int = 0
     cantidad_rpc18: int = 0
@@ -87,15 +90,16 @@ class EmpaqueEditRequest(BaseModel):
 
 class ConvertirGranelRequest(BaseModel):
     """
-    Convierte inventario de RPC a granel (22 kg, por talla) en producto final
+    Convierte inventario de RPC a granel (22 kg, por talla y lote) en producto final
     (rpc_12, rpc_18, caja_40lbs).
-    Preferido: consumos_granel = [{"talla": "165", "cantidad": 10}, ...]
-    Legacy: cantidad_rpc_granel (sin talla) si no hay consumos_granel.
+    Preferido: consumos_granel = [{"talla": "165", "lote": "8506 S1C4", "cantidad": 10}, ...]
+    Legacy: cantidad_rpc_granel (sin talla/lote) si no hay consumos_granel.
     """
     mercado: TipoMercado = TipoMercado.NACIONAL
-    consumos_granel: list[dict] | None = None  # [{"talla": "165", "cantidad": 10}, ...]
+    fecha: str | None = None  # YYYY-MM-DD obligatoria en endpoint
+    consumos_granel: list[dict] | None = None  # [{"talla","lote","cantidad"}, ...]
     cantidad_rpc_granel: int = 0  # legacy total sin talla
-    produccion: list[dict]  # [{"presentacion": "rpc_18", "talla": "140", "cantidad": 10}, ...]
+    produccion: list[dict]  # puede incluir lote heredado del granel
     numero_empacador: str = "EMP-01"
     notas: str | None = None
 

@@ -200,7 +200,9 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
               const grupos = visibleLimonFinal.reduce<Record<string, {label: string, total: number}>>((acc, item) => {
                 const pres = item.presentacion || 'otro';
                 const tallaPart = item.talla ? `#${item.talla}` : '';
-                const key = `${pres}${tallaPart}`;
+                const lotePart =
+                  pres === 'rpc_granel' && item.lote ? ` lote ${item.lote}` : '';
+                const key = `${pres}${tallaPart}${lotePart}`;
                 if (!acc[key]) {
                   const base =
                     pres === 'rpc_granel'
@@ -214,7 +216,7 @@ export default function Dashboard({ inventarioCampo, inventarioCarton, desverdiz
                             : pres === 'bins_jugo'
                               ? 'Bins 900kg'
                               : pres;
-                  acc[key] = { label: `${base} ${tallaPart}`.trim(), total: 0 };
+                  acc[key] = { label: `${base} ${tallaPart}${lotePart}`.trim(), total: 0 };
                 }
                 acc[key].total += (item.cantidad_stock || 0);
                 return acc;

@@ -20,6 +20,7 @@ from app.models.enums import Producto
 from app.models.enums import Producto as ProductoEnum
 from app.utils.limon_inv import (
     norm_talla as _talla_for_pres,
+    norm_lote as _norm_lote_extra,
     calidad_pres as _calidad_pres,
     extra_dict as _extra_dict,
     find_inv_final_limon as _find_inv_final_limon,
@@ -260,10 +261,23 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
         pres = (linea.get("presentacion") or "").strip()
         cant = int(linea.get("cantidad") or 0)
         talla_val = _talla_for_pres(pres, linea.get("talla"))
+        lote_val = _norm_lote_extra(linea.get("lote"))
         if not pres or cant <= 0:
             continue
+        if pres == "rpc_granel" and not lote_val and signo > 0:
+            raise HTTPException(
+                status_code=400,
+                detail="RPC a granel requiere lote de origen en cada línea de producción",
+            )
         delta = cant * signo
-        inv_final = _find_inv_final_limon(db, pres, talla_val, mercado=mercado)
+        inv_final = _find_inv_final_limon(
+            db, pres, talla_val, mercado=mercado, lote=lote_val
+        )
+        # Compat: granel viejo sin lote en inventario
+        if inv_final is None and pres == "rpc_granel" and lote_val and signo < 0:
+            inv_final = _find_inv_final_limon(db, pres, talla_val, mercado=mercado, lote=None)
+            if inv_final and _norm_lote_extra(_extra_dict(inv_final).get("lote")):
+                inv_final = None  # no mezclar con otro lote
         if inv_final:
             nuevo = (inv_final.cantidad_stock or 0) + delta
             if nuevo < 0:
@@ -272,16 +286,28 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                     detail=(
                         f"Stock insuficiente de {pres}"
                         + (f" talla {talla_val}" if talla_val else "")
+                        + (f" lote {lote_val}" if lote_val else "")
                         + f" (hay {inv_final.cantidad_stock}, delta {delta})"
                     ),
                 )
             inv_final.cantidad_stock = nuevo
             inv_final.fecha_actualizacion = datetime.utcnow()
+            # Si era granel sin lote y ahora conocemos el lote al sumar, no reetiquetar al restar
+            if signo > 0 and lote_val and pres == "rpc_granel":
+                extra = dict(_extra_dict(inv_final))
+                if not _norm_lote_extra(extra.get("lote")):
+                    extra["lote"] = lote_val
+                    inv_final.atributos_extra = extra
+                    from sqlalchemy.orm.attributes import flag_modified
+
+                    flag_modified(inv_final, "atributos_extra")
         elif signo > 0:
             calidad = _calidad_pres(pres)
             extra = {"presentacion": pres, "calidad": calidad}
             if talla_val:
                 extra["talla"] = talla_val
+            if lote_val:
+                extra["lote"] = lote_val
             db.add(
                 InventarioFinal(
                     producto=producto if producto else Producto.LIMON_AMARILLO,
@@ -299,6 +325,7 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 detail=(
                     f"No existe inventario final de {pres}"
                     + (f" talla {talla_val}" if talla_val else "")
+                    + (f" lote {lote_val}" if lote_val else "")
                     + " para restar"
                 ),
             )
@@ -314,13 +341,17 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
         pres = (linea.get("presentacion") or "").strip()
         cant = int(linea.get("cantidad") or 0)
         talla_val = _talla_for_pres(pres, linea.get("talla"))
+        lote_val = _norm_lote_extra(linea.get("lote"))
         if not pres or cant <= 0:
             continue
-        inv_final = _find_inv_final_limon(db, pres, talla_val, mercado=mercado)
+        inv_final = _find_inv_final_limon(
+            db, pres, talla_val, mercado=mercado, lote=lote_val
+        )
         if not inv_final:
             problemas.append(
                 f"No existe inventario final de {pres}"
                 + (f" talla {talla_val}" if talla_val else "")
+                + (f" lote {lote_val}" if lote_val else "")
             )
             continue
         hay = int(inv_final.cantidad_stock or 0)
@@ -328,6 +359,7 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
             problemas.append(
                 f"Stock insuficiente de {pres}"
                 + (f" talla {talla_val}" if talla_val else "")
+                + (f" lote {lote_val}" if lote_val else "")
                 + f" (hay {hay}, se necesitan {cant}). "
                 f"Probablemente ya se embarcó parte o todo."
             )
@@ -336,38 +368,95 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
 
 def _netear_produccion(old_prod: list, new_prod: list) -> list[dict]:
     """
-    Calcula deltas netos por (presentacion, talla) para aplicar un solo ajuste
-    (evita fallar por stock intermedio al restar todo y sumar de nuevo).
-    Returns list of {presentacion, talla, cantidad, signo} with cantidad > 0.
+    Calcula deltas netos por (presentacion, talla, lote).
+    Returns list of {presentacion, talla, lote, cantidad, signo} with cantidad > 0.
     """
     from collections import defaultdict
 
-    acc: dict[tuple[str, str | None], int] = defaultdict(int)
+    acc: dict[tuple[str, str | None, str | None], int] = defaultdict(int)
     for p in old_prod or []:
         pres = (p.get("presentacion") or "").strip()
         if not pres:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
-        acc[(pres, talla)] -= int(p.get("cantidad") or 0)
+        lote = _norm_lote_extra(p.get("lote"))
+        acc[(pres, talla, lote)] -= int(p.get("cantidad") or 0)
     for p in new_prod or []:
         pres = (p.get("presentacion") or "").strip()
         if not pres:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
-        acc[(pres, talla)] += int(p.get("cantidad") or 0)
+        lote = _norm_lote_extra(p.get("lote"))
+        acc[(pres, talla, lote)] += int(p.get("cantidad") or 0)
 
     out: list[dict] = []
-    for (pres, talla), delta in acc.items():
+    for (pres, talla, lote), delta in acc.items():
         if delta == 0:
             continue
         out.append(
             {
                 "presentacion": pres,
                 "talla": talla,
+                "lote": lote,
                 "cantidad": abs(delta),
                 "_signo": 1 if delta > 0 else -1,
             }
         )
+    return out
+
+
+def _etiquetar_produccion_con_lote(lineas: list, consumos: list) -> list[dict]:
+    """
+    Asegura que rpc_granel lleve lote de origen.
+    - Si la línea ya trae lote, se respeta.
+    - Si hay un solo lote en consumos, se asigna a todo el granel.
+    - Si hay varios lotes y falta en la línea → error.
+    Producto final (no granel) hereda lote si solo hay un consumo (trazabilidad).
+    """
+    lotes_cons = sorted(
+        {
+            _norm_lote(c.get("lote"))
+            for c in (consumos or [])
+            if isinstance(c, dict) and _norm_lote(c.get("lote"))
+        }
+    )
+    out: list[dict] = []
+    for p in lineas or []:
+        if not isinstance(p, dict):
+            continue
+        linea = dict(p)
+        pres = (linea.get("presentacion") or "").strip()
+        lote_ln = _norm_lote_extra(linea.get("lote"))
+        if pres == "rpc_granel":
+            if not lote_ln:
+                if len(lotes_cons) == 1:
+                    lote_ln = lotes_cons[0]
+                elif len(lotes_cons) == 0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="RPC a granel requiere consumo de lote de desverdizado",
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            "Hay varios lotes en el empaque: indica el lote de origen "
+                            "en cada línea de RPC a granel"
+                        ),
+                    )
+            if lote_ln not in lotes_cons and lotes_cons:
+                # permitir si coincide casefold
+                ok = any(l.casefold() == lote_ln.casefold() for l in lotes_cons)
+                if not ok:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Lote '{lote_ln}' no está en los consumos de desverdizado",
+                    )
+            linea["lote"] = lote_ln
+        elif not lote_ln and len(lotes_cons) == 1:
+            # Trazabilidad opcional en final cuando hay un solo lote
+            linea["lote"] = lotes_cons[0]
+        out.append(linea)
     return out
 
 @router.post("/", response_model=EmpaqueResponse)
@@ -376,7 +465,13 @@ def crear_empaque(
     db: Session = Depends(get_db),
     current_user = Depends(require_roles([Rol.ADMIN, Rol.RECEPCION_EMPACADOR, Rol.EMPACADOR]))
 ):
-    
+    fecha_emp = _parse_fecha_empaque(empaque.fecha)
+    if not fecha_emp:
+        raise HTTPException(
+            status_code=400,
+            detail="La fecha de empaque es obligatoria (formato YYYY-MM-DD)",
+        )
+
     if empaque.producto == Producto.UVA:
         # 1. Verificar inventario de campo por variedad + mercado
         inv_campo = db.query(InventarioCampo).filter(
@@ -406,7 +501,7 @@ def crear_empaque(
             ]
         consumos_aplicados = _agregar_consumos_desverdizado(db, consumos_raw)
 
-        # Producir a inventario final
+        # Producir a inventario final (granel lleva lote de origen)
         lineas = empaque.produccion or []
         if not lineas:
             talla = getattr(empaque, "talla", None)
@@ -423,6 +518,7 @@ def crear_empaque(
                         "talla": None if pres == "bins_jugo" else talla,
                         "cantidad": cant,
                     })
+        lineas = _etiquetar_produccion_con_lote(lineas, consumos_aplicados)
         _ajustar_inventario_final(
             db, empaque.producto, empaque.mercado, lineas, signo=+1
         )
@@ -430,14 +526,15 @@ def crear_empaque(
     # 3. Crear el registro de empaque (auditoría)
     detalle_corrida = None
     bins_usados = empaque.bins_desverdizado_usados or 0
+    lineas_guardadas: list = []
     if empaque.producto == Producto.LIMON_AMARILLO:
         consumos = consumos_aplicados or empaque.consumos_desverdizado or []
         if empaque.bins_desverdizado_usados > 0 and not consumos:
             consumos = [{"lote": empaque.lote_desverdizado, "bins": empaque.bins_desverdizado_usados}]
-        lineas = empaque.produccion or []
-        if not lineas:
+        lineas_guardadas = empaque.produccion or []
+        if not lineas_guardadas:
             talla = getattr(empaque, "talla", None)
-            lineas = []
+            lineas_guardadas = []
             for pres, cant in [
                 ("rpc_12", empaque.cantidad_rpc12),
                 ("rpc_18", empaque.cantidad_rpc18),
@@ -445,24 +542,26 @@ def crear_empaque(
                 ("bins_jugo", empaque.cantidad_bins_jugo),
             ]:
                 if cant and cant > 0:
-                    lineas.append({
+                    lineas_guardadas.append({
                         "presentacion": pres,
                         "talla": None if pres == "bins_jugo" else talla,
                         "cantidad": cant,
                     })
+        lineas_guardadas = _etiquetar_produccion_con_lote(lineas_guardadas, consumos)
         bins_usados = sum(int(c.get("bins") or 0) for c in consumos)
         lotes = ", ".join(
             f"{c.get('lote')}:{c.get('bins')}" for c in consumos if c.get("lote")
         ) or empaque.lote_desverdizado
         detalle_corrida = {
             "consumos": consumos,
-            "produccion": lineas,
+            "produccion": lineas_guardadas,
             "bins_campo": bins_usados,
             "lotes_resumen": lotes,
         }
 
     nuevo_empaque = Empaque(
         producto=empaque.producto,
+        fecha=fecha_emp,
         variedad=empaque.variedad,
         tipo_cultivo=empaque.tipo_cultivo,
         mercado=empaque.mercado,
@@ -565,7 +664,11 @@ def _norm_produccion(raw: list | None) -> list[dict]:
         if not pres or cant <= 0:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
-        out.append({"presentacion": pres, "talla": talla, "cantidad": cant})
+        lote = _norm_lote_extra(p.get("lote"))
+        row = {"presentacion": pres, "talla": talla, "cantidad": cant}
+        if lote:
+            row["lote"] = lote
+        out.append(row)
     return out
 
 
@@ -616,6 +719,11 @@ def editar_empaque_completo(
         if body.produccion is not None
         else old_produccion
     )
+    # Asegurar lote en granel según consumos nuevos
+    if body.produccion is not None:
+        new_produccion = _etiquetar_produccion_con_lote(
+            new_produccion, new_consumos or old_consumos
+        )
 
     if body.consumos is not None and not new_consumos:
         raise HTTPException(status_code=400, detail="Debe haber al menos un consumo (lote + bins > 0)")
@@ -639,7 +747,12 @@ def editar_empaque_completo(
             db,
             emp.producto,
             mercado_dest,
-            [{"presentacion": net["presentacion"], "talla": net["talla"], "cantidad": net["cantidad"]}],
+            [{
+                "presentacion": net["presentacion"],
+                "talla": net["talla"],
+                "lote": net.get("lote"),
+                "cantidad": net["cantidad"],
+            }],
             signo=int(net["_signo"]),
         )
 
@@ -929,21 +1042,22 @@ def eliminar_empaque_anulado(
 
 
 def _norm_consumos_granel(raw: list | None) -> list[dict]:
-    """[{"talla": "165", "cantidad": 10}] → líneas presentacion rpc_granel."""
+    """[{"talla","lote","cantidad"}] → líneas presentacion rpc_granel con lote."""
     out = []
     for c in raw or []:
         cant = int(c.get("cantidad") or 0)
         if cant <= 0:
             continue
-        talla = c.get("talla")
-        talla_val = str(talla).strip() if talla is not None and str(talla).strip() != "" else None
-        out.append(
-            {
-                "presentacion": "rpc_granel",
-                "talla": talla_val,
-                "cantidad": cant,
-            }
-        )
+        talla_val = _talla_for_pres("rpc_granel", c.get("talla"))
+        lote_val = _norm_lote_extra(c.get("lote"))
+        row = {
+            "presentacion": "rpc_granel",
+            "talla": talla_val,
+            "cantidad": cant,
+        }
+        if lote_val:
+            row["lote"] = lote_val
+        out.append(row)
     return out
 
 
@@ -954,12 +1068,18 @@ def convertir_rpc_granel(
     current_user=Depends(require_roles([Rol.ADMIN, Rol.RECEPCION_EMPACADOR, Rol.EMPACADOR])),
 ):
     """
-    Consume RPC a granel (22 kg, por talla) del inventario y produce RPC 12/18 o cartón.
-    No consume bins de campo: el granel ya se generó en un empaque previo.
+    Consume RPC a granel (22 kg, por talla y lote) y produce RPC 12/18 o cartón.
+    El producto final hereda el lote de origen del granel consumido.
     """
+    fecha_emp = _parse_fecha_empaque(body.fecha)
+    if not fecha_emp:
+        raise HTTPException(
+            status_code=400,
+            detail="La fecha de empaque es obligatoria (formato YYYY-MM-DD)",
+        )
+
     consumos_g = _norm_consumos_granel(body.consumos_granel)
     if not consumos_g and body.cantidad_rpc_granel > 0:
-        # Legacy: total sin talla
         consumos_g = [
             {
                 "presentacion": "rpc_granel",
@@ -970,8 +1090,14 @@ def convertir_rpc_granel(
     if not consumos_g:
         raise HTTPException(
             status_code=400,
-            detail="Indica consumos de RPC a granel por talla (o cantidad_rpc_granel)",
+            detail="Indica consumos de RPC a granel por talla y lote",
         )
+    for c in consumos_g:
+        if not c.get("lote"):
+            raise HTTPException(
+                status_code=400,
+                detail="Cada consumo de granel debe indicar el lote de origen",
+            )
 
     produccion = _norm_produccion(body.produccion)
     if not produccion:
@@ -983,9 +1109,17 @@ def convertir_rpc_granel(
                 detail="La conversión debe producir RPC 12/18 o cartón (no granel ni jugo)",
             )
 
+    # Heredar lote del granel en producción final (un lote o el de cada línea)
+    lotes_g = sorted({c.get("lote") for c in consumos_g if c.get("lote")})
+    for p in produccion:
+        if not p.get("lote"):
+            if len(lotes_g) == 1:
+                p["lote"] = lotes_g[0]
+            # multi-lote: el front debería mandar lote en producción; si no, sin lote en final
+
     total_granel = sum(int(c["cantidad"]) for c in consumos_g)
 
-    # 1) Descontar RPC a granel por talla
+    # 1) Descontar RPC a granel por talla + lote
     _ajustar_inventario_final(
         db,
         Producto.LIMON_AMARILLO,
@@ -993,12 +1127,13 @@ def convertir_rpc_granel(
         consumos_g,
         signo=-1,
     )
-    # 2) Sumar producción final
+    # 2) Sumar producción final (con lote heredado)
     _ajustar_inventario_final(db, Producto.LIMON_AMARILLO, body.mercado, produccion, signo=+1)
 
-    # 3) Auditoría: registro de empaque sin consumos de campo
+    # 3) Auditoría
     lotes_resumen = ", ".join(
-        f"granel#{c['talla'] or 's/t'}:{c['cantidad']}" for c in consumos_g
+        f"granel {c.get('lote') or '?'}#{c['talla'] or 's/t'}:{c['cantidad']}"
+        for c in consumos_g
     )
     detalle = {
         "tipo": "conversion_rpc_granel",
@@ -1011,6 +1146,7 @@ def convertir_rpc_granel(
     }
     nuevo = Empaque(
         producto=Producto.LIMON_AMARILLO,
+        fecha=fecha_emp,
         variedad=None,
         tipo_cultivo=None,
         mercado=body.mercado,
@@ -1019,7 +1155,7 @@ def convertir_rpc_granel(
         porcentaje_merma=0.0,
         numero_empacador=body.numero_empacador or "EMP-01",
         bins_desverdizado_usados=0,
-        lote_desverdizado=None,
+        lote_desverdizado=lotes_g[0] if len(lotes_g) == 1 else None,
         detalle_corrida=detalle,
         usuario_id=getattr(current_user, "id", None),
     )

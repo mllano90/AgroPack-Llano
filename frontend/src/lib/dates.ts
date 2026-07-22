@@ -31,6 +31,15 @@ export function parseDateLocal(fecha: string | null | undefined): Date | null {
 
 const MESES = ['ENE', 'FEB', 'MAR', 'ABR', 'MAY', 'JUN', 'JUL', 'AGO', 'SEP', 'OCT', 'NOV', 'DIC'];
 
+/** Hoy como YYYY-MM-DD (local) para inputs type=date */
+export function todayInputDate(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
 /** Formato: 08 JUL 2026 */
 export function formatFechaCorta(fecha: string | null | undefined): string {
   if (!fecha) return '—';

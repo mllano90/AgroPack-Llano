@@ -17,6 +17,7 @@ class InventarioFinalItem(BaseModel):
     presentacion: str | None = None
     calidad: str | None = None
     talla: str | None = None
+    lote: str | None = None  # origen de campo (esp. rpc_granel)
 
 class DesverdizadoItem(BaseModel):
     lote: str

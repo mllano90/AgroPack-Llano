@@ -404,6 +404,7 @@ def obtener_dashboard(db: Session = Depends(get_db)):
                 presentacion=extra.get("presentacion"),
                 calidad=extra.get("calidad"),
                 talla=talla_str,
+                lote=(str(extra["lote"]).strip() if extra.get("lote") else None),
             )
         )
     
@@ -876,6 +877,7 @@ def proyeccion_inventario(
                 presentacion=extra.get("presentacion"),
                 calidad=extra.get("calidad"),
                 talla=extra.get("talla"),
+                lote=(str(extra["lote"]).strip() if extra.get("lote") else None),
             )
         )
 

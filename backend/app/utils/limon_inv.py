@@ -25,6 +25,13 @@ def norm_pres(presentacion: str | None) -> str | None:
     return s or None
 
 
+def norm_lote(lote: Any) -> str | None:
+    if lote is None:
+        return None
+    s = str(lote).strip()
+    return s or None
+
+
 def norm_talla(presentacion: str | None, talla: Any) -> str | None:
     """
     Normaliza talla a str o None.
@@ -56,13 +63,16 @@ def rows_inv_limon(
     presentacion: str | None,
     talla: str | None,
     mercado=None,
+    lote: str | None = None,
 ) -> list[InventarioFinal]:
     """
-    Filas de inventario final limón que coinciden por presentación + talla.
-    Prefiere mismo mercado al ordenar, pero incluye todos.
+    Filas de inventario final limón por presentación + talla.
+    rpc_granel: también filtra por lote (origen de campo).
+    Otras presentaciones: si se pasa lote, exige coincidencia; si no, ignora lote en extra.
     """
     pres = norm_pres(presentacion)
     talla_n = norm_talla(pres, talla)
+    lote_n = norm_lote(lote)
     if not pres:
         return []
 
@@ -72,6 +82,16 @@ def rows_inv_limon(
         if norm_pres(extra.get("presentacion")) != pres:
             continue
         if norm_talla(pres, extra.get("talla")) != talla_n:
+            continue
+        inv_lote = norm_lote(extra.get("lote"))
+        if pres == "rpc_granel":
+            # Granel siempre se identifica por lote de origen
+            if lote_n is not None and inv_lote != lote_n:
+                continue
+            if lote_n is None and inv_lote is not None:
+                # búsqueda sin lote: incluir todos los lotes de esa talla
+                pass
+        elif lote_n is not None and inv_lote is not None and inv_lote != lote_n:
             continue
         pval = str(getattr(inv.producto, "value", inv.producto) or "").lower()
         if pval and pval not in ("limon_amarillo",) and not extra.get("presentacion"):
@@ -96,13 +116,19 @@ def find_inv_final_limon(
     presentacion: str | None,
     talla: Any,
     mercado=None,
+    lote: str | None = None,
 ) -> InventarioFinal | None:
     """Primera fila preferida: mismo mercado, con stock > 0, o cualquier match."""
     pres = norm_pres(presentacion)
     if not pres:
         return None
     talla_n = norm_talla(pres, talla)
-    rows = rows_inv_limon(db, pres, talla_n, mercado=mercado)
+    lote_n = norm_lote(lote)
+    # rpc_granel: si piden restar/sumar con lote, match estricto por lote
+    rows = rows_inv_limon(db, pres, talla_n, mercado=mercado, lote=lote_n)
+    if pres == "rpc_granel" and lote_n is not None:
+        # solo filas de ese lote
+        rows = [r for r in rows if norm_lote(extra_dict(r).get("lote")) == lote_n]
     if not rows:
         return None
     if mercado is not None:
@@ -124,8 +150,18 @@ def stock_limon(
     presentacion: str | None,
     talla: Any,
     mercado=None,
+    lote: str | None = None,
 ) -> int:
-    rows = rows_inv_limon(db, presentacion, norm_talla(presentacion, talla), mercado=mercado)
+    rows = rows_inv_limon(
+        db,
+        presentacion,
+        norm_talla(presentacion, talla),
+        mercado=mercado,
+        lote=norm_lote(lote),
+    )
+    if norm_pres(presentacion) == "rpc_granel" and norm_lote(lote) is not None:
+        ln = norm_lote(lote)
+        rows = [r for r in rows if norm_lote(extra_dict(r).get("lote")) == ln]
     return sum(int(r.cantidad_stock or 0) for r in rows)
 
 
