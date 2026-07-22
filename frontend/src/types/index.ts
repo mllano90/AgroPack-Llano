@@ -140,6 +140,8 @@ export interface EmpaqueRecord {
       presentacion?: string;
       talla?: string | null;
       cantidad: number;
+      lote?: string | null;
+      fecha_empaque?: string | null;
     }>;
     produccion?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
     bins_campo?: number;

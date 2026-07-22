@@ -391,12 +391,39 @@ export async function eliminarDesverdizado(
   return res.data;
 }
 
+export interface CorridaPasoDetalleApi {
+  empaque_id: number;
+  fecha: string;
+  tipo: string;
+  titulo?: string;
+  bins_campo?: number;
+  rpc_granel_producido?: number;
+  rpc_granel_usado?: number;
+  kg_entrada?: number;
+  kg_rpc?: number;
+  kg_carton?: number;
+  kg_granel?: number;
+  kg_primera_final?: number;
+  kg_segunda?: number;
+  cajas_rpc?: number;
+  cajas_carton?: number;
+  bins_jugo?: number;
+  lotes_resumen?: string | null;
+  notas?: string | null;
+}
+
 export interface CorridaRendimientoApi {
   id: number;
   fecha: string;
   numero_empacador?: string | null;
+  /** "campo" | "proceso" (campo+conversiones) | "conversion_granel" */
+  tipo_corrida?: string;
   bins_campo: number;
+  rpc_granel_usado?: number;
+  rpc_granel_producido?: number;
+  kg_granel_pendiente?: number;
   kg_entrada: number;
+  /** Solo producto final (RPC+cartón); no incluye granel WIP */
   kg_primera: number;
   kg_segunda: number;
   kg_salida: number;
@@ -405,8 +432,10 @@ export interface CorridaRendimientoApi {
   pct_recuperacion: number;
   kg_rpc?: number;
   kg_carton?: number;
+  kg_granel?: number;
   pct_rpc_de_primera?: number;
   pct_carton_de_primera?: number;
+  pct_granel_de_primera?: number;
   cajas_rpc: number;
   cajas_carton: number;
   bins_jugo: number;
@@ -415,12 +444,14 @@ export interface CorridaRendimientoApi {
   parrillas_jugo: number;
   parrillas_primera?: number;
   parrillas_total: number;
-  /** bins campo / parrillas de 1ra (sin jugo) */
   bins_por_parrilla: number | null;
   kg_por_ha?: number | null;
   kg_primera_por_ha?: number | null;
   kg_segunda_por_ha?: number | null;
   lotes_resumen?: string | null;
+  /** Pasos del proceso para desglose al expandir */
+  pasos?: CorridaPasoDetalleApi[];
+  ids_empaques?: number[];
 }
 
 export interface LoteRendimientoApi {

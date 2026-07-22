@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useState, type CSSProperties } from 'react';
 import {
   getRendimientosLimon,
   getProyeccionInventario,
@@ -31,21 +31,8 @@ const KG_PRES: Record<string, number> = {
   rpc_granel: 22,
   bins_jugo: 900,
 };
-/** Producto final 1ra (no granel ni jugo). */
-const PRES_FINAL_1RA = new Set(['rpc_12', 'rpc_18', 'caja_40lbs']);
 const CAJAS_PARRILLA_RPC = 45;
 const CAJAS_PARRILLA_CARTON = 63;
-
-/** Corrida mixta: hay final embolsado/cartón → no sumar granel al % 1ra. */
-function produccionTieneFinal(
-  produccion: { presentacion?: string; cantidad?: number }[]
-): boolean {
-  return produccion.some(
-    (p) =>
-      PRES_FINAL_1RA.has(String(p.presentacion || '')) &&
-      (Number(p.cantidad) || 0) > 0
-  );
-}
 
 const cardStyle: CSSProperties = {
   background: '#f8fafc',
@@ -88,23 +75,46 @@ function parseDetalle(raw: EmpaqueRecord['detalle_corrida'] | string | null | un
 }
 
 function enrichCorrida(c: Corrida, ha: number): Corrida {
+  const esConversion = (c.tipo_corrida || 'campo') === 'conversion_granel';
   const parrPrimera =
     c.parrillas_primera != null
       ? c.parrillas_primera
       : Math.round(((c.parrillas_rpc || 0) + (c.parrillas_carton || 0)) * 100) / 100;
   const binsPorParrilla =
-    parrPrimera > 0
+    !esConversion && parrPrimera > 0 && c.bins_campo > 0
       ? Math.round((c.bins_campo / parrPrimera) * 100) / 100
-      : null;
+      : esConversion
+        ? null
+        : c.bins_por_parrilla ?? null;
   return {
     ...c,
+    tipo_corrida: c.tipo_corrida || 'campo',
     parrillas_primera: parrPrimera,
-    // Siempre bins / parrillas 1ra (no jugo)
     bins_por_parrilla: binsPorParrilla,
-    kg_por_ha: c.kg_por_ha ?? kgHa(c.kg_salida, ha),
-    kg_primera_por_ha: c.kg_primera_por_ha ?? kgHa(c.kg_primera, ha),
-    kg_segunda_por_ha: c.kg_segunda_por_ha ?? kgHa(c.kg_segunda, ha),
+    kg_por_ha: esConversion ? null : c.kg_por_ha ?? kgHa(c.kg_salida, ha),
+    kg_primera_por_ha: esConversion ? null : c.kg_primera_por_ha ?? kgHa(c.kg_primera, ha),
+    kg_segunda_por_ha: esConversion ? null : c.kg_segunda_por_ha ?? kgHa(c.kg_segunda, ha),
   };
+}
+
+function resumenConsumosGranel(
+  cg: Array<{
+    lote?: string | null;
+    talla?: string | number | null;
+    cantidad?: number;
+    fecha_empaque?: string | null;
+  }>
+): string {
+  return cg
+    .filter((g) => (Number(g.cantidad) || 0) > 0)
+    .map((g) => {
+      const lote = String(g.lote || 'SIN_LOTE').trim();
+      const talla =
+        g.talla != null && String(g.talla).trim() !== '' ? `#${g.talla}` : '';
+      const fe = g.fecha_empaque ? `@${g.fecha_empaque}` : '';
+      return `granel ${lote}${talla}${fe}:${g.cantidad}`;
+    })
+    .join(', ');
 }
 
 function enrichLote(l: Lote, haPorLote: number = HECTAREAS_POR_LOTE): Lote {
@@ -162,11 +172,11 @@ function computeFromEmpaques(
   for (const e of limones) {
     const det = parseDetalle(e.detalle_corrida as any);
     if (det?.anulado) continue;
-    // Conversión granel→final: no es corrida de campo (evita doble conteo de 1ra)
-    if (det?.tipo === 'conversion_rpc_granel') continue;
 
+    const esConversion = det?.tipo === 'conversion_rpc_granel';
     let consumos = det?.consumos || [];
     let produccion = det?.produccion || [];
+    const consumosGranel = det?.consumos_granel || [];
 
     if ((!consumos || consumos.length === 0) && (e.bins_desverdizado_usados || 0) > 0) {
       consumos = [
@@ -185,21 +195,26 @@ function computeFromEmpaques(
         },
       ];
     }
-    if (consumos.length === 0 && produccion.length === 0) continue;
+    if (esConversion) {
+      if (consumosGranel.length === 0 && produccion.length === 0) continue;
+    } else if (consumos.length === 0 && produccion.length === 0) {
+      continue;
+    }
 
     let kg1 = 0;
     let kg2 = 0;
     let kgRpc = 0;
     let kgCarton = 0;
+    let kgGranel = 0;
     let cajasRpc = 0;
     let cajasCarton = 0;
     let binsJugo = 0;
-    // Mixta (granel + final): no sumar granel al % 1ra
-    const omitirGranel = produccionTieneFinal(produccion);
+    let rpcGranelProducido = 0;
     for (const p of produccion) {
       const cant = Number(p.cantidad) || 0;
       if (cant <= 0) continue;
-      if (p.presentacion === 'rpc_granel' && omitirGranel) continue;
+      // Conversión: producción es final; no contar granel residual en prod
+      if (esConversion && p.presentacion === 'rpc_granel') continue;
       const kg = (KG_PRES[p.presentacion] || 0) * cant;
       if (p.presentacion === 'bins_jugo') {
         kg2 += kg;
@@ -212,24 +227,36 @@ function computeFromEmpaques(
         kg1 += kg;
         kgCarton += kg;
         cajasCarton += cant;
+      } else if (p.presentacion === 'rpc_granel') {
+        // WIP 1ra del día de campo (para usar al día siguiente)
+        kg1 += kg;
+        kgGranel += kg;
+        rpcGranelProducido += cant;
       } else {
-        // rpc_granel (solo-granel) u otra presentación
         kg1 += kg;
       }
     }
 
-    const binsCampo = consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0);
-    const kgEntrada = binsCampo * PESO_BIN_CAMPO_KG;
+    const rpcGranelUsado = esConversion
+      ? consumosGranel.reduce((s, g) => s + (Number(g.cantidad) || 0), 0)
+      : 0;
+    const binsCampo = esConversion
+      ? 0
+      : consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0);
+    const kgEntrada = esConversion
+      ? rpcGranelUsado * (KG_PRES.rpc_granel || 22)
+      : binsCampo * PESO_BIN_CAMPO_KG;
     const kgSalida = kg1 + kg2;
     const parrRpc = cajasRpc ? cajasRpc / CAJAS_PARRILLA_RPC : 0;
     const parrCarton = cajasCarton ? cajasCarton / CAJAS_PARRILLA_CARTON : 0;
     const parrPrimera = Math.round((parrRpc + parrCarton) * 100) / 100;
     const parrTotal = Math.round((parrPrimera + binsJugo) * 100) / 100;
-    const lotesResumen =
-      det?.lotes_resumen ||
-      consumos.map((c) => `${c.lote}:${c.bins}`).join(', ') ||
-      e.lote_desverdizado ||
-      '';
+    const lotesResumen = esConversion
+      ? det?.lotes_resumen || resumenConsumosGranel(consumosGranel) || 'conversión granel'
+      : det?.lotes_resumen ||
+        consumos.map((c) => `${c.lote}:${c.bins}`).join(', ') ||
+        e.lote_desverdizado ||
+        '';
 
     corridas.push(
       enrichCorrida(
@@ -237,7 +264,10 @@ function computeFromEmpaques(
           id: e.id,
           fecha: e.fecha,
           numero_empacador: e.numero_empacador,
+          tipo_corrida: esConversion ? 'conversion_granel' : 'campo',
           bins_campo: binsCampo,
+          rpc_granel_usado: rpcGranelUsado,
+          rpc_granel_producido: rpcGranelProducido,
           kg_entrada: kgEntrada,
           kg_primera: Math.round(kg1 * 100) / 100,
           kg_segunda: Math.round(kg2 * 100) / 100,
@@ -247,8 +277,10 @@ function computeFromEmpaques(
           pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
           kg_rpc: Math.round(kgRpc * 100) / 100,
           kg_carton: Math.round(kgCarton * 100) / 100,
+          kg_granel: Math.round(kgGranel * 100) / 100,
           pct_rpc_de_primera: kg1 ? Math.round((kgRpc / kg1) * 10000) / 100 : 0,
           pct_carton_de_primera: kg1 ? Math.round((kgCarton / kg1) * 10000) / 100 : 0,
+          pct_granel_de_primera: kg1 ? Math.round((kgGranel / kg1) * 10000) / 100 : 0,
           cajas_rpc: cajasRpc,
           cajas_carton: cajasCarton,
           bins_jugo: binsJugo,
@@ -258,12 +290,17 @@ function computeFromEmpaques(
           parrillas_primera: parrPrimera,
           parrillas_total: parrTotal,
           bins_por_parrilla:
-            parrPrimera > 0 ? Math.round((binsCampo / parrPrimera) * 100) / 100 : null,
+            !esConversion && parrPrimera > 0 && binsCampo > 0
+              ? Math.round((binsCampo / parrPrimera) * 100) / 100
+              : null,
           lotes_resumen: lotesResumen,
         },
         ha
       )
     );
+
+    // Por lote solo acumula corridas de campo (no conversiones)
+    if (esConversion) continue;
 
     const totalBins = consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0) || 1;
     const multi = new Set(consumos.map((c) => c.lote || 'SIN_LOTE')).size > 1;
@@ -331,16 +368,20 @@ function computeFromEmpaques(
       );
     });
 
-  const bins = corridas.reduce((s, c) => s + c.bins_campo, 0);
-  const kg1 = corridas.reduce((s, c) => s + c.kg_primera, 0);
-  const kg2 = corridas.reduce((s, c) => s + c.kg_segunda, 0);
-  const kgRpcT = corridas.reduce((s, c) => s + (c.kg_rpc || 0), 0);
-  const kgCartonT = corridas.reduce((s, c) => s + (c.kg_carton || 0), 0);
+  // Acumulado rancho: solo corridas de campo
+  const corridasCampo = corridas.filter(
+    (c) => (c.tipo_corrida || 'campo') === 'campo'
+  );
+  const bins = corridasCampo.reduce((s, c) => s + c.bins_campo, 0);
+  const kg1 = corridasCampo.reduce((s, c) => s + c.kg_primera, 0);
+  const kg2 = corridasCampo.reduce((s, c) => s + c.kg_segunda, 0);
+  const kgRpcT = corridasCampo.reduce((s, c) => s + (c.kg_rpc || 0), 0);
+  const kgCartonT = corridasCampo.reduce((s, c) => s + (c.kg_carton || 0), 0);
   const kgE = bins * PESO_BIN_CAMPO_KG;
   const kgS = kg1 + kg2;
-  const cRpc = corridas.reduce((s, c) => s + c.cajas_rpc, 0);
-  const cCarton = corridas.reduce((s, c) => s + c.cajas_carton, 0);
-  const bJugo = corridas.reduce((s, c) => s + c.bins_jugo, 0);
+  const cRpc = corridasCampo.reduce((s, c) => s + c.cajas_rpc, 0);
+  const cCarton = corridasCampo.reduce((s, c) => s + c.cajas_carton, 0);
+  const bJugo = corridasCampo.reduce((s, c) => s + c.bins_jugo, 0);
   const pRpc = cRpc ? cRpc / CAJAS_PARRILLA_RPC : 0;
   const pCarton = cCarton ? cCarton / CAJAS_PARRILLA_CARTON : 0;
   const pPrimera = Math.round((pRpc + pCarton) * 100) / 100;
@@ -372,7 +413,8 @@ function computeFromEmpaques(
       parrillas_primera: pPrimera,
       parrillas_total: pTotal,
       bins_por_parrilla: pPrimera > 0 ? Math.round((bins / pPrimera) * 100) / 100 : null,
-      lotes_resumen: `${corridas.length} corridas`,
+      tipo_corrida: 'campo',
+      lotes_resumen: `${corridasCampo.length} corridas de campo`,
     },
     ha
   );
@@ -393,10 +435,8 @@ function computeTallasFromEmpaques(empaques: EmpaqueRecord[]): TallaRendimientoA
     const consumos = det?.consumos || [];
     const produccion = det?.produccion || [];
     binsTotal += consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0);
-    const omitirGranel = produccionTieneFinal(produccion);
     for (const p of produccion) {
       if (p.presentacion === 'bins_jugo') continue;
-      if (p.presentacion === 'rpc_granel' && omitirGranel) continue;
       const cant = Number(p.cantidad) || 0;
       if (cant <= 0 || !p.talla) continue;
       const kg = (KG_PRES[p.presentacion] || 0) * cant;
@@ -466,8 +506,20 @@ export default function Reportes({ token }: ReportesProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
-  const [vista, setVista] = useState<VistaReporte>('lote');
+  // Por corrida: procesos fusionados (campo + conversión del granel)
+  const [vista, setVista] = useState<VistaReporte>('corrida');
   const [debugInfo, setDebugInfo] = useState('');
+  /** id de proceso expandido para ver pasos (campo + conversiones) */
+  const [expandidos, setExpandidos] = useState<Set<number>>(new Set());
+
+  const toggleExpand = (id: number) => {
+    setExpandidos((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const load = async () => {
     setLoading(true);
@@ -506,7 +558,9 @@ export default function Reportes({ token }: ReportesProps) {
           const d = parseDetalle(e.detalle_corrida as any);
           return Boolean(
             d?.consumos?.length ||
+              d?.consumos_granel?.length ||
               d?.produccion?.length ||
+              d?.tipo === 'conversion_rpc_granel' ||
               (e.bins_desverdizado_usados || 0) > 0
           );
         });
@@ -1015,6 +1069,12 @@ export default function Reportes({ token }: ReportesProps) {
       {vista === 'corrida' && (
         <>
           <h3 style={{ marginTop: 8 }}>Por corrida de empaque</h3>
+          <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 920 }}>
+            Cada fila es un <strong>proceso completo</strong>: día de campo + conversiones del
+            granel residual. El <strong>kg 1ra</strong> solo cuenta producto final (RPC/cartón), no
+            el WIP a granel. Haz <strong>clic en la fila</strong> para ver el desglose (cuánto salió
+            de bins, cuánto granel quedó y cómo se convirtió después).
+          </p>
           {corridas.length === 0 ? (
             <p style={{ color: '#64748b' }}>No hay corridas con detalle.</p>
           ) : (
@@ -1029,51 +1089,292 @@ export default function Reportes({ token }: ReportesProps) {
               >
                 <thead>
                   <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
+                    <th style={th}></th>
                     <th style={th}>#</th>
+                    <th style={th}>Tipo</th>
                     <th style={th}>Fecha</th>
-                    <th style={th}>Lotes</th>
+                    <th style={th}>Origen / lotes</th>
                     <th style={thPrimary}>% 1ra</th>
                     <th style={thPrimary}>% 2da</th>
-                    <th style={thPrimary}>Bins/parr. 1ra</th>
-                    <th style={th}>kg/ha</th>
-                    <th style={th}>kg 1ra</th>
+                    <th style={thPrimary}>Bins/parr.</th>
+                    <th style={th}>kg 1ra final</th>
                     <th style={th}>kg 2da</th>
                     <th style={th}>kg total</th>
-                    <th style={th}>Bins</th>
-                    <th style={th}>Parr. 1ra</th>
+                    <th style={th}>Entrada</th>
+                    <th style={th}>Parr. final</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {corridas.map((c) => (
-                    <tr key={c.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                      <td style={td}>{c.id}</td>
-                      <td style={td}>{c.fecha}</td>
-                      <td style={td}>{c.lotes_resumen || '—'}</td>
-                      <td style={{ ...td, background: '#f0fdf4', fontWeight: 700, fontSize: 15 }}>
-                        {c.pct_primera}%
-                      </td>
-                      <td style={{ ...td, background: '#fefce8', fontWeight: 700, fontSize: 15 }}>
-                        {c.pct_segunda}%
-                      </td>
-                      <td style={{ ...td, background: '#e0f2fe', fontWeight: 700, fontSize: 15 }}>
-                        {c.bins_por_parrilla != null ? c.bins_por_parrilla : '—'}
-                      </td>
-                      <td style={td}>{fmtNum(c.kg_por_ha)}</td>
-                      <td style={td}>{fmtKg(c.kg_primera)}</td>
-                      <td style={td}>{fmtKg(c.kg_segunda)}</td>
-                      <td style={td}>{fmtKg(c.kg_salida)}</td>
-                      <td style={td}>
-                        {c.bins_campo}
-                        <div style={{ fontSize: 11, color: '#94a3b8' }}>{fmtKg(c.kg_entrada)} kg</div>
-                      </td>
-                      <td style={td}>
-                        {fmtNum(c.parrillas_primera, 2)}
-                        <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                          +{c.parrillas_jugo} jugo
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {corridas.map((c) => {
+                    const tipo = c.tipo_corrida || 'campo';
+                    const esProc = tipo === 'proceso';
+                    const esConv = tipo === 'conversion_granel';
+                    const open = expandidos.has(c.id);
+                    const pasos = c.pasos || [];
+                    const puedeExpandir = pasos.length > 0;
+                    return (
+                      <Fragment key={c.id}>
+                        <tr
+                          onClick={() => puedeExpandir && toggleExpand(c.id)}
+                          style={{
+                            borderBottom: open ? 'none' : '1px solid #e2e8f0',
+                            background: esProc
+                              ? '#eef2ff'
+                              : esConv
+                                ? '#f5f3ff'
+                                : open
+                                  ? '#f8fafc'
+                                  : undefined,
+                            cursor: puedeExpandir ? 'pointer' : 'default',
+                          }}
+                          title={puedeExpandir ? 'Clic para ver desglose del proceso' : undefined}
+                        >
+                          <td style={{ ...td, width: 28, color: '#64748b', fontWeight: 700 }}>
+                            {puedeExpandir ? (open ? '▾' : '▸') : ''}
+                          </td>
+                          <td style={td}>
+                            {c.id}
+                            {(c.ids_empaques || []).length > 1 && (
+                              <div style={{ fontSize: 10, color: '#6366f1' }}>
+                                emp. {(c.ids_empaques || []).join('+')}
+                              </div>
+                            )}
+                          </td>
+                          <td style={td}>
+                            {esProc ? (
+                              <span style={badgeProc}>Proceso</span>
+                            ) : esConv ? (
+                              <span style={badgeConv}>Granel→final</span>
+                            ) : (
+                              <span style={badgeCampo}>Campo</span>
+                            )}
+                          </td>
+                          <td style={td}>{c.fecha}</td>
+                          <td style={td}>{c.lotes_resumen || '—'}</td>
+                          <td style={{ ...td, background: '#f0fdf4', fontWeight: 700, fontSize: 15 }}>
+                            {c.pct_primera}%
+                          </td>
+                          <td style={{ ...td, background: '#fefce8', fontWeight: 700, fontSize: 15 }}>
+                            {c.pct_segunda}%
+                          </td>
+                          <td style={{ ...td, background: '#e0f2fe', fontWeight: 700, fontSize: 15 }}>
+                            {c.bins_por_parrilla != null ? c.bins_por_parrilla : '—'}
+                          </td>
+                          <td style={td}>
+                            <strong>{fmtKg(c.kg_primera)}</strong>
+                            <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
+                              RPC {fmtKg(c.kg_rpc || 0)} · cartón {fmtKg(c.kg_carton || 0)}
+                            </div>
+                            {(c.kg_granel || 0) > 0 && (
+                              <div style={{ fontSize: 11, color: '#7c3aed', marginTop: 2 }}>
+                                WIP granel {fmtKg(c.kg_granel || 0)}
+                                {(c.rpc_granel_producido || 0) > 0
+                                  ? ` (${c.rpc_granel_producido} RPC)`
+                                  : ''}
+                                {(c.kg_granel_pendiente || 0) > 0
+                                  ? ` · pendiente ${fmtKg(c.kg_granel_pendiente || 0)}`
+                                  : c.rpc_granel_usado
+                                    ? ' · convertido'
+                                    : ''}
+                              </div>
+                            )}
+                          </td>
+                          <td style={td}>{fmtKg(c.kg_segunda)}</td>
+                          <td style={td}>{fmtKg(c.kg_salida)}</td>
+                          <td style={td}>
+                            {esConv ? (
+                              <>
+                                {c.rpc_granel_usado ?? 0} RPC granel
+                                <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                                  {fmtKg(c.kg_entrada)} kg
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                {c.bins_campo} bins
+                                <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                                  {fmtKg(c.kg_entrada)} kg
+                                </div>
+                              </>
+                            )}
+                          </td>
+                          <td style={td}>
+                            {fmtNum(c.parrillas_primera, 2)}
+                            <div style={{ fontSize: 11, color: '#94a3b8' }}>
+                              +{c.parrillas_jugo} jugo
+                            </div>
+                          </td>
+                        </tr>
+                        {open && pasos.length > 0 && (
+                          <tr>
+                            <td
+                              colSpan={13}
+                              style={{
+                                padding: '0 12px 14px 36px',
+                                background: '#f8fafc',
+                                borderBottom: '1px solid #e2e8f0',
+                              }}
+                            >
+                              <div
+                                style={{
+                                  border: '1px solid #e2e8f0',
+                                  borderRadius: 10,
+                                  padding: 14,
+                                  background: 'white',
+                                  marginTop: 4,
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    fontWeight: 700,
+                                    marginBottom: 10,
+                                    color: '#334155',
+                                  }}
+                                >
+                                  Desglose del proceso
+                                </div>
+                                <div
+                                  style={{
+                                    display: 'flex',
+                                    flexDirection: 'column',
+                                    gap: 10,
+                                  }}
+                                >
+                                  {pasos.map((p, idx) => {
+                                    const esPasoConv = p.tipo === 'conversion_granel';
+                                    return (
+                                      <div
+                                        key={`${p.empaque_id}-${idx}`}
+                                        style={{
+                                          borderLeft: `4px solid ${
+                                            esPasoConv ? '#8b5cf6' : '#22c55e'
+                                          }`,
+                                          padding: '10px 12px',
+                                          background: esPasoConv ? '#faf5ff' : '#f0fdf4',
+                                          borderRadius: 8,
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: 8,
+                                            alignItems: 'center',
+                                            marginBottom: 6,
+                                          }}
+                                        >
+                                          <span
+                                            style={esPasoConv ? badgeConv : badgeCampo}
+                                          >
+                                            {esPasoConv ? 'Paso conversión' : 'Paso campo'}
+                                          </span>
+                                          <strong style={{ fontSize: 13 }}>
+                                            {p.titulo || `Empaque #${p.empaque_id}`}
+                                          </strong>
+                                          <span style={{ fontSize: 12, color: '#64748b' }}>
+                                            {p.fecha}
+                                          </span>
+                                        </div>
+                                        {p.notas && (
+                                          <p
+                                            style={{
+                                              margin: '0 0 8px',
+                                              fontSize: 13,
+                                              color: '#475569',
+                                            }}
+                                          >
+                                            {p.notas}
+                                          </p>
+                                        )}
+                                        <div
+                                          style={{
+                                            display: 'flex',
+                                            flexWrap: 'wrap',
+                                            gap: 16,
+                                            fontSize: 12,
+                                            color: '#334155',
+                                          }}
+                                        >
+                                          {esPasoConv ? (
+                                            <>
+                                              <span>
+                                                Granel usado:{' '}
+                                                <strong>
+                                                  {p.rpc_granel_usado} RPC (
+                                                  {fmtKg(p.kg_granel || 0)} kg)
+                                                </strong>
+                                              </span>
+                                              <span>
+                                                → Final:{' '}
+                                                <strong>
+                                                  {fmtKg(p.kg_primera_final || 0)} kg
+                                                </strong>
+                                              </span>
+                                              <span>
+                                                RPC {fmtKg(p.kg_rpc || 0)} · cartón{' '}
+                                                {fmtKg(p.kg_carton || 0)}
+                                              </span>
+                                            </>
+                                          ) : (
+                                            <>
+                                              <span>
+                                                Bins: <strong>{p.bins_campo}</strong> (
+                                                {fmtKg(p.kg_entrada || 0)} kg)
+                                              </span>
+                                              <span>
+                                                Final directo:{' '}
+                                                <strong>
+                                                  {fmtKg(p.kg_primera_final || 0)} kg
+                                                </strong>{' '}
+                                                (RPC {fmtKg(p.kg_rpc || 0)} · cartón{' '}
+                                                {fmtKg(p.kg_carton || 0)})
+                                              </span>
+                                              {(p.rpc_granel_producido || 0) > 0 && (
+                                                <span style={{ color: '#6d28d9' }}>
+                                                  Granel sobrante:{' '}
+                                                  <strong>
+                                                    {p.rpc_granel_producido} RPC (
+                                                    {fmtKg(p.kg_granel || 0)} kg)
+                                                  </strong>
+                                                </span>
+                                              )}
+                                              {(p.kg_segunda || 0) > 0 && (
+                                                <span>
+                                                  2da/jugo: {fmtKg(p.kg_segunda || 0)} kg
+                                                </span>
+                                              )}
+                                            </>
+                                          )}
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                                <div
+                                  style={{
+                                    marginTop: 12,
+                                    paddingTop: 10,
+                                    borderTop: '1px dashed #cbd5e1',
+                                    fontSize: 13,
+                                    color: '#0f172a',
+                                  }}
+                                >
+                                  <strong>Total proceso (solo final):</strong>{' '}
+                                  {fmtKg(c.kg_primera)} kg 1ra = RPC {fmtKg(c.kg_rpc || 0)} +
+                                  cartón {fmtKg(c.kg_carton || 0)}
+                                  {c.kg_segunda > 0
+                                    ? ` · ${fmtKg(c.kg_segunda)} kg 2da`
+                                    : ''}{' '}
+                                  · entrada {c.bins_campo} bins ({fmtKg(c.kg_entrada)} kg) ·{' '}
+                                  <strong>{c.pct_primera}% 1ra</strong>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -1098,4 +1399,30 @@ const thPrimary: CSSProperties = {
 const td: CSSProperties = {
   padding: '10px 8px',
   verticalAlign: 'top',
+};
+
+const badgeBase: CSSProperties = {
+  display: 'inline-block',
+  fontSize: 11,
+  fontWeight: 700,
+  padding: '2px 8px',
+  borderRadius: 999,
+};
+
+const badgeCampo: CSSProperties = {
+  ...badgeBase,
+  background: '#dcfce7',
+  color: '#166534',
+};
+
+const badgeConv: CSSProperties = {
+  ...badgeBase,
+  background: '#ede9fe',
+  color: '#5b21b6',
+};
+
+const badgeProc: CSSProperties = {
+  ...badgeBase,
+  background: '#e0e7ff',
+  color: '#3730a3',
 };

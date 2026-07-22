@@ -34,38 +34,77 @@ class DashboardResponse(BaseModel):
     embarques_recientes: List[dict] = []
 
 
+class CorridaPasoDetalle(BaseModel):
+    """Un paso del proceso (día de campo o conversión granel→final)."""
+    empaque_id: int
+    fecha: str
+    # "campo" | "conversion_granel"
+    tipo: str
+    titulo: str = ""
+    bins_campo: int = 0
+    rpc_granel_producido: int = 0
+    rpc_granel_usado: int = 0
+    kg_entrada: float = 0.0  # bins×260 o granel×22
+    kg_rpc: float = 0.0
+    kg_carton: float = 0.0
+    kg_granel: float = 0.0  # producido (campo) o consumido (conversión)
+    kg_primera_final: float = 0.0  # solo producto final de este paso
+    kg_segunda: float = 0.0
+    cajas_rpc: int = 0
+    cajas_carton: int = 0
+    bins_jugo: int = 0
+    lotes_resumen: str | None = None
+    notas: str | None = None
+
+
 class CorridaRendimiento(BaseModel):
-    """Rendimiento de una corrida de empaque de limón."""
+    """Rendimiento de una corrida / proceso de empaque de limón.
+
+    En vista fusionada (campo + conversiones del granel residual), kg_primera
+    solo incluye producto FINAL (RPC/cartón), no el WIP a granel.
+    """
     id: int
     fecha: str
     numero_empacador: str | None = None
+    # "campo" | "conversion_granel" | "proceso" (campo + 1+ conversiones fusionadas)
+    tipo_corrida: str = "campo"
     bins_campo: int
+    # RPC a granel consumidos (conversiones del proceso)
+    rpc_granel_usado: int = 0
+    # RPC a granel producidos el día de campo (WIP)
+    rpc_granel_producido: int = 0
+    # Granel aún no convertido (producido − usado), kg
+    kg_granel_pendiente: float = 0.0
     kg_entrada: float
-    kg_primera: float
+    kg_primera: float  # solo final (RPC+cartón) del proceso completo
     kg_segunda: float
     kg_salida: float
-    pct_primera: float  # % del peso de campo (dato principal)
+    pct_primera: float  # vs bins de campo (proceso) o vs granel (conversión suelta)
     pct_segunda: float
     pct_recuperacion: float  # (1ra+2da) / entrada
-    # Desglose 1ra: RPC vs cartón
+    # Desglose 1ra FINAL del proceso
     kg_rpc: float = 0.0
     kg_carton: float = 0.0
-    pct_rpc_de_primera: float = 0.0  # % del kg 1ra que es RPC
-    pct_carton_de_primera: float = 0.0  # % del kg 1ra que es cartón
+    kg_granel: float = 0.0  # WIP producido en campo (informativo; no va en kg_primera)
+    pct_rpc_de_primera: float = 0.0
+    pct_carton_de_primera: float = 0.0
+    pct_granel_de_primera: float = 0.0  # legacy; suele 0 en resumen fusionado
     cajas_rpc: int  # rpc_12 + rpc_18
     cajas_carton: int  # caja_40lbs
     bins_jugo: int
     parrillas_rpc: float  # cajas_rpc / 45
     parrillas_carton: float  # cajas_carton / 63
     parrillas_jugo: float  # 1 bin jugo = 1 parrilla (2da)
-    parrillas_primera: float = 0.0  # solo 1ra: RPC + cartón
+    parrillas_primera: float = 0.0  # solo 1ra final: RPC + cartón
     parrillas_total: float
-    # bins campo / parrillas de 1ra (NO incluye bins jugo)
     bins_por_parrilla: float | None = None
-    kg_por_ha: float | None = None  # kg salida / hectareas del rancho
+    kg_por_ha: float | None = None
     kg_primera_por_ha: float | None = None
     kg_segunda_por_ha: float | None = None
     lotes_resumen: str | None = None
+    # Pasos del proceso (campo + conversiones) para desglose al expandir
+    pasos: list[CorridaPasoDetalle] = []
+    ids_empaques: list[int] = []  # empaques que componen este proceso
 
 
 class LoteRendimiento(BaseModel):
