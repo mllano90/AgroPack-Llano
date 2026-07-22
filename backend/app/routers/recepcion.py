@@ -5,7 +5,7 @@ from app.core.database import get_db
 from app.core.security import require_roles
 from app.models.enums import Rol
 from app.schemas.recepcion import RecepcionCampoCreate, RecepcionCampoResponse
-from app.models.inventory import RecepcionCampo, InventarioCampo, InventarioFinal, InventarioDesverdizado
+from app.models.inventory import RecepcionCampo, InventarioCampo, InventarioFinal, InventarioDesverdizado, Empaque
 from app.models.enums import Producto
 from app.core.constants import DIAS_DESVERDIZADO
 
@@ -240,6 +240,66 @@ def _purge_desverdizado_rows(db: Session, rows: list) -> tuple[int, int, list[in
     return len(ids), bins_total, ids
 
 
+def _norm_lote_cmp(lote: str | None) -> str:
+    return (lote or "").strip().casefold()
+
+
+def _empaques_que_usan_lote(db: Session, lote: str) -> list[int]:
+    """
+    IDs de empaques de limón que referencian el lote (detalle_corrida.consumos
+    o campo legacy lote_desverdizado). Ignora empaques ya anulados.
+    Parsea detalle_corrida aunque venga como JSON string (legacy).
+    """
+    from app.utils.limon_inv import parse_detalle_corrida
+
+    lote_n = _norm_lote_cmp(lote)
+    if not lote_n:
+        return []
+    ids: list[int] = []
+    empaques = (
+        db.query(Empaque)
+        .filter(Empaque.producto == Producto.LIMON_AMARILLO)
+        .order_by(Empaque.id.desc())
+        .limit(500)
+        .all()
+    )
+    for e in empaques:
+        detalle = parse_detalle_corrida(e.detalle_corrida)
+        if detalle.get("anulado"):
+            continue
+        found = False
+        for c in detalle.get("consumos") or []:
+            if not isinstance(c, dict):
+                continue
+            if _norm_lote_cmp(c.get("lote")) == lote_n:
+                ids.append(int(e.id))
+                found = True
+                break
+        if found:
+            continue
+        # fallback legacy
+        if _norm_lote_cmp(e.lote_desverdizado) == lote_n:
+            if int(e.bins_desverdizado_usados or 0) > 0 or detalle.get("bins_campo"):
+                ids.append(int(e.id))
+    return ids
+
+
+def _assert_lote_eliminable(db: Session, lote: str) -> None:
+    """Bloquea borrar desverdizado si el lote ya se usó en empaque activo."""
+    usados = _empaques_que_usan_lote(db, lote)
+    if usados:
+        muestra = ", ".join(f"#{i}" for i in usados[:8])
+        extra = f" (+{len(usados) - 8} más)" if len(usados) > 8 else ""
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No se puede eliminar el lote '{(lote or '').strip()}': "
+                f"ya fue usado en empaque(s) {muestra}{extra}. "
+                f"Anula o corrige esos empaques primero."
+            ),
+        )
+
+
 @router.patch("/admin/desverdizado/{desverdizado_id}")
 def editar_desverdizado_admin(
     desverdizado_id: int,
@@ -293,6 +353,13 @@ def editar_desverdizado_admin(
 
     if des.cantidad_bins == 0 and des.estado not in ("empaquetado", "eliminado"):
         des.estado = "empaquetado"
+    elif int(des.cantidad_bins or 0) > 0 and (des.estado or "").lower() in (
+        "empaquetado",
+        "eliminado",
+        "",
+    ):
+        # Con stock no debe quedarse como empaquetado/eliminado (P1-5)
+        des.estado = "listo_empaque"
 
     db.commit()
     db.refresh(des)
@@ -318,12 +385,16 @@ def eliminar_desverdizado_admin(
     Elimina registro(s) de desverdizado mal dados de alta.
     Por defecto borra TODAS las filas con el mismo nombre de lote (puede haber
     varias recepciones del mismo lote). Empaque y dashboard dejan de verlas.
+    Bloqueado si el lote ya aparece en un empaque activo (no anulado).
     """
     des = db.query(InventarioDesverdizado).filter(InventarioDesverdizado.id == desverdizado_id).first()
     if not des:
         raise HTTPException(status_code=404, detail="Lote de desverdizado no encontrado")
 
     lote = (des.lote or "").strip()
+    if lote:
+        _assert_lote_eliminable(db, lote)
+
     if todo_el_lote and lote:
         # Todas las filas del mismo lote (puede haber varias recepciones)
         all_rows = db.query(InventarioDesverdizado).all()
@@ -353,10 +424,12 @@ def eliminar_desverdizado_por_lote(
     db: Session = Depends(get_db),
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
-    """Elimina por nombre de lote (todas las filas con ese lote)."""
+    """Elimina por nombre de lote (todas las filas con ese lote). Bloqueado si ya se usó en empaque."""
     lote_clean = (lote or "").strip()
     if not lote_clean:
         raise HTTPException(status_code=400, detail="Indica el nombre del lote")
+
+    _assert_lote_eliminable(db, lote_clean)
 
     all_rows = db.query(InventarioDesverdizado).all()
     rows = [r for r in all_rows if (r.lote or "").strip() == lote_clean]

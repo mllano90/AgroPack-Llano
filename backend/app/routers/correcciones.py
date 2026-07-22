@@ -53,13 +53,11 @@ def _fecha_corte_efectiva(r: RecepcionCampo, desvs: list | None = None) -> date 
 def _numeros_recepcion_cronologicos(db: Session) -> dict[int, int]:
     """
     Asigna número de recepción 1..N en orden cronológico de fecha de corte
-    (luego id). Solo limón; el id de BD se mantiene para editar/borrar.
+    efectiva (desverdizado.fecha_recepcion → fecha_corte → fecha), luego id BD.
+    El id interno de BD se mantiene para editar/borrar; este número es solo display.
     """
-    recs = (
-        db.query(RecepcionCampo)
-        .order_by(RecepcionCampo.id.asc())
-        .all()
-    )
+    # Carga todas; el orden final lo define ranked (no confiar en order por id).
+    recs = db.query(RecepcionCampo).all()
     limon = [r for r in recs if _es_limon(r.producto)]
     if not limon:
         return {}
@@ -88,31 +86,16 @@ def _numeros_recepcion_cronologicos(db: Session) -> dict[int, int]:
 
 
 def _norm_talla_inv(presentacion: str | None, talla) -> str | None:
-    if not presentacion or presentacion in ("bins_jugo",):
-        return None
-    if talla is None:
-        return None
-    s = str(talla).strip()
-    if not s or s.lower() in ("none", "null"):
-        return None
-    if s.startswith("#"):
-        s = s[1:].strip()
-    return s or None
+    from app.utils.limon_inv import norm_talla
+
+    return norm_talla(presentacion, talla)
 
 
 def _match_inv_limon(db: Session, presentacion: str | None, talla: str | None):
     """Coincide por presentación + talla (talla normalizada str)."""
-    all_inv = db.query(InventarioFinal).all()
-    talla_norm = _norm_talla_inv(presentacion, talla)
-    pres = (presentacion or "").strip() or None
-    for i in all_inv:
-        extra = i.atributos_extra if isinstance(i.atributos_extra, dict) else {}
-        if (extra.get("presentacion") or None) != pres:
-            continue
-        if _norm_talla_inv(pres, extra.get("talla")) != talla_norm:
-            continue
-        return i
-    return None
+    from app.utils.limon_inv import find_inv_final_limon
+
+    return find_inv_final_limon(db, presentacion, talla, mercado=None)
 
 
 def _fill_recepcion_from_desv(r: RecepcionCampo, d: InventarioDesverdizado) -> None:
@@ -1040,3 +1023,87 @@ def eliminar_inventario_campo_admin(
     db.delete(inv)
     db.commit()
     return {"message": f"Inventario campo #{inv_id} eliminado", "id": inv_id}
+
+
+# ---------------------------------------------------------------------------
+# Reset operacional (admin) — limpia inventarios y movimientos, conserva users
+# ---------------------------------------------------------------------------
+
+from app.models.inventory import Parrilla, Cliente  # noqa: E402
+
+
+class ResetOperacionalRequest(BaseModel):
+    """
+    Borra datos operativos (recepciones, desverdizado, empaques, inventarios,
+    embarques, parrillas). Conserva usuarios y clientes.
+
+    confirm debe ser exactamente: RESET_OPERACIONAL
+    """
+    confirm: str = Field(..., description='Debe ser "RESET_OPERACIONAL"')
+
+
+@router.post("/reset-operacional")
+def reset_operacional(
+    body: ResetOperacionalRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Pone la operación en ceros para recarga limpia.
+    Solo admin. Irreversible.
+    """
+    if (body.confirm or "").strip() != "RESET_OPERACIONAL":
+        raise HTTPException(
+            status_code=400,
+            detail='Para confirmar envía {"confirm": "RESET_OPERACIONAL"}',
+        )
+
+    counts: dict[str, int] = {}
+
+    def _del(model, name: str) -> None:
+        n = db.query(model).delete(synchronize_session=False)
+        counts[name] = int(n or 0)
+
+    # Orden: hijos → padres
+    _del(EmbarqueDetalle, "embarque_detalle")
+    _del(Embarque, "embarque")
+    _del(Empaque, "empaque")
+    _del(InventarioFinal, "inventario_final")
+    _del(InventarioCampo, "inventario_campo")
+    _del(InventarioDesverdizado, "inventario_desverdizado")
+    _del(RecepcionCampo, "recepcion_campo")
+    _del(Parrilla, "parrilla")
+
+    db.commit()
+
+    # Postgres: reiniciar secuencias de IDs para que el próximo alta empiece en 1
+    try:
+        from sqlalchemy import text
+
+        dialect = db.bind.dialect.name if db.bind is not None else ""
+        if dialect == "postgresql":
+            tables = [
+                "embarque_detalle",
+                "embarque",
+                "empaque",
+                "inventario_final",
+                "inventario_campo",
+                "inventario_desverdizado",
+                "recepcion_campo",
+                "parrilla",
+            ]
+            for t in tables:
+                db.execute(text(f"ALTER SEQUENCE IF EXISTS {t}_id_seq RESTART WITH 1"))
+            db.commit()
+    except Exception:
+        db.rollback()
+
+    return {
+        "message": (
+            "Datos operativos borrados. Usuarios y clientes se conservaron. "
+            "El sistema queda listo para recarga limpia."
+        ),
+        "eliminados": counts,
+        "ejecutado_por": getattr(current_user, "username", None),
+        "conservado": ["users", "clientes"],
+    }

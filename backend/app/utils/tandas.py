@@ -1,8 +1,13 @@
 """
-Legacy: la numeración de tandas fue desactivada.
-El desverdizado se ordena solo por fecha de corte (recepción) ASC, luego id.
+Legacy: la numeración de tandas fue desactivada (Fase 3 / P2).
 
-Las funciones quedan como no-op por si algún import residual las llama.
+Orden de desverdizado y display:
+  - fecha de corte / recepción ASC, luego id
+  - número de recepción en Correcciones: cronológico por fecha de corte (display)
+
+Las funciones de tandas quedan como no-op por imports residuales.
+La columna inventario_desverdizado.numero_tanda se mantiene en BD por
+compatibilidad; no se escribe ni se muestra en UI.
 """
 from __future__ import annotations
 
@@ -33,6 +38,7 @@ def siguiente_numero_tanda(db: Session) -> int:
 
 
 def asignar_numero_tanda_nueva(db: Session, row) -> None:
+    # No escribir numero_tanda
     return None
 
 

@@ -18,12 +18,66 @@ from app.models.enums import TipoMercado
 from app.models.inventory import Empaque, InventarioCampo, InventarioFinal, InventarioDesverdizado
 from app.models.enums import Producto
 from app.models.enums import Producto as ProductoEnum
+from app.utils.limon_inv import (
+    norm_talla as _talla_for_pres,
+    calidad_pres as _calidad_pres,
+    extra_dict as _extra_dict,
+    find_inv_final_limon as _find_inv_final_limon,
+    parse_detalle_corrida as _detalle_as_dict,
+)
 
 router = APIRouter(tags=["Empaque"])
 
 
 def _norm_lote(lote: str | None) -> str:
     return (lote or "").strip()
+
+
+def _sync_legacy_empaque_fields(
+    emp: Empaque,
+    *,
+    produccion: list | None,
+    consumos: list | None,
+    bins_usados: int | None = None,
+) -> None:
+    """
+    Mantiene columnas legacy (presentacion/talla/cantidad_producida/lote)
+    alineadas con detalle_corrida para reportes y listados antiguos.
+    """
+    prod = produccion or []
+    cons = consumos or []
+    if bins_usados is not None:
+        emp.bins_desverdizado_usados = int(bins_usados)
+    elif cons:
+        emp.bins_desverdizado_usados = sum(int(c.get("bins") or 0) for c in cons if isinstance(c, dict))
+
+    if cons:
+        first_lote = next(
+            (str(c.get("lote")).strip() for c in cons if isinstance(c, dict) and c.get("lote")),
+            None,
+        )
+        if first_lote:
+            emp.lote_desverdizado = first_lote
+
+    total_cant = 0
+    first_pres = None
+    first_talla = None
+    for p in prod:
+        if not isinstance(p, dict):
+            continue
+        cant = int(p.get("cantidad") or 0)
+        if cant <= 0:
+            continue
+        total_cant += cant
+        if first_pres is None:
+            first_pres = (p.get("presentacion") or "").strip() or None
+            first_talla = _talla_for_pres(first_pres, p.get("talla"))
+    if total_cant > 0:
+        emp.cantidad_producida = total_cant
+    if first_pres:
+        emp.presentacion = first_pres
+        emp.talla = first_talla
+        emp.calidad = _calidad_pres(first_pres)
 
 
 def _match_desverdizado_por_lote(db: Session, lote: str) -> list:
@@ -130,7 +184,8 @@ def _agregar_consumos_desverdizado(db: Session, consumos: list | None) -> list[d
 def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     """
     Devuelve bins a desverdizado al anular/editar empaque.
-    Prefiere la fila empaquetada del mismo lote; si no hay, crea registro.
+    Prefiere fila existente del mismo lote (empaquetado > con stock > otras).
+    Solo crea fila nueva si no hay ninguna del lote; intenta vincular recepcion_id.
     """
     bins = int(bins or 0)
     lote_n = _norm_lote(lote)
@@ -157,6 +212,7 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     if des:
         des.lote = _norm_lote(des.lote) or lote_n
         des.cantidad_bins = int(des.cantidad_bins or 0) + bins
+        # Reactivar sin inventar estados raros; unificar a listo_empaque si estaba cerrado
         if (des.estado or "").lower() in ("empaquetado", "eliminado", ""):
             des.estado = "listo_empaque"
         elif (des.estado or "").lower() not in ("en_desverdizado", "listo_empaque"):
@@ -164,77 +220,38 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
         db.flush()
         return
 
+    # Sin filas del lote: último recurso — crear vinculando recepción histórica si existe
     from datetime import date, timedelta
     from app.core.constants import DIAS_DESVERDIZADO
+    from app.models.inventory import RecepcionCampo
 
+    rec = (
+        db.query(RecepcionCampo)
+        .filter(RecepcionCampo.producto == Producto.LIMON_AMARILLO)
+        .order_by(RecepcionCampo.id.desc())
+        .all()
+    )
+    rec_match = next(
+        (r for r in rec if _norm_lote(r.lote).casefold() == lote_n.casefold()),
+        None,
+    )
     hoy = date.today()
+    fecha_rec = (
+        getattr(rec_match, "fecha_corte", None)
+        or getattr(rec_match, "fecha", None)
+        or hoy
+    )
     nuevo = InventarioDesverdizado(
         producto=Producto.LIMON_AMARILLO,
         cantidad_bins=bins,
         lote=lote_n,
-        fecha_recepcion=hoy,
-        fecha_tentativa_salida=hoy + timedelta(days=DIAS_DESVERDIZADO),
+        fecha_recepcion=fecha_rec,
+        fecha_tentativa_salida=fecha_rec + timedelta(days=DIAS_DESVERDIZADO),
         estado="listo_empaque",
+        recepcion_id=rec_match.id if rec_match else None,
     )
     db.add(nuevo)
     db.flush()
-
-
-def _talla_for_pres(pres: str | None, talla) -> str | None:
-    """bins_jugo no usa talla. rpc_granel y finales sí (inventario por tamaño)."""
-    if not pres or pres == "bins_jugo":
-        return None
-    if talla is None:
-        return None
-    s = str(talla).strip()
-    if not s or s.lower() in ("none", "null"):
-        return None
-    if s.startswith("#"):
-        s = s[1:].strip()
-    return s or None
-
-
-def _calidad_pres(pres: str | None) -> str:
-    if pres == "bins_jugo":
-        return "segunda"
-    if pres == "rpc_granel":
-        return "primera"  # 1ra en proceso (pre-embolse)
-    return "primera"
-
-
-def _extra_dict(inv: InventarioFinal) -> dict:
-    extra = inv.atributos_extra
-    return extra if isinstance(extra, dict) else {}
-
-
-def _find_inv_final_limon(
-    db: Session,
-    pres: str,
-    talla_val: str | None,
-    mercado=None,
-) -> InventarioFinal | None:
-    """Match robusto por presentación + talla (normaliza int/str). Prefiere mercado."""
-    pres = (pres or "").strip()
-    rows: list[InventarioFinal] = []
-    for i in db.query(InventarioFinal).all():
-        extra = _extra_dict(i)
-        if (extra.get("presentacion") or "").strip() != pres:
-            continue
-        if _talla_for_pres(pres, extra.get("talla")) != talla_val:
-            continue
-        rows.append(i)
-    if not rows:
-        return None
-    if mercado is not None:
-        mval = str(getattr(mercado, "value", mercado))
-        for r in rows:
-            if str(getattr(r.mercado, "value", r.mercado)) == mval:
-                return r
-    # preferir con stock > 0
-    for r in rows:
-        if (r.cantidad_stock or 0) > 0:
-            return r
-    return rows[0]
 
 
 def _ajustar_inventario_final(db: Session, producto: Producto, mercado, produccion: list, signo: int) -> None:
@@ -285,6 +302,36 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                     + " para restar"
                 ),
             )
+
+
+def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[str]:
+    """
+    Dry-run: verifica si se puede restar la producción del inventario final.
+    No muta la BD. Devuelve lista de problemas (vacía = OK).
+    """
+    problemas: list[str] = []
+    for linea in produccion or []:
+        pres = (linea.get("presentacion") or "").strip()
+        cant = int(linea.get("cantidad") or 0)
+        talla_val = _talla_for_pres(pres, linea.get("talla"))
+        if not pres or cant <= 0:
+            continue
+        inv_final = _find_inv_final_limon(db, pres, talla_val, mercado=mercado)
+        if not inv_final:
+            problemas.append(
+                f"No existe inventario final de {pres}"
+                + (f" talla {talla_val}" if talla_val else "")
+            )
+            continue
+        hay = int(inv_final.cantidad_stock or 0)
+        if hay < cant:
+            problemas.append(
+                f"Stock insuficiente de {pres}"
+                + (f" talla {talla_val}" if talla_val else "")
+                + f" (hay {hay}, se necesitan {cant}). "
+                f"Probablemente ya se embarcó parte o todo."
+            )
+    return problemas
 
 
 def _netear_produccion(old_prod: list, new_prod: list) -> list[dict]:
@@ -433,6 +480,13 @@ def crear_empaque(
         detalle_corrida=detalle_corrida,
         usuario_id=current_user.id if hasattr(current_user, 'id') else None
     )
+    if empaque.producto == Producto.LIMON_AMARILLO and detalle_corrida:
+        _sync_legacy_empaque_fields(
+            nuevo_empaque,
+            produccion=detalle_corrida.get("produccion"),
+            consumos=detalle_corrida.get("consumos"),
+            bins_usados=bins_usados,
+        )
     db.add(nuevo_empaque)
     
     # 4. Actualizar inventario final para uva
@@ -534,7 +588,7 @@ def editar_empaque_completo(
     if emp.producto != Producto.LIMON_AMARILLO:
         raise HTTPException(status_code=400, detail="Edición completa solo para limón por ahora")
 
-    detalle = emp.detalle_corrida if isinstance(emp.detalle_corrida, dict) else {}
+    detalle = _detalle_as_dict(emp.detalle_corrida)
     if detalle.get("anulado"):
         raise HTTPException(status_code=400, detail="El empaque está anulado; no se puede editar")
 
@@ -600,8 +654,12 @@ def editar_empaque_completo(
         "editado_por": getattr(current_user, "username", None),
     }
     emp.detalle_corrida = detalle
-    emp.bins_desverdizado_usados = bins_total
-    emp.lote_desverdizado = new_consumos[0]["lote"] if new_consumos else emp.lote_desverdizado
+    _sync_legacy_empaque_fields(
+        emp,
+        produccion=new_produccion,
+        consumos=new_consumos,
+        bins_usados=bins_total,
+    )
 
     if body.numero_empacador is not None:
         emp.numero_empacador = body.numero_empacador.strip() or emp.numero_empacador
@@ -637,7 +695,7 @@ def agregar_consumo_lote(
     if emp.producto != Producto.LIMON_AMARILLO:
         raise HTTPException(status_code=400, detail="Solo aplica a empaques de limón")
 
-    detalle = emp.detalle_corrida if isinstance(emp.detalle_corrida, dict) else {}
+    detalle = _detalle_as_dict(emp.detalle_corrida)
     if detalle.get("anulado"):
         raise HTTPException(status_code=400, detail="El empaque está anulado")
 
@@ -655,7 +713,12 @@ def agregar_consumo_lote(
         "lotes_resumen": lotes,
     }
     emp.detalle_corrida = detalle
-    emp.bins_desverdizado_usados = bins_total
+    _sync_legacy_empaque_fields(
+        emp,
+        produccion=detalle.get("produccion"),
+        consumos=consumos,
+        bins_usados=bins_total,
+    )
     # SQLAlchemy JSON mutability
     from sqlalchemy.orm.attributes import flag_modified
 
@@ -663,23 +726,6 @@ def agregar_consumo_lote(
     db.commit()
     db.refresh(emp)
     return emp
-
-
-def _detalle_as_dict(raw) -> dict:
-    """detalle_corrida puede venir como dict o JSON string."""
-    if raw is None:
-        return {}
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        import json
-
-        try:
-            parsed = json.loads(raw)
-            return parsed if isinstance(parsed, dict) else {}
-        except Exception:
-            return {}
-    return {}
 
 
 def _consumos_desde_empaque(emp: Empaque, detalle: dict) -> list[dict]:
@@ -733,11 +779,17 @@ def _consumos_desde_empaque(emp: Empaque, detalle: dict) -> list[dict]:
 @router.post("/{empaque_id}/anular", response_model=AnularEmpaqueResponse)
 def anular_empaque(
     empaque_id: int,
+    forzar: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
     Anula un empaque de limón: devuelve bins a desverdizado y resta producción del inventario final.
+
+    Si el inventario final ya no alcanza (p. ej. se embarcó), por defecto **bloquea**
+    la anulación para no devolver bins dejando el final inconsistente.
+    Pasa `forzar=true` (query) para anular de todos modos: devuelve bins y deja
+    `aviso_anulacion` en detalle_corrida (el admin asume el desfase de final).
     """
     emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
     if not emp:
@@ -758,6 +810,24 @@ def anular_empaque(
             "cantidad": emp.cantidad_producida,
         }]
 
+    # Pre-check inventario final ANTES de devolver bins (evita estado a medias)
+    problemas_final: list[str] = []
+    if produccion:
+        problemas_final = _validar_restar_produccion(db, emp.mercado, produccion)
+
+    if problemas_final and not forzar:
+        detalle_msg = " | ".join(problemas_final)
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No se puede anular el empaque #{empaque_id} sin forzar: "
+                f"{detalle_msg}. "
+                f"Si confirmas, se devolverán bins a desverdizado pero el inventario final "
+                f"NO se podrá restar completo (posible desfase). "
+                f"Reintenta con forzar=true tras revisar embarques."
+            ),
+        )
+
     # 1) PRIMERO devolver bins a desverdizado (campo)
     bins_devueltos = 0
     for c in consumos:
@@ -768,16 +838,21 @@ def anular_empaque(
             bins_devueltos += b
 
     # 2) Restar producción del inventario final
+    stock_final_ok = True
     if produccion:
         try:
             _ajustar_inventario_final(db, emp.producto, emp.mercado, produccion, signo=-1)
         except HTTPException as e:
-            # Si no hay stock final (ya se embarcó), igual devolvemos bins de campo
-            # y marcamos anulado con nota; no dejamos el empaque a medias en desverdizado.
-            if e.status_code == 400:
+            # Solo llega aquí si forzar=True y el stock cambió entre check y apply
+            if e.status_code == 400 and forzar:
                 detalle["aviso_anulacion"] = str(e.detail)
+                stock_final_ok = False
             else:
                 raise
+
+    if problemas_final and forzar and "aviso_anulacion" not in detalle:
+        detalle["aviso_anulacion"] = " | ".join(problemas_final)
+        stock_final_ok = False
 
     # 3) Conversión granel→final: devolver el granel consumido
     if detalle.get("tipo") == "conversion_rpc_granel":
@@ -798,6 +873,7 @@ def anular_empaque(
         "anulado": True,
         "anulado_por": getattr(current_user, "username", None),
         "bins_devueltos": bins_devueltos,
+        "anulado_forzado": bool(forzar and not stock_final_ok),
     }
     emp.detalle_corrida = detalle
     from sqlalchemy.orm.attributes import flag_modified
@@ -810,7 +886,14 @@ def anular_empaque(
         msg += f" (aviso inventario final: {detalle['aviso_anulacion']})"
     if bins_devueltos <= 0 and detalle.get("tipo") != "conversion_rpc_granel":
         msg += " — no se encontraron consumos de bins en el registro"
-    return AnularEmpaqueResponse(message=msg, id=empaque_id)
+    return AnularEmpaqueResponse(
+        message=msg,
+        id=empaque_id,
+        bins_devueltos=bins_devueltos,
+        stock_final_revertido=stock_final_ok,
+        forzado=bool(forzar and not stock_final_ok),
+        aviso=detalle.get("aviso_anulacion"),
+    )
 
 
 @router.delete("/{empaque_id}", response_model=EliminarEmpaqueResponse)
@@ -827,7 +910,7 @@ def eliminar_empaque_anulado(
     if not emp:
         raise HTTPException(status_code=404, detail="Empaque no encontrado")
 
-    detalle = emp.detalle_corrida if isinstance(emp.detalle_corrida, dict) else {}
+    detalle = _detalle_as_dict(emp.detalle_corrida)
     if not detalle.get("anulado"):
         raise HTTPException(
             status_code=400,
@@ -939,6 +1022,12 @@ def convertir_rpc_granel(
         lote_desverdizado=None,
         detalle_corrida=detalle,
         usuario_id=getattr(current_user, "id", None),
+    )
+    _sync_legacy_empaque_fields(
+        nuevo,
+        produccion=produccion,
+        consumos=[],
+        bins_usados=0,
     )
     db.add(nuevo)
     db.commit()

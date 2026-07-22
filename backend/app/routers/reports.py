@@ -22,6 +22,7 @@ from app.schemas.reports import (
     ProyeccionInventarioResponse,
     RendimientosLimonResponse,
 )
+from app.utils.limon_inv import parse_detalle_corrida, norm_talla, norm_pres
 
 router = APIRouter(tags=["Reportes"])
 
@@ -237,18 +238,13 @@ def _kg_y_unidades_produccion(produccion: list) -> dict:
 
 
 def _as_dict(val) -> dict | None:
-    """Normaliza JSON de detalle_corrida (dict o string)."""
+    """Normaliza JSON de detalle_corrida (dict o string) vía util compartida."""
     if val is None:
         return None
     if isinstance(val, dict):
         return val
-    if isinstance(val, str):
-        try:
-            parsed = json.loads(val)
-            return parsed if isinstance(parsed, dict) else None
-        except Exception:
-            return None
-    return None
+    d = parse_detalle_corrida(val)
+    return d if d else None
 
 
 def _producto_es_limon(producto) -> bool:
@@ -485,8 +481,7 @@ def _iter_produccion_empaques(empaques: list):
                 if cant_g <= 0:
                     continue
                 kg_g = KG_POR_PRESENTACION.get("rpc_granel", 22) * cant_g
-                talla_g = g.get("talla")
-                talla_g = str(talla_g) if talla_g is not None and str(talla_g).strip() else None
+                talla_g = norm_talla("rpc_granel", g.get("talla"))
                 key_g = ("rpc_granel", talla_g)
                 agg_pres[key_g]["cajas"] -= cant_g
                 agg_pres[key_g]["kg"] -= kg_g
@@ -495,13 +490,11 @@ def _iter_produccion_empaques(empaques: list):
                     kg_por_talla[talla_g] -= kg_g
                     cajas_por_talla[talla_g] -= cant_g
             for p in produccion or []:
-                pres = p.get("presentacion") or ""
+                pres = norm_pres(p.get("presentacion")) or ""
                 cant = int(p.get("cantidad") or 0)
                 if cant <= 0 or not pres:
                     continue
-                talla = p.get("talla") if pres != "bins_jugo" else None
-                if talla is not None:
-                    talla = str(talla)
+                talla = norm_talla(pres, p.get("talla"))
                 kg_unit = KG_POR_PRESENTACION.get(pres, 0)
                 kg = kg_unit * cant
                 key = (pres, talla)

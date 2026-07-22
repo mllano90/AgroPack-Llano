@@ -601,16 +601,33 @@ export async function editarEmpaqueCompleto(
   return res.data;
 }
 
-/** Anula empaque de limón y revierte inventario */
+/** Anula empaque de limón y revierte inventario.
+ * Si el stock final ya no alcanza (embarcado), el backend responde 409;
+ * pasa forzar=true tras confirmación explícita del admin.
+ */
 export async function anularEmpaque(
   token: string,
-  empaqueId: number
-): Promise<{ message: string; id: number }> {
-  const res = await api.post<{ message: string; id: number }>(
-    `/api/empaque/${empaqueId}/anular`,
-    {},
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+  empaqueId: number,
+  forzar: boolean = false
+): Promise<{
+  message: string;
+  id: number;
+  bins_devueltos?: number | null;
+  stock_final_revertido?: boolean | null;
+  forzado?: boolean | null;
+  aviso?: string | null;
+}> {
+  const res = await api.post<{
+    message: string;
+    id: number;
+    bins_devueltos?: number | null;
+    stock_final_revertido?: boolean | null;
+    forzado?: boolean | null;
+    aviso?: string | null;
+  }>(`/api/empaque/${empaqueId}/anular`, {}, {
+    headers: { Authorization: `Bearer ${token}` },
+    params: forzar ? { forzar: true } : undefined,
+  });
   return res.data;
 }
 

@@ -219,6 +219,8 @@ class InventarioDesverdizado(Base):
     usuario_id = Column(Integer, ForeignKey("users.id"))
     usuario = relationship("User")
     
-    # Referencia opcional a la recepción original
+    # Referencia a la recepción original (preferible siempre; nullable solo por
+    # legacy / devoluciones de bins sin historial de recepción).
+    # Alta normal desde Recepción siempre setea este FK.
     recepcion_id = Column(Integer, ForeignKey("recepcion_campo.id"), nullable=True)
     recepcion = relationship("RecepcionCampo", back_populates="desverdizados", foreign_keys=[recepcion_id])

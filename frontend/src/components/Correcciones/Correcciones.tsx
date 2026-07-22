@@ -212,12 +212,36 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setError('');
     setOkMsg('');
     try {
-      const res = await anularEmpaque(token, selectedId);
+      const res = await anularEmpaque(token, selectedId, false);
       setOkMsg(res.message || `Empaque #${selectedId} anulado`);
       await load();
       onCorregido?.();
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'No se pudo anular el empaque');
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail || 'No se pudo anular el empaque';
+      if (status === 409) {
+        const forzarOk = confirm(
+          `No se puede anular de forma limpia:\n\n${detail}\n\n` +
+            `¿FORZAR anulación?\n` +
+            `• Se devolverán bins a desverdizado\n` +
+            `• El inventario final NO se restará completo (posible desfase)\n` +
+            `Usa esto solo si ya revisaste embarques.`
+        );
+        if (forzarOk) {
+          try {
+            const res2 = await anularEmpaque(token, selectedId, true);
+            setOkMsg(res2.message || `Empaque #${selectedId} anulado (forzado)`);
+            await load();
+            onCorregido?.();
+          } catch (err2: any) {
+            setError(err2?.response?.data?.detail || 'No se pudo forzar la anulación');
+          }
+        } else {
+          setError(typeof detail === 'string' ? detail : 'Anulación cancelada');
+        }
+      } else {
+        setError(typeof detail === 'string' ? detail : 'No se pudo anular el empaque');
+      }
     } finally {
       setBusy(false);
     }
@@ -317,12 +341,35 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       setError('');
       setOkMsg('');
       try {
-        const res = await anularEmpaque(token, m.id);
+        const res = await anularEmpaque(token, m.id, false);
         setOkMsg(res.message || `Empaque #${m.id} anulado`);
         await load();
         onCorregido?.();
       } catch (err: any) {
-        setError(err?.response?.data?.detail || 'No se pudo anular el empaque');
+        const status = err?.response?.status;
+        const detail = err?.response?.data?.detail || 'No se pudo anular el empaque';
+        if (status === 409) {
+          const forzarOk = confirm(
+            `No se puede anular de forma limpia:\n\n${detail}\n\n` +
+              `¿FORZAR anulación?\n` +
+              `• Se devolverán bins a desverdizado\n` +
+              `• El inventario final NO se restará completo (posible desfase)`
+          );
+          if (forzarOk) {
+            try {
+              const res2 = await anularEmpaque(token, m.id, true);
+              setOkMsg(res2.message || `Empaque #${m.id} anulado (forzado)`);
+              await load();
+              onCorregido?.();
+            } catch (err2: any) {
+              setError(err2?.response?.data?.detail || 'No se pudo forzar la anulación');
+            }
+          } else {
+            setError(typeof detail === 'string' ? detail : 'Anulación cancelada');
+          }
+        } else {
+          setError(typeof detail === 'string' ? detail : 'No se pudo anular el empaque');
+        }
       } finally {
         setBusy(false);
       }

@@ -15,37 +15,16 @@ from app.schemas.embarques import (
 )
 from app.models.inventory import Embarque, EmbarqueDetalle, InventarioFinal, Cliente
 from app.utils.manifiesto_parser import extract_pdf_text, parse_manifiesto_text
+from app.utils.limon_inv import (
+    extra_dict as _extra_dict,
+    norm_talla as _norm_talla,
+    norm_pres as _norm_pres,
+    rows_inv_limon as _rows_inv_limon,
+)
 
 router = APIRouter(tags=["Embarques"])
 
 ROLES_EMBARQUE = [Rol.ADMIN, Rol.EMBARQUES]
-
-
-def _extra_dict(inv: InventarioFinal) -> dict:
-    extra = inv.atributos_extra
-    return extra if isinstance(extra, dict) else {}
-
-
-def _norm_talla(presentacion: str | None, talla) -> str | None:
-    """Normaliza talla a str o None (evita fallar match int vs str en JSON)."""
-    if not presentacion or presentacion in ("bins_jugo",):
-        return None
-    if talla is None:
-        return None
-    s = str(talla).strip()
-    if not s or s.lower() in ("none", "null"):
-        return None
-    # quitar # opcional
-    if s.startswith("#"):
-        s = s[1:].strip()
-    return s or None
-
-
-def _norm_pres(presentacion: str | None) -> str | None:
-    if presentacion is None:
-        return None
-    s = str(presentacion).strip()
-    return s or None
 
 
 def _es_detalle_limon(detalle: EmbarqueDetalleCreate) -> bool:
@@ -56,48 +35,6 @@ def _es_detalle_limon(detalle: EmbarqueDetalleCreate) -> bool:
     if p == Producto.LIMON_AMARILLO:
         return True
     return str(getattr(p, "value", p) or "").lower() in ("limon_amarillo",)
-
-
-def _rows_inv_limon(
-    db: Session,
-    presentacion: str | None,
-    talla: str | None,
-    mercado: TipoMercado | None = None,
-) -> list[InventarioFinal]:
-    """
-    Filas de inventario final limón que coinciden por presentación + talla.
-    No exige producto enum estricto (también por atributos_extra).
-    Prefiere mismo mercado al ordenar, pero incluye todos.
-    """
-    pres = _norm_pres(presentacion)
-    talla_n = _norm_talla(pres, talla)
-    if not pres:
-        return []
-
-    rows: list[InventarioFinal] = []
-    for inv in db.query(InventarioFinal).all():
-        extra = _extra_dict(inv)
-        if _norm_pres(extra.get("presentacion")) != pres:
-            continue
-        if _norm_talla(pres, extra.get("talla")) != talla_n:
-            continue
-        # Prefer limón rows; allow missing product if presentacion matches
-        pval = str(getattr(inv.producto, "value", inv.producto) or "").lower()
-        if pval and pval not in ("limon_amarillo",) and not extra.get("presentacion"):
-            continue
-        rows.append(inv)
-
-    if mercado is not None:
-        mval = getattr(mercado, "value", mercado)
-        rows.sort(
-            key=lambda r: (
-                0 if str(getattr(r.mercado, "value", r.mercado)) == str(mval) else 1,
-                r.id or 0,
-            )
-        )
-    else:
-        rows.sort(key=lambda r: r.id or 0)
-    return rows
 
 
 def _match_inv_limon(

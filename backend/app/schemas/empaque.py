@@ -62,6 +62,10 @@ class AgregarConsumoRequest(BaseModel):
 class AnularEmpaqueResponse(BaseModel):
     message: str
     id: int
+    bins_devueltos: int | None = None
+    stock_final_revertido: bool | None = None
+    forzado: bool | None = None
+    aviso: str | None = None
 
 
 class EliminarEmpaqueResponse(BaseModel):
