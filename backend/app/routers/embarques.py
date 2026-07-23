@@ -123,6 +123,14 @@ def _aplicar_detalles_embarque(
             _descontar_stock_limon(
                 db, pres, talla_n, cant, mercado=detalle.mercado
             )
+            cpp = detalle.cajas_por_parrilla
+            if cpp is None:
+                if pres == "bins_jugo":
+                    cpp = 1
+                elif pres == "caja_40lbs":
+                    cpp = 63
+                else:
+                    cpp = 45  # RPC default 6423
             db.add(
                 EmbarqueDetalle(
                     embarque_id=nuevo_embarque.id,
@@ -134,6 +142,7 @@ def _aplicar_detalles_embarque(
                     presentacion=pres,
                     talla=talla_n,
                     calidad=detalle.calidad,
+                    cajas_por_parrilla=int(cpp),
                 )
             )
         else:
@@ -293,6 +302,11 @@ async def parse_manifiesto(
         ok = stock >= cant and cant > 0
         if not ok:
             puede = False
+        cpp = d.get("cajas_por_parrilla")
+        try:
+            cpp_i = int(cpp) if cpp is not None else None
+        except (TypeError, ValueError):
+            cpp_i = None
         detalles_stock.append(
             ManifiestoDetalleStock(
                 producto=Producto.LIMON_AMARILLO,
@@ -301,6 +315,7 @@ async def parse_manifiesto(
                 presentacion=pres,
                 talla=talla,
                 calidad=d.get("calidad"),
+                cajas_por_parrilla=cpp_i,
                 stock_disponible=stock,
                 suficiente=ok,
             )

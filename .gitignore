@@ -68,3 +68,7 @@ Thumbs.db
 # Keep example files (these are safe to commit)
 !**/.env.example
 !**/example.env
+# Snapshots de datos (no versionar)
+scripts/*snapshot*.json
+scripts/local_snapshot_for_prod.json
+scripts/prod_snapshot_local.json

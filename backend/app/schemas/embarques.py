@@ -13,6 +13,8 @@ class EmbarqueDetalleCreate(BaseModel):
     presentacion: str | None = None  # rpc_12, rpc_18, caja_40lbs, bins_jugo
     talla: str | None = None
     calidad: str | None = None
+    # Conteo de parrillas: RPC6423=45, RPC6425=40, cartón=63, jugo=1
+    cajas_por_parrilla: int | None = None
 
 class EmbarqueCreate(BaseModel):
     cliente_id: int
@@ -28,6 +30,7 @@ class EmbarqueDetalleResponse(BaseModel):
     presentacion: str | None = None
     talla: str | None = None
     calidad: str | None = None
+    cajas_por_parrilla: int | None = None
 
 class EmbarqueResponse(BaseModel):
     id: int
@@ -63,6 +66,8 @@ class ManifiestoDetalleStock(BaseModel):
     presentacion: str | None = None
     talla: str | None = None
     calidad: str | None = None
+    # RPC6423=45, RPC6425=40, cartón=63, jugo=1
+    cajas_por_parrilla: int | None = None
     stock_disponible: int = 0
     suficiente: bool = False
 

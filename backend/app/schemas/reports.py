@@ -225,3 +225,58 @@ class RendimientosLimonResponse(BaseModel):
     hectareas: float = 64.0  # rancho total (acumulado / corrida)
     hectareas_por_lote: float = 8.0  # superficie por lote para kg/ha por lote
     factores_proyeccion: FactoresProyeccion | None = None
+
+
+# --- Reportes de embarques ---
+class LoteTrazabilidadItem(BaseModel):
+    """Lote de origen asociado a una presentación/talla embarcada (desde empaques)."""
+    lote: str
+    fecha_empaque: str | None = None
+    empaque_id: int | None = None
+    cantidad_producida: int = 0  # cajas en el empaque de origen (referencia)
+
+
+class EmbarqueDetalleReporte(BaseModel):
+    producto: str
+    mercado: str | None = None
+    presentacion: str | None = None
+    talla: str | None = None
+    calidad: str | None = None
+    cantidad_cajas: int
+    # RPC6423=45, RPC6425=40, cartón=63, jugo=1
+    cajas_por_parrilla: int | None = None
+    kg_aprox: float = 0.0
+    lotes: List[LoteTrazabilidadItem] = []
+
+
+class EmbarqueReporteItem(BaseModel):
+    id: int
+    fecha_salida: str
+    estado: str
+    notas: str | None = None
+    cliente_id: int
+    cliente_nombre: str
+    total_cajas: int
+    total_kg_aprox: float = 0.0
+    num_lineas: int = 0
+    detalles: List[EmbarqueDetalleReporte] = []
+
+
+class ClienteEmbarquesResumen(BaseModel):
+    cliente_id: int
+    cliente_nombre: str
+    num_embarques: int
+    total_cajas: int
+    total_kg_aprox: float = 0.0
+    ultima_fecha: str | None = None
+    embarques: List[EmbarqueReporteItem] = []
+
+
+class EmbarquesReporteResponse(BaseModel):
+    total_embarques: int = 0
+    total_cajas: int = 0
+    total_kg_aprox: float = 0.0
+    num_clientes: int = 0
+    por_cliente: List[ClienteEmbarquesResumen] = []
+    # Lista plana ordenada por fecha (más reciente primero)
+    embarques: List[EmbarqueReporteItem] = []

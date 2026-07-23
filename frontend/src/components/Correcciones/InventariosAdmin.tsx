@@ -271,7 +271,7 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
     >
       <h3 style={{ marginTop: 0 }}>Inventarios — corrección manual</h3>
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-        Ajusta stock final (limón / uva) o de campo. Los cambios son inmediatos en Dashboard y
+        Ajusta stock final (limón / uva) o de campo. Los cambios son inmediatos en Reportes → Inventarios y
         Embarques. Usa con cuidado: no crea historial de empaque/embarque.
       </p>
 

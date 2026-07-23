@@ -138,7 +138,10 @@ class EmbarqueDetalle(Base):
     presentacion = Column(String, nullable=True)
     talla = Column(String, nullable=True)
     calidad = Column(String, nullable=True)
-    
+    # Solo para contar parrillas en reportes (no afecta inventario):
+    # RPC6423=45, RPC6425=40, cartón=63, bins jugo=1. Null = default por presentación.
+    cajas_por_parrilla = Column(Integer, nullable=True)
+
     embarque = relationship("Embarque", back_populates="detalles")
 
 

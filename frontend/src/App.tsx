@@ -1,6 +1,5 @@
 import { useState, useEffect, type CSSProperties } from 'react';
 import Embarques from './components/Embarques/Embarques';
-import Dashboard from './components/Dashboard/Dashboard';
 import Empaque from './components/Empaque/Empaque';
 import Recepcion from './components/Recepcion/Recepcion';
 import Usuarios from './components/Usuarios/Usuarios';
@@ -12,7 +11,7 @@ import { useDashboard } from './hooks/useDashboard';
 import { useClientes } from './hooks/useClientes';
 import type { User } from './types';
 
-type TabId = 'recepcion' | 'empaque' | 'embarques' | 'usuarios' | 'dashboard' | 'reportes' | 'correcciones';
+type TabId = 'recepcion' | 'empaque' | 'embarques' | 'usuarios' | 'reportes' | 'correcciones';
 
 const TOKEN_KEY = 'agropack_token';
 const USER_KEY = 'agropack_user';
@@ -25,25 +24,25 @@ function normalizeRol(rol: string | undefined | null): string {
 
 function getAllowedTabs(role: string | undefined): TabId[] {
   const r = normalizeRol(role);
-  if (!r) return ['dashboard'];
+  if (!r) return ['reportes'];
 
   switch (r) {
     case 'recepcion':
-      return ['recepcion', 'dashboard', 'reportes'];
+      return ['recepcion', 'reportes'];
     case 'empacador':
-      return ['empaque', 'dashboard', 'reportes'];
+      return ['empaque', 'reportes'];
     case 'recepcion_empacador':
-      return ['recepcion', 'empaque', 'dashboard', 'reportes'];
+      return ['recepcion', 'empaque', 'reportes'];
     case 'embarques':
-      return ['embarques', 'dashboard', 'reportes'];
+      return ['embarques', 'reportes'];
     case 'admin':
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes', 'correcciones'];
+      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'reportes', 'correcciones'];
     case 'observador':
-      return ['dashboard', 'reportes'];
+      return ['reportes'];
     default:
       // Si el rol no se reconoce, dar acceso completo para no dejar la UI en blanco
       console.warn('Rol no reconocido, mostrando tabs de admin:', role);
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes', 'correcciones'];
+      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'reportes', 'correcciones'];
   }
 }
 
@@ -114,7 +113,7 @@ function App() {
       setPassword('');
 
       const tabs = getAllowedTabs(user.rol);
-      setActiveTab(tabs[0] || 'dashboard');
+      setActiveTab(tabs[0] || 'reportes');
     } catch (err: any) {
       console.error(err);
       const status = err?.response?.status;
@@ -160,7 +159,6 @@ function App() {
 
   const inventarioCampo = dashboardData?.inventario_campo || [];
   const inventarioCarton = dashboardData?.inventario_final || [];
-  const desverdizado = dashboardData?.desverdizado || [];
 
   const cargarDashboard = async () => {
     try {
@@ -173,7 +171,7 @@ function App() {
 
   const allowedTabs = currentUser ? getAllowedTabs(currentUser.rol) : [];
   const visibleTabs = (
-    ['recepcion', 'empaque', 'embarques', 'usuarios', 'dashboard', 'reportes', 'correcciones'] as TabId[]
+    ['recepcion', 'empaque', 'embarques', 'usuarios', 'reportes', 'correcciones'] as TabId[]
   ).filter((tab) => allowedTabs.includes(tab));
 
   // Si la pestaña activa no está permitida, corregir
@@ -275,11 +273,6 @@ function App() {
                 Usuarios
               </button>
             )}
-            {visibleTabs.includes('dashboard') && (
-              <button type="button" onClick={() => setActiveTab('dashboard')} style={tabButtonStyle('dashboard')}>
-                Inventarios
-              </button>
-            )}
             {visibleTabs.includes('reportes') && (
               <button type="button" onClick={() => setActiveTab('reportes')} style={tabButtonStyle('reportes')}>
                 Reportes
@@ -323,14 +316,6 @@ function App() {
               onEmbarqueRegistered={cargarDashboard}
               clientes={clientes}
               cargarClientes={cargarClientes}
-            />
-          )}
-
-          {activeTab === 'dashboard' && visibleTabs.includes('dashboard') && (
-            <Dashboard
-              inventarioCampo={inventarioCampo}
-              inventarioCarton={inventarioCarton}
-              desverdizado={desverdizado}
             />
           )}
 

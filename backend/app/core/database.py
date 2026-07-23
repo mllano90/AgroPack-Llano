@@ -98,5 +98,25 @@ def ensure_schema():
                         else:
                             conn.execute(text(ddl_pg))
                     print(f"✅ Columna recepcion_campo.{col} agregada")
+
+        if "embarque_detalle" in tables:
+            edcols = {c["name"] for c in insp.get_columns("embarque_detalle")}
+            if "cajas_por_parrilla" not in edcols:
+                with engine.begin() as conn:
+                    if DATABASE_URL.startswith("sqlite"):
+                        conn.execute(
+                            text(
+                                "ALTER TABLE embarque_detalle "
+                                "ADD COLUMN cajas_por_parrilla INTEGER"
+                            )
+                        )
+                    else:
+                        conn.execute(
+                            text(
+                                "ALTER TABLE embarque_detalle "
+                                "ADD COLUMN IF NOT EXISTS cajas_por_parrilla INTEGER"
+                            )
+                        )
+                print("✅ Columna embarque_detalle.cajas_por_parrilla agregada")
     except Exception as e:
         print(f"⚠️ ensure_schema: {e}")

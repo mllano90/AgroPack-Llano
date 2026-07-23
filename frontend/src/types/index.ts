@@ -163,6 +163,8 @@ export interface EmbarqueDetalle {
   presentacion?: string | null;
   talla?: string | null;
   calidad?: string | null;
+  /** RPC6423=45, RPC6425=40, cartón=63, jugo=1 — solo conteo de parrillas */
+  cajas_por_parrilla?: number | null;
 }
 
 export interface EmbarquePayload {

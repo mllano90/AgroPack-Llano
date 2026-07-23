@@ -228,10 +228,27 @@ export async function eliminarRecepcionAdmin(token: string, id: number) {
 }
 
 export async function eliminarEmbarqueAdmin(token: string, id: number) {
-  const res = await api.delete<{ message: string; id: number }>(
-    `/api/correcciones/embarque/${id}`,
-    { headers: { Authorization: `Bearer ${token}` } }
-  );
+  const res = await api.delete<{
+    message: string;
+    id: number;
+    cliente?: string;
+    lineas_detalle?: number;
+    total_devuelto?: number;
+    restaurado?: Array<{
+      ok?: boolean;
+      created?: boolean;
+      inv_id?: number;
+      presentacion?: string | null;
+      talla?: string | null;
+      mercado?: string;
+      antes?: number;
+      despues?: number;
+      delta?: number;
+      producto?: string;
+    }>;
+  }>(`/api/correcciones/embarque/${id}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   return res.data;
 }
 
@@ -591,6 +608,90 @@ export async function getProyeccionInventario(token: string): Promise<Proyeccion
   return res.data;
 }
 
+// --- Reportes de embarques ---
+export interface LoteTrazabilidadApi {
+  lote: string;
+  fecha_empaque?: string | null;
+  empaque_id?: number | null;
+  cantidad_producida?: number;
+}
+
+export interface EmbarqueDetalleReporteApi {
+  producto: string;
+  mercado?: string | null;
+  presentacion?: string | null;
+  talla?: string | null;
+  calidad?: string | null;
+  cantidad_cajas: number;
+  /** RPC6423=45, RPC6425=40, cartón=63, jugo=1 */
+  cajas_por_parrilla?: number | null;
+  kg_aprox?: number;
+  lotes?: LoteTrazabilidadApi[];
+}
+
+export interface EmbarqueReporteItemApi {
+  id: number;
+  fecha_salida: string;
+  estado: string;
+  notas?: string | null;
+  cliente_id: number;
+  cliente_nombre: string;
+  total_cajas: number;
+  total_kg_aprox?: number;
+  num_lineas?: number;
+  detalles: EmbarqueDetalleReporteApi[];
+}
+
+export interface ClienteEmbarquesResumenApi {
+  cliente_id: number;
+  cliente_nombre: string;
+  num_embarques: number;
+  total_cajas: number;
+  total_kg_aprox?: number;
+  ultima_fecha?: string | null;
+  embarques: EmbarqueReporteItemApi[];
+}
+
+export interface EmbarquesReporteApi {
+  total_embarques: number;
+  total_cajas: number;
+  total_kg_aprox?: number;
+  num_clientes: number;
+  por_cliente: ClienteEmbarquesResumenApi[];
+  embarques: EmbarqueReporteItemApi[];
+}
+
+export async function getReporteEmbarques(token: string): Promise<EmbarquesReporteApi> {
+  const res = await api.get<EmbarquesReporteApi>('/api/reports/embarques', {
+    headers: { Authorization: `Bearer ${token}` },
+    timeout: 60000,
+  });
+  return res.data;
+}
+
+export async function getEmbarques(token: string): Promise<
+  Array<{
+    id: number;
+    fecha_salida: string;
+    cliente_id: number;
+    notas?: string | null;
+    estado: string;
+    detalles: Array<{
+      producto: string;
+      mercado: string;
+      cantidad_cajas: number;
+      presentacion?: string | null;
+      talla?: string | null;
+      calidad?: string | null;
+    }>;
+  }>
+> {
+  const res = await api.get('/api/embarques/', {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
 /** Lista empaques recientes (solo admin) */
 export async function getEmpaquesAdmin(token: string): Promise<EmpaqueRecord[]> {
   const res = await api.get<EmpaqueRecord[]>('/api/empaque/admin/recientes', {
@@ -739,6 +840,7 @@ export interface ManifiestoDetalleStock {
   presentacion?: string | null;
   talla?: string | null;
   calidad?: string | null;
+  cajas_por_parrilla?: number | null;
   stock_disponible: number;
   suficiente: boolean;
 }

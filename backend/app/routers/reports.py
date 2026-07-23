@@ -4,7 +4,14 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.security import get_current_user
-from app.models.inventory import InventarioFinal, InventarioCampo, Embarque, InventarioDesverdizado, Empaque
+from sqlalchemy.orm import joinedload
+from app.models.inventory import (
+    InventarioFinal,
+    InventarioCampo,
+    Embarque,
+    InventarioDesverdizado,
+    Empaque,
+)
 from app.models.enums import Producto
 from app.schemas.reports import (
     DashboardResponse,
@@ -22,6 +29,11 @@ from app.schemas.reports import (
     ProyeccionPorFecha,
     ProyeccionInventarioResponse,
     RendimientosLimonResponse,
+    LoteTrazabilidadItem,
+    EmbarqueDetalleReporte,
+    EmbarqueReporteItem,
+    ClienteEmbarquesResumen,
+    EmbarquesReporteResponse,
 )
 from app.utils.limon_inv import parse_detalle_corrida, norm_talla, norm_pres
 
@@ -1103,6 +1115,221 @@ def rendimientos_limon(
         hectareas=HECTAREAS_RANCHO,
         hectareas_por_lote=HECTAREAS_POR_LOTE,
         factores_proyeccion=factores,
+    )
+
+
+def _kg_pres_unit(pres: str | None) -> float:
+    if not pres:
+        return 0.0
+    return float(KG_POR_PRESENTACION.get(pres, 0) or 0)
+
+
+def _indice_lotes_por_sku(empaques: list) -> dict[tuple[str, str | None], list[dict]]:
+    """
+    (presentacion, talla) → lotes vistos en producción de empaque.
+    Sirve de trazabilidad de origen cuando el embarque no guarda lote.
+    """
+    acc: dict[tuple[str, str | None], dict[str, dict]] = defaultdict(dict)
+    for e in empaques:
+        detalle = _as_dict(e.detalle_corrida)
+        if not detalle or detalle.get("anulado"):
+            continue
+        consumos = detalle.get("consumos") or []
+        lotes_cons = [
+            str(c.get("lote") or "").strip()
+            for c in consumos
+            if isinstance(c, dict) and c.get("lote")
+        ]
+        for p in detalle.get("produccion") or []:
+            if not isinstance(p, dict):
+                continue
+            pres = norm_pres(p.get("presentacion")) or (p.get("presentacion") or "")
+            if not pres or pres == "rpc_granel":
+                continue
+            talla = p.get("talla")
+            talla_s = str(talla).strip() if talla is not None and str(talla).strip() != "" else None
+            cant = int(p.get("cantidad") or 0)
+            if cant <= 0:
+                continue
+            lote = str(p.get("lote") or "").strip()
+            if not lote and lotes_cons:
+                # multi-lote: listar todos; single: el único
+                for lo in lotes_cons:
+                    key_l = f"{lo}|{p.get('fecha_empaque') or e.fecha}|{e.id}"
+                    prev = acc[(pres, talla_s)].get(key_l)
+                    if prev:
+                        prev["cantidad_producida"] += cant
+                    else:
+                        acc[(pres, talla_s)][key_l] = {
+                            "lote": lo,
+                            "fecha_empaque": str(p.get("fecha_empaque") or e.fecha or "")[:10]
+                            or None,
+                            "empaque_id": e.id,
+                            "cantidad_producida": cant,
+                        }
+            elif lote:
+                key_l = f"{lote}|{p.get('fecha_empaque') or e.fecha}|{e.id}"
+                prev = acc[(pres, talla_s)].get(key_l)
+                if prev:
+                    prev["cantidad_producida"] += cant
+                else:
+                    acc[(pres, talla_s)][key_l] = {
+                        "lote": lote,
+                        "fecha_empaque": str(p.get("fecha_empaque") or e.fecha or "")[:10]
+                        or None,
+                        "empaque_id": e.id,
+                        "cantidad_producida": cant,
+                    }
+    return {k: list(v.values()) for k, v in acc.items()}
+
+
+@router.get("/embarques", response_model=EmbarquesReporteResponse)
+def reporte_embarques(
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """
+    Historial de embarques por cliente:
+    - Resumen: cuántos embarques y cajas por cliente
+    - Detalle de cada embarque (líneas, kg aprox, lotes de origen desde empaques)
+    """
+    empaques = (
+        db.query(Empaque)
+        .order_by(Empaque.fecha.desc(), Empaque.id.desc())
+        .limit(500)
+        .all()
+    )
+    idx_lotes = _indice_lotes_por_sku(empaques)
+
+    rows = (
+        db.query(Embarque)
+        .options(joinedload(Embarque.detalles), joinedload(Embarque.cliente))
+        .order_by(Embarque.fecha_salida.desc(), Embarque.id.desc())
+        .all()
+    )
+
+    embarques_items: list[EmbarqueReporteItem] = []
+    for emb in rows:
+        cliente = emb.cliente
+        nombre = (
+            getattr(cliente, "nombre", None)
+            if cliente is not None
+            else None
+        ) or f"Cliente #{emb.cliente_id}"
+        detalles_rep: list[EmbarqueDetalleReporte] = []
+        total_cajas = 0
+        total_kg = 0.0
+        for d in emb.detalles or []:
+            pres = norm_pres(d.presentacion) or d.presentacion
+            talla = d.talla
+            talla_s = (
+                str(talla).strip()
+                if talla is not None and str(talla).strip() != ""
+                else None
+            )
+            cant = int(d.cantidad_cajas or 0)
+            kg = _kg_pres_unit(pres) * cant
+            total_cajas += cant
+            total_kg += kg
+            raw_lotes = idx_lotes.get((pres or "", talla_s), [])
+            # también buscar sin normalizar si norm cambió la key
+            if not raw_lotes and d.presentacion:
+                raw_lotes = idx_lotes.get((str(d.presentacion), talla_s), [])
+            lotes = [
+                LoteTrazabilidadItem(
+                    lote=x["lote"],
+                    fecha_empaque=x.get("fecha_empaque"),
+                    empaque_id=x.get("empaque_id"),
+                    cantidad_producida=int(x.get("cantidad_producida") or 0),
+                )
+                for x in raw_lotes
+            ]
+            # dedupe por lote
+            seen: set[str] = set()
+            lotes_u: list[LoteTrazabilidadItem] = []
+            for lo in lotes:
+                k = lo.lote
+                if k in seen:
+                    continue
+                seen.add(k)
+                lotes_u.append(lo)
+            prod_val = getattr(d.producto, "value", None) or str(d.producto or "")
+            merc_val = getattr(d.mercado, "value", None) or (
+                str(d.mercado) if d.mercado is not None else None
+            )
+            cpp = getattr(d, "cajas_por_parrilla", None)
+            try:
+                cpp_i = int(cpp) if cpp is not None else None
+            except (TypeError, ValueError):
+                cpp_i = None
+            if cpp_i is None:
+                if pres == "bins_jugo":
+                    cpp_i = 1
+                elif pres == "caja_40lbs":
+                    cpp_i = 63
+                elif pres in ("rpc_12", "rpc_18"):
+                    cpp_i = 45
+            detalles_rep.append(
+                EmbarqueDetalleReporte(
+                    producto=str(prod_val),
+                    mercado=str(merc_val) if merc_val else None,
+                    presentacion=pres,
+                    talla=talla_s,
+                    calidad=d.calidad,
+                    cantidad_cajas=cant,
+                    cajas_por_parrilla=cpp_i,
+                    kg_aprox=round(kg, 2),
+                    lotes=lotes_u,
+                )
+            )
+        embarques_items.append(
+            EmbarqueReporteItem(
+                id=emb.id,
+                fecha_salida=str(emb.fecha_salida) if emb.fecha_salida else "",
+                estado=emb.estado or "",
+                notas=emb.notas,
+                cliente_id=int(emb.cliente_id),
+                cliente_nombre=nombre,
+                total_cajas=total_cajas,
+                total_kg_aprox=round(total_kg, 2),
+                num_lineas=len(detalles_rep),
+                detalles=detalles_rep,
+            )
+        )
+
+    por_cli: dict[int, ClienteEmbarquesResumen] = {}
+    for item in embarques_items:
+        row = por_cli.get(item.cliente_id)
+        if not row:
+            row = ClienteEmbarquesResumen(
+                cliente_id=item.cliente_id,
+                cliente_nombre=item.cliente_nombre,
+                num_embarques=0,
+                total_cajas=0,
+                total_kg_aprox=0.0,
+                ultima_fecha=None,
+                embarques=[],
+            )
+            por_cli[item.cliente_id] = row
+        row.num_embarques += 1
+        row.total_cajas += item.total_cajas
+        row.total_kg_aprox = round(row.total_kg_aprox + item.total_kg_aprox, 2)
+        row.embarques.append(item)
+        if not row.ultima_fecha or (item.fecha_salida and item.fecha_salida > row.ultima_fecha):
+            row.ultima_fecha = item.fecha_salida
+
+    por_cliente = sorted(
+        por_cli.values(),
+        key=lambda c: (-c.num_embarques, c.cliente_nombre.lower()),
+    )
+
+    return EmbarquesReporteResponse(
+        total_embarques=len(embarques_items),
+        total_cajas=sum(e.total_cajas for e in embarques_items),
+        total_kg_aprox=round(sum(e.total_kg_aprox for e in embarques_items), 2),
+        num_clientes=len(por_cliente),
+        por_cliente=por_cliente,
+        embarques=embarques_items,
     )
 
 

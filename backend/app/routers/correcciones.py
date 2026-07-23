@@ -6,6 +6,7 @@ generado por esa recepción (no es un módulo de captura aparte).
 """
 from __future__ import annotations
 
+import json
 from datetime import date, datetime, timedelta
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -14,7 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import require_roles
 from app.core.constants import DIAS_DESVERDIZADO
-from app.models.enums import Rol, Producto
+from app.models.enums import Rol, Producto, TipoMercado
 from app.models.inventory import (
     RecepcionCampo,
     InventarioDesverdizado,
@@ -91,11 +92,95 @@ def _norm_talla_inv(presentacion: str | None, talla) -> str | None:
     return norm_talla(presentacion, talla)
 
 
-def _match_inv_limon(db: Session, presentacion: str | None, talla: str | None):
-    """Coincide por presentación + talla (talla normalizada str)."""
+def _match_inv_limon(
+    db: Session,
+    presentacion: str | None,
+    talla: str | None,
+    mercado=None,
+):
+    """Coincide por presentación + talla (+ mercado preferido)."""
     from app.utils.limon_inv import find_inv_final_limon
 
-    return find_inv_final_limon(db, presentacion, talla, mercado=None)
+    return find_inv_final_limon(db, presentacion, talla, mercado=mercado)
+
+
+def _devolver_stock_limon(
+    db: Session,
+    presentacion: str | None,
+    talla: str | None,
+    cantidad: int,
+    mercado=None,
+) -> dict:
+    """
+    Devuelve cajas al inventario final limón.
+    - Prefiere la misma fila de mercado (si existe).
+    - Si no hay fila de ese mercado pero sí de otro (mismo SKU), suma ahí
+      (evita crear líneas fantasma exportacion/nacional duplicadas).
+    - Solo crea fila nueva si no existe ninguna del SKU.
+    """
+    from app.utils.limon_inv import (
+        find_inv_final_limon,
+        rows_inv_limon,
+        norm_pres,
+        norm_talla,
+        calidad_pres,
+    )
+    from datetime import datetime as dt
+
+    cant = int(cantidad or 0)
+    if cant <= 0:
+        return {"ok": False, "reason": "cantidad<=0", "delta": 0}
+
+    pres = norm_pres(presentacion)
+    talla_n = norm_talla(pres, talla)
+    inv = find_inv_final_limon(db, pres, talla_n, mercado=mercado)
+    if inv is None:
+        # Cualquier fila del SKU (sin exigir mercado)
+        rows = rows_inv_limon(db, pres, talla_n, mercado=None)
+        inv = rows[0] if rows else None
+
+    if inv is not None:
+        antes = int(inv.cantidad_stock or 0)
+        inv.cantidad_stock = antes + cant
+        inv.fecha_actualizacion = dt.utcnow()
+        return {
+            "ok": True,
+            "created": False,
+            "inv_id": inv.id,
+            "presentacion": pres,
+            "talla": talla_n,
+            "mercado": str(getattr(inv.mercado, "value", inv.mercado)),
+            "antes": antes,
+            "despues": int(inv.cantidad_stock),
+            "delta": cant,
+        }
+
+    # Crear solo si no existe el SKU en absoluto
+    calidad = calidad_pres(pres)
+    extra = {"presentacion": pres, "calidad": calidad}
+    if talla_n and pres != "bins_jugo":
+        extra["talla"] = talla_n
+    nuevo = InventarioFinal(
+        producto=Producto.LIMON_AMARILLO,
+        variedad=None,
+        tipo_cultivo=None,
+        mercado=mercado or TipoMercado.NACIONAL,
+        cantidad_stock=cant,
+        atributos_extra=extra,
+    )
+    db.add(nuevo)
+    db.flush()
+    return {
+        "ok": True,
+        "created": True,
+        "inv_id": nuevo.id,
+        "presentacion": pres,
+        "talla": talla_n,
+        "mercado": str(getattr(nuevo.mercado, "value", nuevo.mercado)),
+        "antes": 0,
+        "despues": cant,
+        "delta": cant,
+    }
 
 
 def _fill_recepcion_from_desv(r: RecepcionCampo, d: InventarioDesverdizado) -> None:
@@ -656,11 +741,12 @@ def eliminar_embarque(
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
-    Anula/elimina un embarque y devuelve las cantidades al inventario final.
+    Elimina un embarque y devuelve las cantidades al inventario final.
+    Respuesta incluye desglose de restauración (antes/después) para auditoría.
     """
     emb = (
         db.query(Embarque)
-        .options(joinedload(Embarque.detalles))
+        .options(joinedload(Embarque.detalles), joinedload(Embarque.cliente))
         .filter(Embarque.id == embarque_id)
         .first()
     )
@@ -669,6 +755,9 @@ def eliminar_embarque(
     if emb.estado == "anulado":
         raise HTTPException(status_code=400, detail="El embarque ya está anulado")
 
+    restaurado: list[dict] = []
+    total_devuelto = 0
+
     for d in emb.detalles or []:
         cant = int(d.cantidad_cajas or 0)
         if cant <= 0:
@@ -676,24 +765,16 @@ def eliminar_embarque(
         prod = d.producto
         pval = _pval(prod)
         if pval == "limon_amarillo" or prod == Producto.LIMON_AMARILLO:
-            inv = _match_inv_limon(db, d.presentacion, d.talla)
-            if inv:
-                inv.cantidad_stock = (inv.cantidad_stock or 0) + cant
-            else:
-                calidad = "segunda" if d.presentacion == "bins_jugo" else "primera"
-                extra = {"presentacion": d.presentacion, "calidad": calidad}
-                if d.talla and d.presentacion != "bins_jugo":
-                    extra["talla"] = d.talla
-                db.add(
-                    InventarioFinal(
-                        producto=Producto.LIMON_AMARILLO,
-                        variedad=None,
-                        tipo_cultivo=None,
-                        mercado=d.mercado,
-                        cantidad_stock=cant,
-                        atributos_extra=extra,
-                    )
-                )
+            info = _devolver_stock_limon(
+                db,
+                d.presentacion,
+                d.talla,
+                cant,
+                mercado=d.mercado,
+            )
+            restaurado.append(info)
+            if info.get("ok"):
+                total_devuelto += cant
         else:
             inv = (
                 db.query(InventarioFinal)
@@ -706,26 +787,74 @@ def eliminar_embarque(
                 .first()
             )
             if inv:
-                inv.cantidad_stock = (inv.cantidad_stock or 0) + cant
-            else:
-                db.add(
-                    InventarioFinal(
-                        producto=prod,
-                        variedad=d.variedad,
-                        tipo_cultivo=d.tipo_cultivo,
-                        mercado=d.mercado,
-                        cantidad_stock=cant,
-                    )
+                antes = int(inv.cantidad_stock or 0)
+                inv.cantidad_stock = antes + cant
+                restaurado.append(
+                    {
+                        "ok": True,
+                        "created": False,
+                        "inv_id": inv.id,
+                        "presentacion": None,
+                        "talla": None,
+                        "mercado": _pval(d.mercado),
+                        "antes": antes,
+                        "despues": int(inv.cantidad_stock),
+                        "delta": cant,
+                        "producto": pval,
+                    }
                 )
+            else:
+                nuevo = InventarioFinal(
+                    producto=prod,
+                    variedad=d.variedad,
+                    tipo_cultivo=d.tipo_cultivo,
+                    mercado=d.mercado,
+                    cantidad_stock=cant,
+                )
+                db.add(nuevo)
+                db.flush()
+                restaurado.append(
+                    {
+                        "ok": True,
+                        "created": True,
+                        "inv_id": nuevo.id,
+                        "presentacion": None,
+                        "talla": None,
+                        "mercado": _pval(d.mercado),
+                        "antes": 0,
+                        "despues": cant,
+                        "delta": cant,
+                        "producto": pval,
+                    }
+                )
+            total_devuelto += cant
+
+    n_lineas = len(list(emb.detalles or []))
+    cliente_nombre = getattr(getattr(emb, "cliente", None), "nombre", None) or str(
+        emb.cliente_id
+    )
 
     # Borrar detalles y embarque
     for d in list(emb.detalles or []):
         db.delete(d)
     db.delete(emb)
     db.commit()
+
+    creadas = sum(1 for r in restaurado if r.get("created"))
+    msg = (
+        f"Embarque #{embarque_id} eliminado · {total_devuelto} cajas/bins devueltos "
+        f"al inventario final"
+    )
+    if creadas:
+        msg += f" · ⚠ {creadas} línea(s) de inventario creadas (no existían)"
+
     return {
-        "message": f"Embarque #{embarque_id} eliminado; inventario final restaurado",
+        "message": msg,
         "id": embarque_id,
+        "cliente": cliente_nombre,
+        "lineas_detalle": n_lineas,
+        "total_devuelto": total_devuelto,
+        "restaurado": restaurado,
     }
 
 
@@ -1106,4 +1235,339 @@ def reset_operacional(
         "eliminados": counts,
         "ejecutado_por": getattr(current_user, "username", None),
         "conservado": ["users", "clientes"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Import masivo de snapshot operativo (local → prod / clonación)
+# ---------------------------------------------------------------------------
+
+def _enum_or_none(enum_cls, val):
+    if val is None or val == "":
+        return None
+    s = str(val)
+    if "." in s:
+        s = s.split(".")[-1]
+    try:
+        return enum_cls(s)
+    except Exception:
+        pass
+    # SQLite a veces guarda el nombre (LIMON_AMARILLO) en vez del value
+    try:
+        return enum_cls[s]
+    except Exception:
+        pass
+    for m in enum_cls:
+        if m.value == s or m.name.lower() == s.lower() or m.value.lower() == s.lower():
+            return m
+    return None
+
+
+def _parse_date(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, date) and not isinstance(v, datetime):
+        return v
+    s = str(v)[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _parse_dt(v):
+    if not v:
+        return None
+    if isinstance(v, datetime):
+        return v
+    s = str(v).replace("Z", "+00:00") if str(v).endswith("Z") else str(v)
+    try:
+        return datetime.fromisoformat(s.replace("Z", ""))
+    except ValueError:
+        return None
+
+
+def _parse_json_field(v):
+    if v is None or v == "":
+        return None
+    if isinstance(v, (dict, list)):
+        return v
+    if isinstance(v, str):
+        try:
+            return json.loads(v)
+        except Exception:
+            return None
+    return None
+
+
+class ImportOperacionalRequest(BaseModel):
+    """
+    Reemplaza datos operativos (y opcionalmente clientes) con un snapshot.
+    Conserva usuarios. confirm debe ser exactamente: IMPORT_OPERACIONAL
+    """
+
+    confirm: str = Field(..., description='Debe ser "IMPORT_OPERACIONAL"')
+    replace_clientes: bool = True
+    clientes: list[dict] = Field(default_factory=list)
+    recepciones: list[dict] = Field(default_factory=list)
+    desverdizado: list[dict] = Field(default_factory=list)
+    empaques: list[dict] = Field(default_factory=list)
+    inventario_final: list[dict] = Field(default_factory=list)
+    inventario_campo: list[dict] = Field(default_factory=list)
+    embarques: list[dict] = Field(default_factory=list)
+    embarque_detalles: list[dict] = Field(default_factory=list)
+    parrillas: list[dict] = Field(default_factory=list)
+
+
+@router.post("/import-operacional")
+def import_operacional(
+    body: ImportOperacionalRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Importa un snapshot completo (p. ej. desde localhost) reemplazando
+    operación en la BD actual. Solo admin. Irreversible.
+    """
+    from app.models.enums import Producto, TipoMercado, TipoCultivo, VariedadUva
+
+    if (body.confirm or "").strip() != "IMPORT_OPERACIONAL":
+        raise HTTPException(
+            status_code=400,
+            detail='Para confirmar envía {"confirm": "IMPORT_OPERACIONAL"}',
+        )
+
+    counts_del: dict[str, int] = {}
+    counts_ins: dict[str, int] = {}
+
+    def _del(model, name: str) -> None:
+        n = db.query(model).delete(synchronize_session=False)
+        counts_del[name] = int(n or 0)
+
+    try:
+        # Orden: hijos → padres
+        _del(EmbarqueDetalle, "embarque_detalle")
+        _del(Embarque, "embarque")
+        _del(Empaque, "empaque")
+        _del(InventarioFinal, "inventario_final")
+        _del(InventarioCampo, "inventario_campo")
+        _del(InventarioDesverdizado, "inventario_desverdizado")
+        _del(RecepcionCampo, "recepcion_campo")
+        _del(Parrilla, "parrilla")
+        if body.replace_clientes:
+            _del(Cliente, "clientes")
+        db.commit()
+
+        # Clientes primero (FK embarques)
+        if body.replace_clientes:
+            for c in body.clientes or []:
+                row = Cliente(
+                    id=int(c["id"]),
+                    nombre=c.get("nombre") or "Sin nombre",
+                    empresa=c.get("empresa"),
+                    contacto=c.get("contacto"),
+                    email=c.get("email"),
+                    telefono=c.get("telefono"),
+                    notas=c.get("notas"),
+                    activo=int(c.get("activo") if c.get("activo") is not None else 1),
+                    fecha_creacion=_parse_dt(c.get("fecha_creacion")) or datetime.utcnow(),
+                )
+                db.merge(row)
+            counts_ins["clientes"] = len(body.clientes or [])
+            db.commit()
+
+        for r in body.recepciones or []:
+            prod = _enum_or_none(Producto, r.get("producto")) or Producto.LIMON_AMARILLO
+            row = RecepcionCampo(
+                id=int(r["id"]),
+                fecha=_parse_date(r.get("fecha")) or date.today(),
+                hora=_parse_dt(r.get("hora")),
+                producto=prod,
+                variedad=_enum_or_none(VariedadUva, r.get("variedad")),
+                cantidad_cajas_campo=int(r.get("cantidad_cajas_campo") or 0),
+                cantidad_cajas_carton=int(r.get("cantidad_cajas_carton") or 0)
+                if r.get("cantidad_cajas_carton") is not None
+                else 0,
+                tipo_cultivo_carton=_enum_or_none(TipoCultivo, r.get("tipo_cultivo_carton")),
+                mercado=_enum_or_none(TipoMercado, r.get("mercado")),
+                lote=r.get("lote"),
+                cantidad_bins=int(r.get("cantidad_bins") or 0),
+                fecha_corte=_parse_date(r.get("fecha_corte")),
+                usuario_id=r.get("usuario_id"),
+            )
+            db.merge(row)
+        counts_ins["recepciones"] = len(body.recepciones or [])
+        db.commit()
+
+        for d in body.desverdizado or []:
+            row = InventarioDesverdizado(
+                id=int(d["id"]),
+                producto=_enum_or_none(Producto, d.get("producto"))
+                or Producto.LIMON_AMARILLO,
+                cantidad_bins=int(d.get("cantidad_bins") or 0),
+                lote=(d.get("lote") or "").strip() or "SIN-LOTE",
+                fecha_recepcion=_parse_date(d.get("fecha_recepcion")) or date.today(),
+                fecha_tentativa_salida=_parse_date(d.get("fecha_tentativa_salida"))
+                or date.today(),
+                fecha_real_salida=_parse_date(d.get("fecha_real_salida")),
+                estado=d.get("estado") or "en_desverdizado",
+                numero_tanda=d.get("numero_tanda"),
+                usuario_id=d.get("usuario_id"),
+                recepcion_id=d.get("recepcion_id"),
+            )
+            db.merge(row)
+        counts_ins["desverdizado"] = len(body.desverdizado or [])
+        db.commit()
+
+        for e in body.empaques or []:
+            det = _parse_json_field(e.get("detalle_corrida"))
+            row = Empaque(
+                id=int(e["id"]),
+                fecha=_parse_date(e.get("fecha")) or date.today(),
+                producto=_enum_or_none(Producto, e.get("producto"))
+                or Producto.LIMON_AMARILLO,
+                variedad=_enum_or_none(VariedadUva, e.get("variedad")),
+                tipo_cultivo=_enum_or_none(TipoCultivo, e.get("tipo_cultivo")),
+                mercado=_enum_or_none(TipoMercado, e.get("mercado"))
+                or TipoMercado.NACIONAL,
+                cantidad_cajas_campo_usadas=int(e.get("cantidad_cajas_campo_usadas") or 0),
+                cantidad_cajas_carton_producidas=int(
+                    e.get("cantidad_cajas_carton_producidas") or 0
+                ),
+                porcentaje_merma=float(e.get("porcentaje_merma") or 0),
+                notas_merma=e.get("notas_merma"),
+                numero_empacador=e.get("numero_empacador") or "EMP",
+                bins_desverdizado_usados=int(e.get("bins_desverdizado_usados") or 0),
+                lote_desverdizado=e.get("lote_desverdizado"),
+                presentacion=e.get("presentacion"),
+                talla=e.get("talla"),
+                calidad=e.get("calidad"),
+                cantidad_producida=int(e.get("cantidad_producida") or 0),
+                detalle_corrida=det,
+                usuario_id=e.get("usuario_id"),
+            )
+            db.merge(row)
+        counts_ins["empaques"] = len(body.empaques or [])
+        db.commit()
+
+        for inv in body.inventario_final or []:
+            extra = _parse_json_field(inv.get("atributos_extra"))
+            row = InventarioFinal(
+                id=int(inv["id"]),
+                producto=_enum_or_none(Producto, inv.get("producto"))
+                or Producto.LIMON_AMARILLO,
+                variedad=_enum_or_none(VariedadUva, inv.get("variedad")),
+                tipo_cultivo=_enum_or_none(TipoCultivo, inv.get("tipo_cultivo")),
+                mercado=_enum_or_none(TipoMercado, inv.get("mercado"))
+                or TipoMercado.NACIONAL,
+                cantidad_stock=int(inv.get("cantidad_stock") or 0),
+                fecha_actualizacion=_parse_dt(inv.get("fecha_actualizacion"))
+                or datetime.utcnow(),
+                atributos_extra=extra,
+            )
+            db.merge(row)
+        counts_ins["inventario_final"] = len(body.inventario_final or [])
+        db.commit()
+
+        for inv in body.inventario_campo or []:
+            row = InventarioCampo(
+                id=int(inv["id"]),
+                variedad=_enum_or_none(VariedadUva, inv.get("variedad"))
+                or list(VariedadUva)[0],
+                mercado=_enum_or_none(TipoMercado, inv.get("mercado"))
+                or TipoMercado.NACIONAL,
+                cantidad_disponible=int(inv.get("cantidad_disponible") or 0),
+                fecha_actualizacion=_parse_dt(inv.get("fecha_actualizacion"))
+                or datetime.utcnow(),
+            )
+            db.merge(row)
+        counts_ins["inventario_campo"] = len(body.inventario_campo or [])
+        db.commit()
+
+        for emb in body.embarques or []:
+            row = Embarque(
+                id=int(emb["id"]),
+                fecha_salida=_parse_date(emb.get("fecha_salida")) or date.today(),
+                hora_salida=_parse_dt(emb.get("hora_salida")),
+                cliente_id=int(emb["cliente_id"]),
+                notas=emb.get("notas"),
+                estado=emb.get("estado") or "en_transito",
+                usuario_id=emb.get("usuario_id"),
+            )
+            db.merge(row)
+        counts_ins["embarques"] = len(body.embarques or [])
+        db.commit()
+
+        for det in body.embarque_detalles or []:
+            cpp = det.get("cajas_por_parrilla")
+            row = EmbarqueDetalle(
+                id=int(det["id"]),
+                embarque_id=int(det["embarque_id"]),
+                producto=_enum_or_none(Producto, det.get("producto"))
+                or Producto.LIMON_AMARILLO,
+                variedad=_enum_or_none(VariedadUva, det.get("variedad")),
+                tipo_cultivo=_enum_or_none(TipoCultivo, det.get("tipo_cultivo")),
+                mercado=_enum_or_none(TipoMercado, det.get("mercado"))
+                or TipoMercado.NACIONAL,
+                cantidad_cajas=int(det.get("cantidad_cajas") or 0),
+                presentacion=det.get("presentacion"),
+                talla=det.get("talla"),
+                calidad=det.get("calidad"),
+                cajas_por_parrilla=int(cpp) if cpp is not None else None,
+            )
+            db.merge(row)
+        counts_ins["embarque_detalles"] = len(body.embarque_detalles or [])
+        db.commit()
+
+        for p in body.parrillas or []:
+            row = Parrilla(
+                id=int(p["id"]),
+                nombre=p.get("nombre") or f"P{p['id']}",
+                estado=p.get("estado") or "disponible",
+                variedad=_enum_or_none(VariedadUva, p.get("variedad")),
+                cantidad=int(p.get("cantidad") or 0),
+                usuario_id=p.get("usuario_id"),
+            )
+            db.merge(row)
+        counts_ins["parrillas"] = len(body.parrillas or [])
+        db.commit()
+
+        # Postgres: alinear secuencias al max id importado
+        try:
+            from sqlalchemy import text
+
+            dialect = db.bind.dialect.name if db.bind is not None else ""
+            if dialect == "postgresql":
+                tables = [
+                    "clientes",
+                    "recepcion_campo",
+                    "inventario_desverdizado",
+                    "empaque",
+                    "inventario_final",
+                    "inventario_campo",
+                    "embarque",
+                    "embarque_detalle",
+                    "parrilla",
+                ]
+                for t in tables:
+                    db.execute(
+                        text(
+                            f"SELECT setval(pg_get_serial_sequence('{t}', 'id'), "
+                            f"COALESCE((SELECT MAX(id) FROM {t}), 1))"
+                        )
+                    )
+                db.commit()
+        except Exception:
+            db.rollback()
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Import falló: {e}") from e
+
+    return {
+        "message": "Snapshot importado. Usuarios conservados.",
+        "eliminados": counts_del,
+        "insertados": counts_ins,
+        "ejecutado_por": getattr(current_user, "username", None),
+        "conservado": ["users"],
     }

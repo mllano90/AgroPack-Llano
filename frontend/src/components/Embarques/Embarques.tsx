@@ -292,6 +292,7 @@ export default function Embarques({
         presentacion: d.presentacion || undefined,
         talla: d.talla || undefined,
         calidad: d.calidad || undefined,
+        cajas_por_parrilla: d.cajas_por_parrilla ?? undefined,
       }));
 
       const notas = [

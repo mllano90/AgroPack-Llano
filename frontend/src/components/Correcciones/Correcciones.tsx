@@ -12,13 +12,35 @@ import {
   eliminarEmbarqueAdmin,
   editarRecepcionLimon,
   sincronizarRecepcionDesverdizado,
+  getEmbarques,
   type DesverdizadoAdminItem,
   type HistorialMovimiento,
 } from '../../lib/api';
-import { DIAS_DESVERDIZADO, PRESENTACIONES_LIMON, TALLAS_LIMON } from '../../lib/constants';
+import {
+  DIAS_DESVERDIZADO,
+  PRESENTACIONES_LIMON,
+  TALLAS_LIMON,
+  labelPresentacionLimon,
+} from '../../lib/constants';
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
 import type { EmpaqueRecord } from '../../types';
 import InventariosAdmin from './InventariosAdmin';
+
+type EmbarqueAdminRow = {
+  id: number;
+  fecha_salida: string;
+  cliente_id: number;
+  notas?: string | null;
+  estado: string;
+  detalles: Array<{
+    producto: string;
+    mercado: string;
+    cantidad_cajas: number;
+    presentacion?: string | null;
+    talla?: string | null;
+    calidad?: string | null;
+  }>;
+};
 
 type ConsumoEdit = { lote: string; bins: string };
 type ProdEdit = { presentacion: string; talla: string; cantidad: string };
@@ -68,8 +90,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const [historial, setHistorial] = useState<HistorialMovimiento[]>([]);
   const [filtroModulo, setFiltroModulo] = useState<string>('recepcion');
   const [vistaSeccion, setVistaSeccion] = useState<
-    'historial' | 'empaques' | 'desverdizado' | 'inventarios'
+    'historial' | 'empaques' | 'embarques' | 'desverdizado' | 'inventarios'
   >('historial');
+  const [embarquesList, setEmbarquesList] = useState<EmbarqueAdminRow[]>([]);
+  const [embSelId, setEmbSelId] = useState<number | null>(null);
 
   // Edición recepción limón (lote / bins / fecha)
   const [editRec, setEditRec] = useState<HistorialMovimiento | null>(null);
@@ -81,17 +105,19 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setLoading(true);
     setError('');
     try {
-      const [list, desv, hist] = await Promise.all([
+      const [list, desv, hist, embs] = await Promise.all([
         getEmpaquesAdmin(token),
         getDesverdizadoAdmin(token).catch(() => [] as DesverdizadoAdminItem[]),
         getHistorialMovimientos(token, filtroModulo, 200).catch(() => ({
           total: 0,
           items: [] as HistorialMovimiento[],
         })),
+        getEmbarques(token).catch(() => [] as EmbarqueAdminRow[]),
       ]);
       setEmpaques(list);
       setDesverdizado(Array.isArray(desv) ? desv : []);
       setHistorial(hist.items || []);
+      setEmbarquesList(Array.isArray(embs) ? (embs as EmbarqueAdminRow[]) : []);
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       setError(
@@ -432,26 +458,47 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       return;
     }
     if (m.modulo === 'embarque') {
-      if (
-        !confirm(
-          `¿Eliminar embarque #${m.id}?\n\nSe devuelven las cajas/bins al inventario final.`
-        )
-      ) {
-        return;
-      }
-      setBusy(true);
-      setError('');
-      setOkMsg('');
-      try {
-        const res = await eliminarEmbarqueAdmin(token, m.id);
-        setOkMsg(res.message);
-        await load();
-        onCorregido?.();
-      } catch (err: any) {
-        setError(err?.response?.data?.detail || 'No se pudo eliminar el embarque');
-      } finally {
-        setBusy(false);
-      }
+      await eliminarEmbarqueConConfirm(m.id, m.detalle || m.resumen);
+    }
+  };
+
+  const eliminarEmbarqueConConfirm = async (id: number, detalleHint?: string) => {
+    if (
+      !confirm(
+        `¿Eliminar embarque #${id} y devolver inventario?\n\n` +
+          `${detalleHint ? detalleHint + '\n\n' : ''}` +
+          `Las cajas/bins vuelven al inventario final (mismas presentaciones y tallas).\n` +
+          `Esta acción no se puede deshacer (el embarque se borra del historial).`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const res = await eliminarEmbarqueAdmin(token, id);
+      const rest = (res as { restaurado?: Array<Record<string, unknown>> }).restaurado || [];
+      const lines = rest
+        .filter((r) => r.ok)
+        .map((r) => {
+          const sku = [r.presentacion, r.talla ? `#${r.talla}` : '']
+            .filter(Boolean)
+            .join(' ');
+          return `  · ${sku || r.producto || 'item'}: ${r.antes} → ${r.despues} (+${r.delta})${
+            r.created ? ' [NUEVA LÍNEA]' : ''
+          }`;
+        });
+      setOkMsg(
+        `${res.message}` + (lines.length ? `\n${lines.join('\n')}` : '')
+      );
+      if (embSelId === id) setEmbSelId(null);
+      await load();
+      onCorregido?.();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'No se pudo eliminar el embarque');
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -594,7 +641,20 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         <p style={{ color: '#dc2626', background: '#fef2f2', padding: 12, borderRadius: 8 }}>{error}</p>
       )}
       {okMsg && (
-        <p style={{ color: '#15803d', background: '#f0fdf4', padding: 12, borderRadius: 8 }}>{okMsg}</p>
+        <pre
+          style={{
+            color: '#15803d',
+            background: '#f0fdf4',
+            padding: 12,
+            borderRadius: 8,
+            whiteSpace: 'pre-wrap',
+            fontFamily: 'inherit',
+            fontSize: 13,
+            margin: '0 0 12px',
+          }}
+        >
+          {okMsg}
+        </pre>
       )}
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -603,6 +663,13 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         </button>
         <button type="button" style={secBtn('empaques')} onClick={() => setVistaSeccion('empaques')}>
           Corregir empaques
+        </button>
+        <button
+          type="button"
+          style={secBtn('embarques')}
+          onClick={() => setVistaSeccion('embarques')}
+        >
+          Corregir embarques
         </button>
         <button
           type="button"
@@ -884,6 +951,170 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             <strong>Embarque:</strong> devuelve stock al inventario final.
           </p>
         </div>
+      )}
+
+      {/* ===== EMBARQUES (devolver inventario) ===== */}
+      {vistaSeccion === 'embarques' && (
+        loading ? (
+          <p>Cargando embarques…</p>
+        ) : (
+          <div>
+            <h3 style={{ marginTop: 0 }}>Corregir embarques</h3>
+            <p style={{ fontSize: 13, color: '#64748b', maxWidth: 720, marginTop: 0 }}>
+              Eliminar un embarque <strong>devuelve</strong> las cajas/bins al inventario final
+              (misma presentación y talla). Usa esto si se cargó un manifiesto por error. No crea
+              empaques ni recepciones.
+            </p>
+            {embarquesList.length === 0 ? (
+              <p style={{ color: '#64748b' }}>No hay embarques registrados.</p>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
+                <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                    <thead>
+                      <tr style={{ background: '#fce7f3', textAlign: 'left' }}>
+                        <th style={th}>#</th>
+                        <th style={th}>Fecha</th>
+                        <th style={th}>Cliente id</th>
+                        <th style={th}>Cajas</th>
+                        <th style={th}>Líneas</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {embarquesList
+                        .slice()
+                        .sort((a, b) => b.id - a.id)
+                        .map((e) => {
+                          const total = (e.detalles || []).reduce(
+                            (s, d) => s + (d.cantidad_cajas || 0),
+                            0
+                          );
+                          const sel = embSelId === e.id;
+                          return (
+                            <tr
+                              key={e.id}
+                              onClick={() => setEmbSelId(e.id)}
+                              style={{
+                                borderBottom: '1px solid #e2e8f0',
+                                cursor: 'pointer',
+                                background: sel ? '#fdf2f8' : undefined,
+                              }}
+                            >
+                              <td style={td}>
+                                <strong>{e.id}</strong>
+                              </td>
+                              <td style={td}>{e.fecha_salida}</td>
+                              <td style={td}>{e.cliente_id}</td>
+                              <td style={{ ...td, fontWeight: 700 }}>{total}</td>
+                              <td style={td}>{(e.detalles || []).length}</td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                </div>
+                <div
+                  style={{
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 8,
+                    padding: 16,
+                    background: '#fff',
+                  }}
+                >
+                  {(() => {
+                    const e = embarquesList.find((x) => x.id === embSelId);
+                    if (!e) {
+                      return (
+                        <p style={{ color: '#64748b', margin: 0 }}>
+                          Selecciona un embarque para ver el detalle y devolver inventario.
+                        </p>
+                      );
+                    }
+                    const total = (e.detalles || []).reduce(
+                      (s, d) => s + (d.cantidad_cajas || 0),
+                      0
+                    );
+                    return (
+                      <>
+                        <h4 style={{ marginTop: 0 }}>Embarque #{e.id}</h4>
+                        <div style={{ fontSize: 13, color: '#475569', marginBottom: 12 }}>
+                          Fecha: <strong>{e.fecha_salida}</strong> · Cliente id:{' '}
+                          <strong>{e.cliente_id}</strong>
+                          {e.notas ? (
+                            <>
+                              <br />
+                              Notas: {e.notas}
+                            </>
+                          ) : null}
+                        </div>
+                        <table
+                          style={{
+                            width: '100%',
+                            borderCollapse: 'collapse',
+                            fontSize: 13,
+                            marginBottom: 14,
+                          }}
+                        >
+                          <thead>
+                            <tr style={{ background: '#f8fafc', textAlign: 'left' }}>
+                              <th style={th}>Presentación</th>
+                              <th style={th}>Talla</th>
+                              <th style={th}>Mercado</th>
+                              <th style={th}>Cajas</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(e.detalles || []).map((d, i) => (
+                              <tr key={i} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                                <td style={td}>
+                                  {d.presentacion
+                                    ? labelPresentacionLimon(d.presentacion) || d.presentacion
+                                    : d.producto}
+                                </td>
+                                <td style={td}>{d.talla || '—'}</td>
+                                <td style={td}>{d.mercado || '—'}</td>
+                                <td style={{ ...td, fontWeight: 700 }}>{d.cantidad_cajas}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                        <p style={{ fontSize: 13, marginBottom: 12 }}>
+                          Total a devolver: <strong>{total}</strong> cajas/bins
+                        </p>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() =>
+                            eliminarEmbarqueConConfirm(
+                              e.id,
+                              (e.detalles || [])
+                                .map(
+                                  (d) =>
+                                    `${d.presentacion || d.producto}${d.talla ? ' #' + d.talla : ''}: ${d.cantidad_cajas}`
+                                )
+                                .join('\n')
+                            )
+                          }
+                          style={{
+                            padding: '10px 16px',
+                            background: '#dc2626',
+                            color: 'white',
+                            border: 'none',
+                            borderRadius: 8,
+                            fontWeight: 700,
+                            cursor: busy ? 'wait' : 'pointer',
+                          }}
+                        >
+                          Eliminar embarque y devolver inventario
+                        </button>
+                      </>
+                    );
+                  })()}
+                </div>
+              </div>
+            )}
+          </div>
+        )
       )}
 
       {/* ===== EMPAQUES (detalle) ===== */}

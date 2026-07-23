@@ -3,10 +3,13 @@ import {
   getRendimientosLimon,
   getProyeccionInventario,
   getEmpaques,
+  getDashboard,
+  getReporteEmbarques,
   type CorridaRendimientoApi,
   type LoteRendimientoApi,
   type TallaRendimientoApi,
   type ProyeccionInventarioApi,
+  type EmbarquesReporteApi,
 } from '../../lib/api';
 import {
   PESO_BIN_CAMPO_KG,
@@ -14,11 +17,16 @@ import {
   HECTAREAS_POR_LOTE,
   DIAS_DESVERDIZADO,
 } from '../../lib/constants';
-import type { EmpaqueRecord } from '../../types';
+import type { DashboardData, EmpaqueRecord } from '../../types';
+import EmbarquesReporte from './EmbarquesReporte';
+import InventariosReporte from './InventariosReporte';
 
 type Corrida = CorridaRendimientoApi;
 type Lote = LoteRendimientoApi;
-type VistaReporte = 'lote' | 'corrida' | 'proyeccion';
+/** Secciones principales del módulo Reportes */
+type SeccionReporte = 'produccion' | 'inventarios' | 'embarques';
+/** Sub-vistas de producción */
+type VistaReporte = 'lote' | 'corrida';
 
 interface ReportesProps {
   token: string;
@@ -506,11 +514,14 @@ export default function Reportes({ token }: ReportesProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
+  const [seccion, setSeccion] = useState<SeccionReporte>('produccion');
   // Por corrida: procesos fusionados (campo + conversión del granel)
-  const [vista, setVista] = useState<VistaReporte>('corrida');
+  const [vista, setVista] = useState<VistaReporte>('lote');
   const [debugInfo, setDebugInfo] = useState('');
   /** id de proceso expandido para ver pasos (campo + conversiones) */
   const [expandidos, setExpandidos] = useState<Set<number>>(new Set());
+  const [dashboard, setDashboard] = useState<DashboardData | null>(null);
+  const [reporteEmbarques, setReporteEmbarques] = useState<EmbarquesReporteApi | null>(null);
 
   const toggleExpand = (id: number) => {
     setExpandidos((prev) => {
@@ -587,6 +598,20 @@ export default function Reportes({ token }: ReportesProps) {
         setProyeccion(null);
       }
 
+      try {
+        const dash = await getDashboard(token);
+        setDashboard(dash);
+      } catch {
+        setDashboard(null);
+      }
+
+      try {
+        const embRep = await getReporteEmbarques(token);
+        setReporteEmbarques(embRep);
+      } catch {
+        setReporteEmbarques(null);
+      }
+
       setHectareas(ha);
       setCorridas(data?.corridas || []);
       setPorLote(data?.por_lote || []);
@@ -611,7 +636,7 @@ export default function Reportes({ token }: ReportesProps) {
   if (loading) {
     return (
       <div style={{ background: 'white', padding: 25, borderRadius: 10 }}>
-        <h2>📊 Reportes de rendimiento (Limón)</h2>
+        <h2>📊 Reportes</h2>
         <p style={{ color: '#64748b' }}>Cargando… (si la API estaba dormida puede tardar ~30s)</p>
       </div>
     );
@@ -620,7 +645,7 @@ export default function Reportes({ token }: ReportesProps) {
   if (error) {
     return (
       <div style={{ background: 'white', padding: 25, borderRadius: 10 }}>
-        <h2>📊 Reportes de rendimiento (Limón)</h2>
+        <h2>📊 Reportes</h2>
         <p style={{ color: '#dc2626' }}>{error}</p>
         <button type="button" onClick={load} style={{ padding: '8px 16px' }}>
           Reintentar
@@ -630,6 +655,16 @@ export default function Reportes({ token }: ReportesProps) {
   }
 
   const a = acumulado;
+  const seccionBtn = (id: SeccionReporte): CSSProperties => ({
+    padding: '10px 18px',
+    border: 'none',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontWeight: seccion === id ? 700 : 500,
+    background: seccion === id ? '#0f172a' : '#f1f5f9',
+    color: seccion === id ? 'white' : '#334155',
+    fontSize: 14,
+  });
   const tabBtn = (id: VistaReporte): CSSProperties => ({
     padding: '8px 16px',
     border: 'none',
@@ -645,12 +680,46 @@ export default function Reportes({ token }: ReportesProps) {
   return (
     <div style={{ background: 'white', padding: 25, borderRadius: 10 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <h2 style={{ margin: 0 }}>📊 Reportes de rendimiento (Limón)</h2>
+        <h2 style={{ margin: 0 }}>📊 Reportes</h2>
         <button type="button" onClick={load} style={{ padding: '8px 14px' }}>
-          Actualizar
+          Actualizar todo
         </button>
       </div>
 
+      {/* Pestañas principales: Producción | Inventarios | Embarques */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 16, marginBottom: 8, flexWrap: 'wrap' }}>
+        <button type="button" style={seccionBtn('produccion')} onClick={() => setSeccion('produccion')}>
+          Producción / resultados
+        </button>
+        <button type="button" style={seccionBtn('inventarios')} onClick={() => setSeccion('inventarios')}>
+          Inventarios
+        </button>
+        <button type="button" style={seccionBtn('embarques')} onClick={() => setSeccion('embarques')}>
+          Embarques
+          {reporteEmbarques && reporteEmbarques.total_embarques > 0
+            ? ` (${reporteEmbarques.total_embarques})`
+            : ''}
+        </button>
+      </div>
+
+      {seccion === 'inventarios' && (
+        <div style={{ marginTop: 12 }}>
+          <InventariosReporte
+            data={dashboard}
+            proyeccion={proyeccion}
+            onRefresh={load}
+          />
+        </div>
+      )}
+
+      {seccion === 'embarques' && (
+        <div style={{ marginTop: 12 }}>
+          <EmbarquesReporte data={reporteEmbarques} onRefresh={load} />
+        </div>
+      )}
+
+      {seccion === 'produccion' && (
+      <>
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
         Rancho = <strong>{hectareas} ha</strong> · Por lote = <strong>{hectareasPorLote} ha</strong> (kg/ha
         por lote) · Bin campo = {PESO_BIN_CAMPO_KG} kg · RPC 12 = 12 kg · RPC 18 / cartón = 18 kg · Bin
@@ -794,197 +863,7 @@ export default function Reportes({ token }: ReportesProps) {
         <button type="button" style={tabBtn('corrida')} onClick={() => setVista('corrida')}>
           Por corrida
         </button>
-        <button type="button" style={tabBtn('proyeccion')} onClick={() => setVista('proyeccion')}>
-          Proyección inventario
-        </button>
       </div>
-
-      {vista === 'proyeccion' && (
-        <div>
-          <h3 style={{ marginTop: 8 }}>Proyección de inventario final</h3>
-          <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-            Usa los bins aún en desverdizado y su <strong>fecha tentativa de salida</strong>{' '}
-            (recepción + {DIAS_DESVERDIZADO} días de desverdizado), aplicando el rendimiento
-            acumulado (% 1ra / % 2da y mix de tallas). Volúmenes en{' '}
-            <strong>parrillas</strong>: RPC = {CAJAS_PARRILLA_RPC} cajas · Cartón ={' '}
-            {CAJAS_PARRILLA_CARTON} cajas · sobrantes = parrillas + cajas · 1 bin jugo = 1 parrilla.
-          </p>
-
-          {!proyeccion ? (
-            <p style={{ color: '#64748b' }}>No se pudo cargar la proyección.</p>
-          ) : (
-            <>
-              <div
-                style={{
-                  background: proyeccion.factores.con_datos ? '#f0fdf4' : '#fef2f2',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: 10,
-                  padding: 14,
-                  marginBottom: 16,
-                  fontSize: 13,
-                }}
-              >
-                <strong>Factores del histórico</strong>
-                {proyeccion.factores.con_datos ? (
-                  <div style={{ marginTop: 6 }}>
-                    Sobre {proyeccion.factores.bins_historicos} bins empacados:{' '}
-                    <strong>{proyeccion.factores.pct_primera}% 1ra</strong> ·{' '}
-                    <strong>{proyeccion.factores.pct_segunda}% 2da</strong> · recup.{' '}
-                    {proyeccion.factores.pct_recuperacion}%
-                    <div style={{ color: '#64748b', marginTop: 4 }}>
-                      Por bin de campo: {fmtNum(proyeccion.factores.kg_primera_por_bin, 1)} kg 1ra ·{' '}
-                      {fmtNum(proyeccion.factores.kg_segunda_por_bin, 1)} kg 2da
-                    </div>
-                  </div>
-                ) : (
-                  <div style={{ color: '#b91c1c', marginTop: 6 }}>
-                    {proyeccion.factores.nota || 'Falta histórico de empaque.'}
-                  </div>
-                )}
-              </div>
-
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
-                <div style={cardPrimary}>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>Bins en desverdizado</div>
-                  <div style={{ fontSize: 26, fontWeight: 800 }}>
-                    {proyeccion.total_bins_desverdizado}
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#dcfce7' }}>
-                  <div style={{ fontSize: 12, color: '#166534' }}>Kg 1ra proyectados</div>
-                  <div style={{ fontSize: 26, fontWeight: 800 }}>
-                    {fmtKg(proyeccion.total_kg_primera)}
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#fef9c3' }}>
-                  <div style={{ fontSize: 12, color: '#854d0e' }}>Kg 2da proyectados</div>
-                  <div style={{ fontSize: 26, fontWeight: 800 }}>
-                    {fmtKg(proyeccion.total_kg_segunda)}
-                  </div>
-                </div>
-                <div style={cardPrimary}>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>Kg salida total</div>
-                  <div style={{ fontSize: 26, fontWeight: 800 }}>
-                    {fmtKg(proyeccion.total_kg_salida)}
-                  </div>
-                </div>
-              </div>
-
-              <h4>Por fecha tentativa de salida de desverdizado</h4>
-              {proyeccion.por_fecha.length === 0 ? (
-                <p style={{ color: '#64748b' }}>
-                  No hay bins en desverdizado. Al registrar recepción aparecerán aquí.
-                </p>
-              ) : (
-                <div style={{ overflowX: 'auto', marginBottom: 24 }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 800 }}>
-                    <thead>
-                      <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
-                        <th style={th}>Fecha salida</th>
-                        <th style={th}>Bins</th>
-                        <th style={th}>Lotes</th>
-                        <th style={th}>kg 1ra</th>
-                        <th style={th}>kg 2da</th>
-                        <th style={th}>Proyección en parrillas</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {proyeccion.por_fecha.map((f) => (
-                        <tr key={f.fecha} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                          <td style={td}>
-                            <strong>{f.fecha}</strong>
-                          </td>
-                          <td style={td}>{f.bins}</td>
-                          <td style={td}>{f.lotes.join(', ')}</td>
-                          <td style={{ ...td, background: '#f0fdf4' }}>{fmtKg(f.kg_primera)}</td>
-                          <td style={{ ...td, background: '#fefce8' }}>{fmtKg(f.kg_segunda)}</td>
-                          <td style={td}>
-                            <ul style={{ margin: 0, paddingLeft: 16 }}>
-                              {f.unidades.map((u, i) => (
-                                <li key={i} style={{ marginBottom: 4 }}>
-                                  {labelPres(u.presentacion)}
-                                  {u.talla ? ` #${u.talla}` : ''}:{' '}
-                                  <strong style={{ color: '#0c4a6e' }}>
-                                    {formatParrillas(u.presentacion, u.cantidad, u.parrillas_label)}
-                                  </strong>
-                                  <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                                    {fmtNum(u.cantidad, 0)} cajas · {fmtKg(u.kg)} kg
-                                    {u.cajas_por_parrilla
-                                      ? ` · ${u.cajas_por_parrilla}/parr.`
-                                      : ''}
-                                  </div>
-                                </li>
-                              ))}
-                            </ul>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              <h4>Detalle por lote en desverdizado</h4>
-              {proyeccion.por_lote.length === 0 ? (
-                <p style={{ color: '#64748b' }}>—</p>
-              ) : (
-                <div style={{ overflowX: 'auto', marginBottom: 20 }}>
-                  <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 700 }}>
-                    <thead>
-                      <tr style={{ background: '#f1f5f9', textAlign: 'left' }}>
-                        <th style={th}>Lote</th>
-                        <th style={th}>Bins</th>
-                        <th style={th}>Recepción</th>
-                        <th style={th}>Salida tent.</th>
-                        <th style={th}>Estado</th>
-                        <th style={th}>kg 1ra</th>
-                        <th style={th}>kg 2da</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {proyeccion.por_lote.map((l) => (
-                        <tr key={`${l.lote}-${l.fecha_tentativa_salida}`} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                          <td style={td}>
-                            <strong>{l.lote}</strong>
-                          </td>
-                          <td style={td}>{l.bins}</td>
-                          <td style={td}>{l.fecha_recepcion}</td>
-                          <td style={td}>{l.fecha_tentativa_salida}</td>
-                          <td style={td}>{l.estado}</td>
-                          <td style={td}>{fmtKg(l.kg_primera)}</td>
-                          <td style={td}>{fmtKg(l.kg_segunda)}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-
-              {proyeccion.unidades_totales.length > 0 && (
-                <>
-                  <h4>Total proyectado (si se empaca todo el desverdizado)</h4>
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                    {proyeccion.unidades_totales.map((u, i) => (
-                      <div key={i} style={{ ...cardStyle, minWidth: 160 }}>
-                        <div style={{ fontSize: 12, fontWeight: 600 }}>
-                          {labelPres(u.presentacion)}
-                          {u.talla ? ` #${u.talla}` : ''}
-                        </div>
-                        <div style={{ fontSize: 18, fontWeight: 800, color: '#0c4a6e' }}>
-                          {formatParrillas(u.presentacion, u.cantidad, u.parrillas_label)}
-                        </div>
-                        <div style={{ fontSize: 12, color: '#64748b' }}>
-                          {fmtNum(u.cantidad, 0)} cajas · {fmtKg(u.kg)} kg · {u.calidad}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </>
-          )}
-        </div>
-      )}
 
       {vista === 'lote' && (
         <>
@@ -1380,6 +1259,8 @@ export default function Reportes({ token }: ReportesProps) {
             </div>
           )}
         </>
+      )}
+      </>
       )}
     </div>
   );
