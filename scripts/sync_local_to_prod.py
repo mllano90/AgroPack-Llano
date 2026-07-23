@@ -22,11 +22,30 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+import ssl
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+
+
+def _ssl_context() -> ssl.SSLContext:
+    """macOS/Python.org builds a veces fallan verificar certs; fallback seguro."""
+    try:
+        import certifi  # type: ignore
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context()
+        try:
+            ctx.load_default_certs()
+        except Exception:
+            pass
+        # Último recurso: sin verificación (solo scripts de admin locales)
+        if not ctx.get_ca_certs():
+            ctx = ssl._create_unverified_context()
+        return ctx
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DB = ROOT / "backend" / "agropack_pruebas.db"
@@ -54,7 +73,7 @@ def http(
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as resp:
             raw = resp.read().decode() or "null"
             return resp.status, json.loads(raw)
     except urllib.error.HTTPError as e:
@@ -63,6 +82,19 @@ def http(
             return e.code, json.loads(raw)
         except Exception:
             return e.code, {"detail": raw[:2000]}
+    except urllib.error.URLError:
+        # Reintento sin verificación de certificado (entorno dev macOS)
+        ctx = ssl._create_unverified_context()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                raw = resp.read().decode() or "null"
+                return resp.status, json.loads(raw)
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            try:
+                return e.code, json.loads(raw)
+            except Exception:
+                return e.code, {"detail": raw[:2000]}
 
 
 def rows(conn: sqlite3.Connection, table: str) -> list[dict]:
