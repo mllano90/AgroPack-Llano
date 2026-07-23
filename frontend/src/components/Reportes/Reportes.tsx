@@ -15,7 +15,6 @@ import {
   PESO_BIN_CAMPO_KG,
   HECTAREAS_RANCHO,
   HECTAREAS_POR_LOTE,
-  DIAS_DESVERDIZADO,
 } from '../../lib/constants';
 import type { DashboardData, EmpaqueRecord } from '../../types';
 import EmbarquesReporte from './EmbarquesReporte';
@@ -464,43 +463,6 @@ function computeTallasFromEmpaques(empaques: EmpaqueRecord[]): TallaRendimientoA
       pct_de_entrada: kgE ? Math.round((kgT[t] / kgE) * 10000) / 100 : 0,
       parrillas: Math.round(((cajasT[t] || 0) / CAJAS_PARRILLA_RPC) * 100) / 100,
     }));
-}
-
-function labelPres(p: string) {
-  const map: Record<string, string> = {
-    rpc_12: 'RPC 12',
-    rpc_18: 'RPC 18',
-    caja_40lbs: 'Caja 40 lbs',
-    rpc_granel: 'RPC a granel 22kg',
-    bins_jugo: 'Bins jugo',
-  };
-  return map[p] || p;
-}
-
-/** RPC=45, cartón=63; sobrantes como parrillas + cajas */
-function formatParrillas(
-  presentacion: string,
-  cantidad: number,
-  labelFromApi?: string | null
-): string {
-  if (labelFromApi) return labelFromApi;
-  const cajas = Math.round(cantidad || 0);
-  if (presentacion === 'bins_jugo') {
-    return cajas === 1 ? '1 parrilla' : `${cajas} parrillas`;
-  }
-  const div =
-    presentacion === 'rpc_12' || presentacion === 'rpc_18'
-      ? CAJAS_PARRILLA_RPC
-      : presentacion === 'caja_40lbs'
-        ? CAJAS_PARRILLA_CARTON
-        : 0;
-  if (!div) return `${cajas} cajas`;
-  const parr = Math.floor(cajas / div);
-  const sueltas = cajas % div;
-  if (parr > 0 && sueltas > 0) return `${parr} parrilla${parr !== 1 ? 's' : ''} + ${sueltas} cajas`;
-  if (parr > 0) return `${parr} parrilla${parr !== 1 ? 's' : ''}`;
-  if (sueltas > 0) return `${sueltas} cajas`;
-  return '0';
 }
 
 export default function Reportes({ token }: ReportesProps) {

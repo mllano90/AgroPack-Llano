@@ -139,12 +139,6 @@ function parrillasDeCliente(c: ClienteEmbarquesResumenApi): string {
   return resumirParrillas1raJugo(dets).label;
 }
 
-function enterasCliente(c: ClienteEmbarquesResumenApi): number {
-  const dets = (c.embarques || []).flatMap((e) => e.detalles || []);
-  const r = resumirParrillas1raJugo(dets);
-  return r.parr1ra + r.parrJugo;
-}
-
 function enterasGlobal(data: EmbarquesReporteApi): number {
   const dets = (data.embarques || []).flatMap((e) => e.detalles || []);
   const r = resumirParrillas1raJugo(dets);
