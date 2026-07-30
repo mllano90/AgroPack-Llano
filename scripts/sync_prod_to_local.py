@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import ssl
 import sys
 import urllib.error
 import urllib.parse
@@ -28,6 +29,22 @@ ROOT = Path(__file__).resolve().parents[1]
 BACKEND = ROOT / "backend"
 sys.path.insert(0, str(BACKEND))
 os.chdir(BACKEND)
+
+
+def _ssl_context() -> ssl.SSLContext:
+    try:
+        import certifi  # type: ignore
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        ctx = ssl.create_default_context()
+        try:
+            ctx.load_default_certs()
+        except Exception:
+            pass
+        if not ctx.get_ca_certs():
+            ctx = ssl._create_unverified_context()
+        return ctx
 
 
 def http(
@@ -51,16 +68,23 @@ def http(
     if token:
         headers["Authorization"] = f"Bearer {token}"
     req = urllib.request.Request(url, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode() or "null"
-            return resp.status, json.loads(raw)
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode()
+    contexts = [_ssl_context(), ssl._create_unverified_context()]
+    last_err: Exception | None = None
+    for ctx in contexts:
         try:
-            return e.code, json.loads(raw)
-        except Exception:
-            return e.code, {"detail": raw}
+            with urllib.request.urlopen(req, timeout=timeout, context=ctx) as resp:
+                raw = resp.read().decode() or "null"
+                return resp.status, json.loads(raw)
+        except urllib.error.HTTPError as e:
+            raw = e.read().decode()
+            try:
+                return e.code, json.loads(raw)
+            except Exception:
+                return e.code, {"detail": raw}
+        except Exception as e:
+            last_err = e
+            continue
+    raise last_err or RuntimeError("http falló")
 
 
 def parse_date(v) -> date | None:

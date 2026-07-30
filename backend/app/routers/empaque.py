@@ -25,6 +25,8 @@ from app.utils.limon_inv import (
     calidad_pres as _calidad_pres,
     extra_dict as _extra_dict,
     find_inv_final_limon as _find_inv_final_limon,
+    rows_inv_limon as _rows_inv_limon,
+    stock_limon as _stock_limon,
     parse_detalle_corrida as _detalle_as_dict,
 )
 
@@ -256,8 +258,96 @@ def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
     db.flush()
 
 
+def _sku_label(pres, talla_val, lote_val, fecha_val) -> str:
+    return (
+        f"{pres}"
+        + (f" talla {talla_val}" if talla_val else "")
+        + (f" lote {lote_val}" if lote_val else "")
+        + (f" fecha {fecha_val}" if fecha_val else "")
+    )
+
+
+def _rows_para_ajuste(
+    db: Session,
+    pres: str,
+    talla_val,
+    mercado,
+    lote_val,
+    fecha_val,
+    *,
+    al_restar: bool,
+) -> list:
+    """
+    Todas las filas del SKU (puede haber duplicados históricos).
+    La UI suma stock; al restar hay que descontar de TODAS las filas.
+    """
+    rows = list(
+        _rows_inv_limon(
+            db,
+            pres,
+            talla_val,
+            mercado=mercado,
+            lote=lote_val,
+            fecha_empaque=fecha_val,
+        )
+    )
+    # Compat granel legacy sin fecha (solo al restar)
+    if (
+        al_restar
+        and not rows
+        and pres == "rpc_granel"
+        and fecha_val
+        and lote_val
+    ):
+        legacy = _rows_inv_limon(
+            db, pres, talla_val, mercado=mercado, lote=lote_val, fecha_empaque=None
+        )
+        rows = [
+            r
+            for r in legacy
+            if not _norm_fecha_emp(_extra_dict(r).get("fecha_empaque"))
+        ]
+    # Preferir mismo mercado, luego id asc (FIFO)
+    mval = str(getattr(mercado, "value", mercado)) if mercado is not None else None
+
+    def _sort_key(r):
+        rm = str(getattr(r.mercado, "value", r.mercado))
+        same = 0 if (mval and rm == mval) else 1
+        return (same, r.id or 0)
+
+    rows.sort(key=_sort_key)
+    return rows
+
+
+def _consolidar_filas_inventario(db: Session, rows: list, mercado) -> object | None:
+    """
+    Fusiona filas duplicadas del mismo SKU en una sola (la preferida).
+    Evita que la UI muestre 27 y el backend solo vea 12 en una fila.
+    """
+    if not rows:
+        return None
+    keep = rows[0]
+    total = sum(int(r.cantidad_stock or 0) for r in rows)
+    for r in rows[1:]:
+        if r.id == keep.id:
+            continue
+        # Vaciar duplicados (no borrar: FKs/auditoría)
+        if (r.cantidad_stock or 0) != 0:
+            r.cantidad_stock = 0
+            r.fecha_actualizacion = datetime.utcnow()
+    keep.cantidad_stock = total
+    keep.fecha_actualizacion = datetime.utcnow()
+    # Si keep no es del mercado pedido y hay otra del mercado, ya preferimos sort
+    return keep
+
+
 def _ajustar_inventario_final(db: Session, producto: Producto, mercado, produccion: list, signo: int) -> None:
-    """suma (signo=+1) o resta (signo=-1) producción en inventario final."""
+    """
+    Suma (signo=+1) o resta (signo=-1) producción en inventario final.
+    Resta: descuenta en FIFO sobre TODAS las filas del mismo SKU (talla/lote/fecha),
+    porque pueden existir filas duplicadas y la UI ya muestra el total sumado.
+    Suma: consolida duplicados y suma en una sola fila (no crea otra igual).
+    """
     for linea in produccion or []:
         pres = (linea.get("presentacion") or "").strip()
         cant = int(linea.get("cantidad") or 0)
@@ -276,82 +366,89 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 status_code=400,
                 detail="RPC a granel requiere fecha de empaque (día de la corrida)",
             )
-        delta = cant * signo
-        inv_final = _find_inv_final_limon(
+
+        label = _sku_label(pres, talla_val, lote_val, fecha_val)
+        rows = _rows_para_ajuste(
             db,
             pres,
             talla_val,
-            mercado=mercado,
-            lote=lote_val,
-            fecha_empaque=fecha_val,
+            mercado,
+            lote_val,
+            fecha_val,
+            al_restar=(signo < 0),
         )
-        # Compat: granel legacy sin fecha_empaque (solo al restar)
-        if (
-            inv_final is None
-            and pres == "rpc_granel"
-            and signo < 0
-            and fecha_val
-        ):
-            inv_final = _find_inv_final_limon(
-                db, pres, talla_val, mercado=mercado, lote=lote_val, fecha_empaque=None
-            )
-            if inv_final and _norm_fecha_emp(_extra_dict(inv_final).get("fecha_empaque")):
-                inv_final = None
-        if inv_final:
-            nuevo = (inv_final.cantidad_stock or 0) + delta
-            if nuevo < 0:
+
+        if signo < 0:
+            # Consolidar duplicados y luego restar del total
+            if len(rows) > 1:
+                keep = _consolidar_filas_inventario(db, rows, mercado)
+                rows = [keep] if keep is not None else rows
+            total = sum(int(r.cantidad_stock or 0) for r in rows)
+            if total < cant:
                 raise HTTPException(
                     status_code=400,
                     detail=(
-                        f"Stock insuficiente de {pres}"
-                        + (f" talla {talla_val}" if talla_val else "")
-                        + (f" lote {lote_val}" if lote_val else "")
-                        + (f" fecha {fecha_val}" if fecha_val else "")
-                        + f" (hay {inv_final.cantidad_stock}, delta {delta})"
+                        f"Stock insuficiente de {label} "
+                        f"(hay {total}, se intentan restar {cant})"
                     ),
                 )
-            inv_final.cantidad_stock = nuevo
-            inv_final.fecha_actualizacion = datetime.utcnow()
-        elif signo > 0:
-            calidad = _calidad_pres(pres)
-            extra = {"presentacion": pres, "calidad": calidad}
-            if talla_val:
-                extra["talla"] = talla_val
-            if lote_val:
-                extra["lote"] = lote_val
-            if fecha_val and pres == "rpc_granel":
-                extra["fecha_empaque"] = fecha_val
-            elif fecha_val and lote_val:
-                # trazabilidad opcional en final
-                extra["fecha_empaque"] = fecha_val
-            db.add(
-                InventarioFinal(
-                    producto=producto if producto else Producto.LIMON_AMARILLO,
-                    variedad=None,
-                    tipo_cultivo=None,
-                    mercado=mercado,
-                    cantidad_stock=delta,
-                    atributos_extra=extra,
-                    fecha_actualizacion=datetime.utcnow(),
+            restante = cant
+            for inv in rows:
+                if restante <= 0:
+                    break
+                disp = int(inv.cantidad_stock or 0)
+                if disp <= 0:
+                    continue
+                toma = min(disp, restante)
+                inv.cantidad_stock = disp - toma
+                inv.fecha_actualizacion = datetime.utcnow()
+                restante -= toma
+            if restante > 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Stock insuficiente de {label} (faltaron {restante})",
                 )
+            continue
+
+        # signo > 0: sumar — preferir fila existente (fusionando duplicados)
+        if rows:
+            if len(rows) > 1:
+                keep = _consolidar_filas_inventario(db, rows, mercado)
+            else:
+                keep = rows[0]
+            if keep is not None:
+                keep.cantidad_stock = int(keep.cantidad_stock or 0) + cant
+                keep.fecha_actualizacion = datetime.utcnow()
+                continue
+
+        calidad = _calidad_pres(pres)
+        extra = {"presentacion": pres, "calidad": calidad}
+        if talla_val:
+            extra["talla"] = talla_val
+        if lote_val:
+            extra["lote"] = lote_val
+        if fecha_val and pres == "rpc_granel":
+            extra["fecha_empaque"] = fecha_val
+        elif fecha_val and lote_val:
+            extra["fecha_empaque"] = fecha_val
+        db.add(
+            InventarioFinal(
+                producto=producto if producto else Producto.LIMON_AMARILLO,
+                variedad=None,
+                tipo_cultivo=None,
+                mercado=mercado,
+                cantidad_stock=cant,
+                atributos_extra=extra,
+                fecha_actualizacion=datetime.utcnow(),
             )
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"No existe inventario final de {pres}"
-                    + (f" talla {talla_val}" if talla_val else "")
-                    + (f" lote {lote_val}" if lote_val else "")
-                    + (f" fecha {fecha_val}" if fecha_val else "")
-                    + " para restar"
-                ),
-            )
+        )
 
 
 def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[str]:
     """
     Dry-run: verifica si se puede restar la producción del inventario final.
     No muta la BD. Devuelve lista de problemas (vacía = OK).
+    Usa la SUMA de todas las filas del SKU (como la UI de granel).
     """
     problemas: list[str] = []
     for linea in produccion or []:
@@ -362,15 +459,15 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
         fecha_val = _norm_fecha_emp(linea.get("fecha_empaque") or linea.get("fecha"))
         if not pres or cant <= 0:
             continue
-        inv_final = _find_inv_final_limon(
+        hay = _stock_limon(
             db,
             pres,
             talla_val,
-            mercado=mercado,
+            mercado=None,  # suma todas las filas del SKU (como la UI)
             lote=lote_val,
             fecha_empaque=fecha_val,
         )
-        if not inv_final:
+        if hay <= 0:
             problemas.append(
                 f"No existe inventario final de {pres}"
                 + (f" talla {talla_val}" if talla_val else "")
@@ -378,7 +475,6 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
                 + (f" fecha {fecha_val}" if fecha_val else "")
             )
             continue
-        hay = int(inv_final.cantidad_stock or 0)
         if hay < cant:
             problemas.append(
                 f"Stock insuficiente de {pres}"
@@ -718,6 +814,64 @@ def _norm_produccion(raw: list | None) -> list[dict]:
     return out
 
 
+def _recuperar_lotes_granel_desde_old(
+    old_prod: list[dict],
+    new_prod: list[dict],
+) -> list[dict]:
+    """
+    Si el cliente envía rpc_granel sin lote (UI que no reenvía lote), rellena
+    desde la producción anterior emparejando presentacion+talla+cantidad.
+    Cada match se usa una sola vez (multi-líneas igual talla/cant distintas).
+    """
+    pool: list[dict] = []
+    for o in old_prod or []:
+        if (o.get("presentacion") or "") != "rpc_granel":
+            continue
+        lote = _norm_lote_extra(o.get("lote"))
+        if not lote:
+            continue
+        pool.append(
+            {
+                "talla": str(o.get("talla") or ""),
+                "cantidad": int(o.get("cantidad") or 0),
+                "lote": lote,
+                "fecha_empaque": _norm_fecha_emp(o.get("fecha_empaque")),
+            }
+        )
+
+    out: list[dict] = []
+    for p in new_prod or []:
+        linea = dict(p)
+        if (linea.get("presentacion") or "") == "rpc_granel" and not _norm_lote_extra(
+            linea.get("lote")
+        ):
+            talla = str(linea.get("talla") or "")
+            cant = int(linea.get("cantidad") or 0)
+            match_i = next(
+                (
+                    i
+                    for i, cand in enumerate(pool)
+                    if cand["talla"] == talla and cand["cantidad"] == cant
+                ),
+                None,
+            )
+            if match_i is None:
+                # fallback: misma talla (cantidad pudo cambiar levemente)
+                match_i = next(
+                    (i for i, cand in enumerate(pool) if cand["talla"] == talla),
+                    None,
+                )
+            if match_i is not None:
+                cand = pool.pop(match_i)
+                linea["lote"] = cand["lote"]
+                if not _norm_fecha_emp(linea.get("fecha_empaque")) and cand.get(
+                    "fecha_empaque"
+                ):
+                    linea["fecha_empaque"] = cand["fecha_empaque"]
+        out.append(linea)
+    return out
+
+
 @router.put("/{empaque_id}/editar", response_model=EmpaqueResponse)
 def editar_empaque_completo(
     empaque_id: int,
@@ -771,6 +925,11 @@ def editar_empaque_completo(
         if body.fecha:
             fecha_edit = _parse_fecha_empaque(body.fecha)
         fecha_edit = fecha_edit or emp.fecha
+        # Recuperar lote de líneas granel previas si el cliente no envió lote
+        # (p. ej. UI antigua al agregar solo bins de jugo).
+        new_produccion = _recuperar_lotes_granel_desde_old(
+            old_produccion, new_produccion
+        )
         new_produccion = _etiquetar_produccion_con_lote(
             new_produccion,
             new_consumos or old_consumos,

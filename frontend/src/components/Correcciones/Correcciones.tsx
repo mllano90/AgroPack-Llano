@@ -43,7 +43,14 @@ type EmbarqueAdminRow = {
 };
 
 type ConsumoEdit = { lote: string; bins: string };
-type ProdEdit = { presentacion: string; talla: string; cantidad: string };
+type ProdEdit = {
+  presentacion: string;
+  talla: string;
+  cantidad: string;
+  /** Lote de origen (obligatorio en rpc_granel con multi-lote) */
+  lote: string;
+  fecha_empaque: string;
+};
 
 interface CorreccionesProps {
   token: string;
@@ -101,6 +108,12 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const [editRecBins, setEditRecBins] = useState('');
   const [editRecFecha, setEditRecFecha] = useState('');
 
+  /** Selección múltiple en historial: clave "modulo:id" */
+  const [selKeys, setSelKeys] = useState<Set<string>>(new Set());
+
+  const histKey = (m: Pick<HistorialMovimiento, 'modulo' | 'id'>) =>
+    `${m.modulo}:${m.id}`;
+
   const load = async () => {
     setLoading(true);
     setError('');
@@ -118,6 +131,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       setDesverdizado(Array.isArray(desv) ? desv : []);
       setHistorial(hist.items || []);
       setEmbarquesList(Array.isArray(embs) ? (embs as EmbarqueAdminRow[]) : []);
+      // Mantener solo keys que siguen existiendo
+      const alive = new Set((hist.items || []).map((m) => histKey(m)));
+      setSelKeys((prev) => new Set([...prev].filter((k) => alive.has(k))));
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       setError(
@@ -133,6 +149,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   };
 
   useEffect(() => {
+    setSelKeys(new Set());
     load();
   }, [token, filtroModulo]);
 
@@ -153,11 +170,17 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       cons.map((c) => ({ lote: String(c.lote || ''), bins: String(c.bins ?? '') }))
     );
     const prod = e.detalle_corrida?.produccion || [];
+    const fechaEmpDefault = toInputDate(e.fecha);
     setEditProduccion(
-      prod.map((p) => ({
+      prod.map((p: any) => ({
         presentacion: String(p.presentacion || ''),
         talla: p.talla != null ? String(p.talla) : '',
         cantidad: String(p.cantidad ?? ''),
+        // CRÍTICO: conservar lote/fecha de granel (si se pierden, el API rechaza multi-lote)
+        lote: p.lote != null ? String(p.lote) : '',
+        fecha_empaque: p.fecha_empaque
+          ? toInputDate(String(p.fecha_empaque))
+          : fechaEmpDefault,
       }))
     );
     setOkMsg('');
@@ -174,16 +197,62 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     const consumos = editConsumos
       .map((c) => ({ lote: c.lote.trim(), bins: parseInt(c.bins, 10) || 0 }))
       .filter((c) => c.lote && c.bins > 0);
+    const lotesConsumo = new Set(consumos.map((c) => c.lote));
+    const loteUnico = consumos.length === 1 ? consumos[0].lote : null;
+
     const produccion = editProduccion
-      .map((p) => ({
-        presentacion: p.presentacion.trim(),
-        talla: p.presentacion === 'bins_jugo' ? null : p.talla.trim() || null,
-        cantidad: parseInt(p.cantidad, 10) || 0,
-      }))
+      .map((p) => {
+        const presentacion = p.presentacion.trim();
+        let lote = (p.lote || '').trim();
+        // Un solo consumo → heredar lote si no viene
+        if (!lote && loteUnico) lote = loteUnico;
+        const row: {
+          presentacion: string;
+          talla: string | null;
+          cantidad: number;
+          lote?: string;
+          fecha_empaque?: string;
+        } = {
+          presentacion,
+          talla: presentacion === 'bins_jugo' ? null : p.talla.trim() || null,
+          cantidad: parseInt(p.cantidad, 10) || 0,
+        };
+        if (lote) row.lote = lote;
+        const fe = (p.fecha_empaque || editFecha || '').trim();
+        if (fe) row.fecha_empaque = fe;
+        return row;
+      })
       .filter((p) => p.presentacion && p.cantidad > 0);
 
     if (consumos.length === 0) return alert('Debe haber al menos un lote con bins > 0');
     if (produccion.length === 0) return alert('Debe haber al menos una línea de producción');
+
+    // Validar granel multi-lote en cliente (mismo mensaje que el API)
+    const granelSinLote = produccion.filter(
+      (p) => p.presentacion === 'rpc_granel' && !p.lote
+    );
+    if (granelSinLote.length > 0 && lotesConsumo.size > 1) {
+      return alert(
+        'Hay varios lotes en el empaque.\n\n' +
+          'Cada línea de RPC a granel debe indicar el lote de origen.\n' +
+          'No se perdió el dato: elige el lote en cada fila de granel y vuelve a guardar.\n\n' +
+          '(Agregar bins de jugo no requiere desvincular el granel.)'
+      );
+    }
+    for (const p of produccion) {
+      if (p.presentacion === 'rpc_granel' && p.lote && !lotesConsumo.has(p.lote)) {
+        // case-insensitive
+        const ok = [...lotesConsumo].some(
+          (l) => l.toLowerCase() === String(p.lote).toLowerCase()
+        );
+        if (!ok) {
+          return alert(
+            `El lote "${p.lote}" de RPC a granel no está en los consumos de desverdizado.\n` +
+              `Lotes válidos: ${[...lotesConsumo].join(', ')}`
+          );
+        }
+      }
+    }
 
     if (
       !confirm(
@@ -348,6 +417,46 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
+  /** Ejecuta borrado/anulación de un movimiento sin diálogo (para masivo). */
+  const ejecutarEliminarMovimiento = async (
+    m: HistorialMovimiento,
+    opts?: { forzarEmpaque?: boolean }
+  ): Promise<{ ok: boolean; message: string }> => {
+    if (m.modulo === 'empaque') {
+      const yaAnulado = Boolean(m.meta?.anulado);
+      if (yaAnulado) {
+        const res = await eliminarEmpaqueAnulado(token, m.id);
+        return { ok: true, message: res.message || `Empaque #${m.id} borrado` };
+      }
+      try {
+        const res = await anularEmpaque(token, m.id, Boolean(opts?.forzarEmpaque));
+        return { ok: true, message: res.message || `Empaque #${m.id} anulado` };
+      } catch (err: any) {
+        if (err?.response?.status === 409 && !opts?.forzarEmpaque) {
+          const res2 = await anularEmpaque(token, m.id, true);
+          return {
+            ok: true,
+            message: res2.message || `Empaque #${m.id} anulado (forzado)`,
+          };
+        }
+        throw err;
+      }
+    }
+    if (m.modulo === 'desverdizado') {
+      const res = await eliminarDesverdizado(token, m.id, false);
+      return { ok: true, message: res.message || `Desverdizado #${m.id} eliminado` };
+    }
+    if (m.modulo === 'recepcion') {
+      const res = await eliminarRecepcionAdmin(token, m.id);
+      return { ok: true, message: res.message || `Recepción #${m.id} eliminada` };
+    }
+    if (m.modulo === 'embarque') {
+      const res = await eliminarEmbarqueAdmin(token, m.id);
+      return { ok: true, message: res.message || `Embarque #${m.id} eliminado` };
+    }
+    return { ok: false, message: `Módulo no soportado: ${m.modulo}` };
+  };
+
   const handleHistorialEliminar = async (m: HistorialMovimiento) => {
     if (m.modulo === 'empaque') {
       const yaAnulado = Boolean(m.meta?.anulado);
@@ -459,6 +568,103 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
     if (m.modulo === 'embarque') {
       await eliminarEmbarqueConConfirm(m.id, m.detalle || m.resumen);
+    }
+  };
+
+  const toggleSel = (m: HistorialMovimiento) => {
+    if (!m.puede_eliminar) return;
+    const k = histKey(m);
+    setSelKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k);
+      else next.add(k);
+      return next;
+    });
+  };
+
+  const eliminables = historial.filter((m) => m.puede_eliminar);
+  const allEliminablesSelected =
+    eliminables.length > 0 && eliminables.every((m) => selKeys.has(histKey(m)));
+
+  const toggleSelectAllEliminables = () => {
+    if (allEliminablesSelected) {
+      setSelKeys(new Set());
+      return;
+    }
+    setSelKeys(new Set(eliminables.map((m) => histKey(m))));
+  };
+
+  const handleEliminarSeleccionados = async () => {
+    const items = historial.filter((m) => m.puede_eliminar && selKeys.has(histKey(m)));
+    if (items.length === 0) {
+      alert('Selecciona al menos un movimiento eliminable.');
+      return;
+    }
+    const porModulo = items.reduce<Record<string, number>>((acc, m) => {
+      acc[m.modulo] = (acc[m.modulo] || 0) + 1;
+      return acc;
+    }, {});
+    const resumenMods = Object.entries(porModulo)
+      .map(([mod, n]) => `  · ${mod}: ${n}`)
+      .join('\n');
+    const preview = items
+      .slice(0, 12)
+      .map((m) => `  · ${m.titulo} (${m.fecha || 's/f'})`)
+      .join('\n');
+    const extra = items.length > 12 ? `\n  … y ${items.length - 12} más` : '';
+    if (
+      !confirm(
+        `¿Eliminar ${items.length} movimiento(s) de un solo jalón?\n\n` +
+          `Por tipo:\n${resumenMods}\n\n` +
+          `Incluye:\n${preview}${extra}\n\n` +
+          `• Recepciones: borra también desverdizado ligado\n` +
+          `• Empaques activos: se ANULAN (revierten stock)\n` +
+          `• Empaques ya anulados: se borran del historial\n` +
+          `• Embarques: devuelven inventario final\n\n` +
+          `Esta acción no se puede deshacer.`
+      )
+    ) {
+      return;
+    }
+
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    const okMsgs: string[] = [];
+    const errMsgs: string[] = [];
+    // Orden: embarques y empaques primero, recepciones al final (menos dependencias raras)
+    const orden = { embarque: 0, empaque: 1, desverdizado: 2, recepcion: 3 } as Record<
+      string,
+      number
+    >;
+    const sorted = [...items].sort(
+      (a, b) => (orden[a.modulo] ?? 9) - (orden[b.modulo] ?? 9) || b.id - a.id
+    );
+
+    for (const m of sorted) {
+      try {
+        const r = await ejecutarEliminarMovimiento(m);
+        okMsgs.push(r.message);
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail;
+        errMsgs.push(
+          `${m.titulo}: ${typeof detail === 'string' ? detail : err?.message || 'error'}`
+        );
+      }
+    }
+
+    setSelKeys(new Set());
+    await load();
+    onCorregido?.();
+    setBusy(false);
+
+    if (okMsgs.length && !errMsgs.length) {
+      setOkMsg(`✓ ${okMsgs.length} movimiento(s) procesados correctamente.`);
+    } else if (okMsgs.length && errMsgs.length) {
+      setOkMsg(`✓ ${okMsgs.length} OK.`);
+      setError(`Fallaron ${errMsgs.length}:\n${errMsgs.slice(0, 8).join('\n')}`);
+    } else {
+      setError(`No se pudo eliminar ninguno:\n${errMsgs.slice(0, 8).join('\n')}`);
     }
   };
 
@@ -830,17 +1036,88 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             </div>
           )}
 
+          {/* Barra de selección múltiple */}
+          {!loading && historial.length > 0 && (
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 10,
+                alignItems: 'center',
+                marginBottom: 10,
+                padding: '10px 12px',
+                background: selKeys.size > 0 ? '#fef2f2' : '#f8fafc',
+                border: `1px solid ${selKeys.size > 0 ? '#fecaca' : '#e2e8f0'}`,
+                borderRadius: 8,
+              }}
+            >
+              <label
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  fontSize: 13,
+                  cursor: 'pointer',
+                  fontWeight: 600,
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={allEliminablesSelected}
+                  onChange={toggleSelectAllEliminables}
+                  disabled={eliminables.length === 0 || busy}
+                />
+                Seleccionar todos los eliminables ({eliminables.length})
+              </label>
+              <span style={{ fontSize: 13, color: '#64748b' }}>
+                {selKeys.size > 0
+                  ? `${selKeys.size} seleccionado(s)`
+                  : 'Marca filas para borrar varias de un jalón'}
+              </span>
+              <button
+                type="button"
+                disabled={busy || selKeys.size === 0}
+                onClick={handleEliminarSeleccionados}
+                style={{
+                  padding: '8px 14px',
+                  background: selKeys.size > 0 ? '#dc2626' : '#cbd5e1',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: 6,
+                  fontWeight: 700,
+                  cursor: busy || selKeys.size === 0 ? 'not-allowed' : 'pointer',
+                  fontSize: 13,
+                  marginLeft: 'auto',
+                }}
+              >
+                {busy
+                  ? 'Procesando…'
+                  : `Eliminar seleccionados${selKeys.size ? ` (${selKeys.size})` : ''}`}
+              </button>
+            </div>
+          )}
+
           {loading ? (
             <p>Cargando historial…</p>
           ) : historial.length === 0 ? (
             <p style={{ color: '#64748b' }}>No hay movimientos para este filtro.</p>
           ) : (
             <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 900 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 980 }}>
                 <thead>
                   <tr style={{ background: '#f8fafc', textAlign: 'left' }}>
+                    <th style={{ ...th, width: 40 }}>
+                      <input
+                        type="checkbox"
+                        title="Seleccionar todos"
+                        checked={allEliminablesSelected}
+                        onChange={toggleSelectAllEliminables}
+                        disabled={eliminables.length === 0 || busy}
+                      />
+                    </th>
                     <th style={th}>Módulo</th>
                     <th style={th}>Fecha</th>
+                    <th style={th}>Usuario</th>
                     <th style={th}>Registro</th>
                     <th style={th}>Resumen</th>
                     <th style={th}>Detalle</th>
@@ -848,107 +1125,151 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   </tr>
                 </thead>
                 <tbody>
-                  {historial.map((m) => (
-                    <tr key={`${m.modulo}-${m.id}`} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                      <td style={td}>
-                        <span
-                          style={{
-                            background: moduloColor(m.modulo),
-                            padding: '3px 8px',
-                            borderRadius: 4,
-                            fontWeight: 600,
-                            fontSize: 12,
-                            color: '#0f172a',
-                          }}
-                        >
-                          {moduloLabel(m.modulo)}
-                        </span>
-                      </td>
-                      <td style={td}>
-                        <strong>{formatFecha(m.fecha || '')}</strong>
-                        {m.modulo === 'recepcion' && m.meta?.cantidad_bins != null && (
-                          <div style={{ fontSize: 11, color: '#0369a1', marginTop: 2 }}>
-                            {String(m.meta.cantidad_bins)} bins
-                            {m.meta.lote ? ` · ${String(m.meta.lote)}` : ''}
-                          </div>
-                        )}
-                        {m.modulo === 'desverdizado' && m.meta?.cantidad_bins != null && (
-                          <div style={{ fontSize: 11, color: '#a16207', marginTop: 2 }}>
-                            {String(m.meta.cantidad_bins)} bins en cámara
-                            {m.meta.recepcion_id
-                              ? ` · Rec. #${String(m.meta.recepcion_id)}`
-                              : ''}
-                          </div>
-                        )}
-                      </td>
-                      <td style={td}>
-                        <strong>{m.titulo}</strong>
-                      </td>
-                      <td style={td}>{m.resumen}</td>
-                      <td style={{ ...td, maxWidth: 320, fontSize: 12, color: '#475569' }}>
-                        {m.detalle}
-                      </td>
-                      <td style={td}>
-                        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                          {m.puede_editar && (
-                            <button
-                              type="button"
+                  {historial.map((m) => {
+                    const k = histKey(m);
+                    const checked = selKeys.has(k);
+                    return (
+                      <tr
+                        key={k}
+                        style={{
+                          borderBottom: '1px solid #f1f5f9',
+                          background: checked ? '#fef2f2' : undefined,
+                        }}
+                      >
+                        <td style={td}>
+                          {m.puede_eliminar ? (
+                            <input
+                              type="checkbox"
+                              checked={checked}
                               disabled={busy}
-                              onClick={() => handleHistorialEditar(m)}
-                              style={{
-                                padding: '5px 10px',
-                                background: '#0369a1',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: 5,
-                                cursor: 'pointer',
-                                fontSize: 12,
-                                fontWeight: 600,
-                              }}
-                            >
-                              Editar / Corregir
-                            </button>
+                              onChange={() => toggleSel(m)}
+                              title="Seleccionar para eliminar"
+                            />
+                          ) : (
+                            <span style={{ color: '#cbd5e1' }}>—</span>
                           )}
-                          {m.puede_eliminar && (
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={() => handleHistorialEliminar(m)}
-                              style={{
-                                padding: '5px 10px',
-                                background: m.meta?.anulado ? '#7f1d1d' : '#dc2626',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: 5,
-                                cursor: busy ? 'wait' : 'pointer',
-                                fontSize: 12,
-                                fontWeight: 600,
-                              }}
-                            >
-                              {m.modulo === 'empaque' && m.meta?.anulado
-                                ? 'Borrar'
-                                : m.modulo === 'empaque'
-                                  ? 'Anular'
-                                  : 'Eliminar'}
-                            </button>
+                        </td>
+                        <td style={td}>
+                          <span
+                            style={{
+                              background: moduloColor(m.modulo),
+                              padding: '3px 8px',
+                              borderRadius: 4,
+                              fontWeight: 600,
+                              fontSize: 12,
+                              color: '#0f172a',
+                            }}
+                          >
+                            {moduloLabel(m.modulo)}
+                          </span>
+                        </td>
+                        <td style={td}>
+                          <strong>{formatFecha(m.fecha || '')}</strong>
+                          {m.modulo === 'recepcion' && m.meta?.cantidad_bins != null && (
+                            <div style={{ fontSize: 11, color: '#0369a1', marginTop: 2 }}>
+                              {String(m.meta.cantidad_bins)} bins
+                              {m.meta.lote ? ` · ${String(m.meta.lote)}` : ''}
+                            </div>
                           )}
-                          {!m.puede_editar && !m.puede_eliminar && (
-                            <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>
+                          {m.modulo === 'desverdizado' && m.meta?.cantidad_bins != null && (
+                            <div style={{ fontSize: 11, color: '#a16207', marginTop: 2 }}>
+                              {String(m.meta.cantidad_bins)} bins en cámara
+                              {m.meta.recepcion_id
+                                ? ` · Rec. #${String(m.meta.recepcion_id)}`
+                                : ''}
+                            </div>
                           )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td style={td}>
+                          <span
+                            style={{
+                              fontWeight: 600,
+                              color:
+                                m.usuario_id || m.usuario
+                                  ? '#0f172a'
+                                  : '#94a3b8',
+                              fontSize: 12,
+                            }}
+                            title={
+                              m.usuario_id
+                                ? `usuario_id=${m.usuario_id}`
+                                : 'Registro sin usuario (importado o anterior)'
+                            }
+                          >
+                            {m.usuario_label || m.usuario || 'Sin registrar'}
+                          </span>
+                        </td>
+                        <td style={td}>
+                          <strong>{m.titulo}</strong>
+                        </td>
+                        <td style={td}>{m.resumen}</td>
+                        <td style={{ ...td, maxWidth: 280, fontSize: 12, color: '#475569' }}>
+                          {m.detalle}
+                        </td>
+                        <td style={td}>
+                          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                            {m.puede_editar && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleHistorialEditar(m)}
+                                style={{
+                                  padding: '5px 10px',
+                                  background: '#0369a1',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: 5,
+                                  cursor: 'pointer',
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Editar / Corregir
+                              </button>
+                            )}
+                            {m.puede_eliminar && (
+                              <button
+                                type="button"
+                                disabled={busy}
+                                onClick={() => handleHistorialEliminar(m)}
+                                style={{
+                                  padding: '5px 10px',
+                                  background: m.meta?.anulado ? '#7f1d1d' : '#dc2626',
+                                  color: 'white',
+                                  border: 'none',
+                                  borderRadius: 5,
+                                  cursor: busy ? 'wait' : 'pointer',
+                                  fontSize: 12,
+                                  fontWeight: 600,
+                                }}
+                              >
+                                {m.modulo === 'empaque' && m.meta?.anulado
+                                  ? 'Borrar'
+                                  : m.modulo === 'empaque'
+                                    ? 'Anular'
+                                    : 'Eliminar'}
+                              </button>
+                            )}
+                            {!m.puede_editar && !m.puede_eliminar && (
+                              <span style={{ fontSize: 12, color: '#94a3b8' }}>—</span>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
           <p style={{ fontSize: 12, color: '#64748b', marginTop: 12 }}>
-            <strong>Recepción:</strong> Editar = lote, bins y fecha de corte (actualiza desverdizado).
-            Eliminar = borra recepción y el inventario de desverdizado ligado.{' '}
-            <strong>Empaque:</strong> Anular = revierte inventarios; si ya está anulado, Borrar =
-            lo quita del historial.{' '}
-            <strong>Embarque:</strong> devuelve stock al inventario final.
+            <strong>Usuario:</strong> quién registró el movimiento (nuevos registros siempre
+            guardan al usuario logueado). Datos importados viejos pueden decir “Sin registrar”.{' '}
+            <strong>Selección múltiple:</strong> marca varias filas y usa “Eliminar
+            seleccionados”. <strong>Recepción:</strong> Editar = lote/bins/fecha; Eliminar =
+            borra recepción + desverdizado. <strong>Empaque:</strong> Anular revierte stock; si
+            ya está anulado, Borrar lo quita del historial. <strong>Embarque:</strong> devuelve
+            inventario final.
           </p>
         </div>
       )}
@@ -1356,8 +1677,22 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       + Agregar lote
                     </button>
 
-                    <h4 style={{ marginBottom: 8 }}>Producción (presentación / talla / cantidad)</h4>
-                    {editProduccion.map((p, i) => (
+                    <h4 style={{ marginBottom: 8 }}>
+                      Producción (presentación / talla / cantidad / lote)
+                    </h4>
+                    <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, marginBottom: 8 }}>
+                      Si hay <strong>varios lotes</strong>, cada línea de{' '}
+                      <strong>RPC a granel</strong> debe tener su lote de origen. Al agregar jugo
+                      no borres los lotes del granel.
+                    </p>
+                    {editProduccion.map((p, i) => {
+                      const lotesOpts = editConsumos
+                        .map((c) => c.lote.trim())
+                        .filter(Boolean);
+                      const lotesUniq = [...new Set(lotesOpts)];
+                      const needLote =
+                        p.presentacion === 'rpc_granel' || lotesUniq.length > 1;
+                      return (
                       <div
                         key={i}
                         style={{
@@ -1366,6 +1701,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                           gap: 8,
                           marginBottom: 8,
                           alignItems: 'flex-end',
+                          padding: p.presentacion === 'rpc_granel' ? '8px' : undefined,
+                          background:
+                            p.presentacion === 'rpc_granel' ? '#fffbeb' : undefined,
+                          borderRadius: 8,
+                          border:
+                            p.presentacion === 'rpc_granel'
+                              ? '1px solid #fde68a'
+                              : undefined,
                         }}
                       >
                         <label style={editLabel}>
@@ -1374,10 +1717,17 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                             value={p.presentacion}
                             onChange={(e) => {
                               const next = [...editProduccion];
+                              const val = e.target.value;
                               next[i] = {
                                 ...next[i],
-                                presentacion: e.target.value,
-                                talla: e.target.value === 'bins_jugo' ? '' : next[i].talla,
+                                presentacion: val,
+                                talla: val === 'bins_jugo' ? '' : next[i].talla,
+                                // al pasar a granel con un solo lote, rellenar
+                                lote:
+                                  next[i].lote ||
+                                  (lotesUniq.length === 1 ? lotesUniq[0] : next[i].lote),
+                                fecha_empaque:
+                                  next[i].fecha_empaque || editFecha || '',
                               };
                               setEditProduccion(next);
                             }}
@@ -1426,6 +1776,39 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                             style={{ ...editInput, width: 90 }}
                           />
                         </label>
+                        {needLote && (
+                          <label style={editLabel}>
+                            Lote origen
+                            {p.presentacion === 'rpc_granel' ? ' *' : ''}
+                            <select
+                              value={p.lote}
+                              onChange={(e) => {
+                                const next = [...editProduccion];
+                                next[i] = { ...next[i], lote: e.target.value };
+                                setEditProduccion(next);
+                              }}
+                              style={{
+                                ...editInput,
+                                minWidth: 140,
+                                borderColor:
+                                  p.presentacion === 'rpc_granel' && !p.lote
+                                    ? '#dc2626'
+                                    : undefined,
+                              }}
+                            >
+                              <option value="">— elegir lote —</option>
+                              {lotesUniq.map((l) => (
+                                <option key={l} value={l}>
+                                  {l}
+                                </option>
+                              ))}
+                              {/* conservar lote guardado aunque no esté en consumos actuales */}
+                              {p.lote && !lotesUniq.includes(p.lote) && (
+                                <option value={p.lote}>{p.lote} (guardado)</option>
+                              )}
+                            </select>
+                          </label>
+                        )}
                         <button
                           type="button"
                           onClick={() =>
@@ -1444,15 +1827,27 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                           Quitar
                         </button>
                       </div>
-                    ))}
+                      );
+                    })}
                     <button
                       type="button"
-                      onClick={() =>
+                      onClick={() => {
+                        const lotesUniq = [
+                          ...new Set(
+                            editConsumos.map((c) => c.lote.trim()).filter(Boolean)
+                          ),
+                        ];
                         setEditProduccion([
                           ...editProduccion,
-                          { presentacion: 'rpc_18', talla: '140', cantidad: '' },
-                        ])
-                      }
+                          {
+                            presentacion: 'rpc_18',
+                            talla: '140',
+                            cantidad: '',
+                            lote: lotesUniq.length === 1 ? lotesUniq[0] : '',
+                            fecha_empaque: editFecha || '',
+                          },
+                        ]);
+                      }}
                       style={{
                         padding: '8px 14px',
                         marginBottom: 16,

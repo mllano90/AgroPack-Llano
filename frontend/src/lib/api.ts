@@ -176,8 +176,15 @@ export interface HistorialMovimiento {
   producto?: string | null;
   puede_editar: boolean;
   puede_eliminar: boolean;
+  /** Username del usuario que registró el movimiento */
+  usuario?: string | null;
+  usuario_id?: number | null;
+  /** Display: "admin · Admin Pruebas" o "Sin registrar" */
+  usuario_label?: string | null;
   meta?: Record<string, unknown>;
 }
+
+export type HistorialEliminarItem = { modulo: string; id: number };
 
 export async function getHistorialMovimientos(
   token: string,

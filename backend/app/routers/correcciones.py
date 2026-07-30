@@ -41,6 +41,53 @@ def _es_limon(prod) -> bool:
     return p == "limon_amarillo" or "limon" in p
 
 
+def _users_map(db: Session) -> dict[int, dict]:
+    """id → {username, nombre_completo, label}."""
+    from app.models.user import User
+
+    out: dict[int, dict] = {}
+    for u in db.query(User).all():
+        uname = (u.username or "").strip() or f"user#{u.id}"
+        nombre = (u.nombre_completo or "").strip()
+        label = f"{uname}" + (f" · {nombre}" if nombre and nombre.lower() != uname.lower() else "")
+        out[int(u.id)] = {
+            "usuario_id": int(u.id),
+            "username": uname,
+            "nombre_completo": nombre or None,
+            "label": label,
+        }
+    return out
+
+
+def _usuario_fields(users: dict[int, dict], usuario_id) -> dict:
+    if usuario_id is None:
+        return {
+            "usuario_id": None,
+            "usuario": None,
+            "usuario_label": "Sin registrar",
+        }
+    try:
+        uid = int(usuario_id)
+    except (TypeError, ValueError):
+        return {
+            "usuario_id": None,
+            "usuario": None,
+            "usuario_label": "Sin registrar",
+        }
+    info = users.get(uid)
+    if not info:
+        return {
+            "usuario_id": uid,
+            "usuario": f"user#{uid}",
+            "usuario_label": f"user#{uid}",
+        }
+    return {
+        "usuario_id": uid,
+        "usuario": info["username"],
+        "usuario_label": info["label"],
+    }
+
+
 def _fecha_corte_efectiva(r: RecepcionCampo, desvs: list | None = None) -> date | None:
     """Fecha de corte de negocio (prioridad: desverdizado → fecha_corte → fecha)."""
     if desvs:
@@ -436,6 +483,7 @@ def historial_movimientos(
     except Exception:
         db.rollback()
 
+    users = _users_map(db)
     items: list[dict] = []
 
     if mod in ("todos", "recepcion", "desverdizado"):
@@ -445,6 +493,7 @@ def historial_movimientos(
         for r in db.query(RecepcionCampo).order_by(RecepcionCampo.id.asc()).all():
             prod = _pval(r.producto)
             es_limon = _es_limon(r.producto)
+            ufields = _usuario_fields(users, getattr(r, "usuario_id", None))
 
             desvs = (
                 db.query(InventarioDesverdizado)
@@ -470,7 +519,8 @@ def historial_movimientos(
                     f"Bins registrados: {bins_rec} · "
                     f"Bins en desverdizado ahora: {bins_ahora} · "
                     f"Inv.desv. ID: {', '.join(map(str, desv_ids)) if desv_ids else '—'} · "
-                    f"ID interno: {r.id}"
+                    f"ID interno: {r.id} · "
+                    f"Usuario: {ufields['usuario_label']}"
                 )
                 items.append(
                     {
@@ -485,6 +535,7 @@ def historial_movimientos(
                         "producto": prod,
                         "puede_editar": True,
                         "puede_eliminar": True,
+                        **ufields,
                         "meta": {
                             "lote": lote,
                             "cantidad_bins": bins_rec,
@@ -494,6 +545,7 @@ def historial_movimientos(
                             "desverdizado_ids": desv_ids,
                             "numero_recepcion": n_rec,
                             "id_interno": r.id,
+                            "usuario_id": ufields["usuario_id"],
                         },
                     }
                 )
@@ -504,7 +556,8 @@ def historial_movimientos(
                 )
                 detalle = (
                     f"Fecha {r.fecha} · {_pval(r.variedad)} · {_pval(r.mercado)} · "
-                    f"cultivo cartón {_pval(r.tipo_cultivo_carton) or '—'}"
+                    f"cultivo cartón {_pval(r.tipo_cultivo_carton) or '—'} · "
+                    f"Usuario: {ufields['usuario_label']}"
                 )
                 items.append(
                     {
@@ -518,11 +571,13 @@ def historial_movimientos(
                         "producto": prod,
                         "puede_editar": False,
                         "puede_eliminar": True,
+                        **ufields,
                         "meta": {
                             "variedad": _pval(r.variedad) or None,
                             "mercado": _pval(r.mercado) or None,
                             "cantidad_cajas_campo": r.cantidad_cajas_campo,
                             "cantidad_cajas_carton": r.cantidad_cajas_carton,
+                            "usuario_id": ufields["usuario_id"],
                         },
                     }
                 )
@@ -532,6 +587,16 @@ def historial_movimientos(
             det = e.detalle_corrida if isinstance(e.detalle_corrida, dict) else {}
             anulado = bool(det.get("anulado"))
             prod = _pval(e.producto)
+            ufields = _usuario_fields(users, getattr(e, "usuario_id", None))
+            # Preferir quién anuló si está anulado
+            anulado_por = det.get("anulado_por")
+            if anulado and anulado_por:
+                ufields = {
+                    **ufields,
+                    "usuario_label": f"{ufields['usuario_label']} (anuló: {anulado_por})"
+                    if ufields.get("usuario_id")
+                    else f"anuló: {anulado_por}",
+                }
             if prod == "limon_amarillo" or "limon" in prod.lower():
                 lotes = det.get("lotes_resumen") or e.lote_desverdizado or "—"
                 bins = e.bins_desverdizado_usados or det.get("bins_campo") or 0
@@ -540,13 +605,17 @@ def historial_movimientos(
                 detalle = (
                     f"{len(prod_lines)} líneas prod. · "
                     + ("ANULADO" if anulado else "OK")
+                    + f" · Usuario: {ufields['usuario_label']}"
                 )
             else:
                 resumen = (
                     f"Empaque uva · campo {e.cantidad_cajas_campo_usadas} → "
                     f"cartón {e.cantidad_cajas_carton_producidas}"
                 )
-                detalle = f"{_pval(e.variedad)} · {_pval(e.mercado)} · empacador {e.numero_empacador}"
+                detalle = (
+                    f"{_pval(e.variedad)} · {_pval(e.mercado)} · "
+                    f"empacador {e.numero_empacador} · Usuario: {ufields['usuario_label']}"
+                )
             items.append(
                 {
                     "modulo": "empaque",
@@ -564,11 +633,14 @@ def historial_movimientos(
                     "puede_eliminar": (
                         prod == "limon_amarillo" or "limon" in prod.lower() or anulado
                     ),
+                    **ufields,
                     "meta": {
                         "anulado": anulado,
                         "bins_desverdizado_usados": e.bins_desverdizado_usados,
                         "lotes_resumen": det.get("lotes_resumen"),
                         "detalle_corrida": det if det else None,
+                        "usuario_id": ufields.get("usuario_id"),
+                        "anulado_por": anulado_por,
                     },
                 }
             )
@@ -584,6 +656,7 @@ def historial_movimientos(
             cli = getattr(emb.cliente, "nombre", None) or f"cliente #{emb.cliente_id}"
             dets = emb.detalles or []
             total = sum(int(d.cantidad_cajas or 0) for d in dets)
+            ufields = _usuario_fields(users, getattr(emb, "usuario_id", None))
             lineas = []
             for d in dets[:6]:
                 if d.presentacion:
@@ -602,15 +675,19 @@ def historial_movimientos(
                     "hora": str(emb.hora_salida) if emb.hora_salida else None,
                     "titulo": f"Embarque #{emb.id} → {cli}",
                     "resumen": f"{total} cajas/bins · {len(dets)} líneas · {emb.estado}",
-                    "detalle": "; ".join(lineas) + (f" · {emb.notas}" if emb.notas else ""),
+                    "detalle": "; ".join(lineas)
+                    + (f" · {emb.notas}" if emb.notas else "")
+                    + f" · Usuario: {ufields['usuario_label']}",
                     "producto": None,
                     "puede_editar": False,
                     "puede_eliminar": emb.estado != "anulado",
+                    **ufields,
                     "meta": {
                         "cliente_id": emb.cliente_id,
                         "cliente": cli,
                         "estado": emb.estado,
                         "notas": emb.notas,
+                        "usuario_id": ufields["usuario_id"],
                         "detalles": [
                             {
                                 "producto": _pval(d.producto),

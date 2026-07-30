@@ -143,7 +143,13 @@ export interface EmpaqueRecord {
       lote?: string | null;
       fecha_empaque?: string | null;
     }>;
-    produccion?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
+    produccion?: Array<{
+      presentacion: string;
+      talla?: string | null;
+      cantidad: number;
+      lote?: string | null;
+      fecha_empaque?: string | null;
+    }>;
     bins_campo?: number;
     lotes_resumen?: string;
     anulado?: boolean;

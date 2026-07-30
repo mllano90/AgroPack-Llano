@@ -64,6 +64,291 @@ function fmtNum(n: number | null | undefined, digits = 2) {
   return n.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
+/** Gráfica de pastel SVG: tallas 1ra + 2da (kg y %). Etiquetas dentro de cada gajo. */
+function TallaPieChart({
+  items,
+  colors,
+  kgSegunda = 0,
+  fmtKg: formatKg,
+}: {
+  items: TallaRendimientoApi[];
+  colors: string[];
+  /** Kg de 2da (jugo) a sumar como gajo aparte */
+  kgSegunda?: number;
+  fmtKg: (n: number) => string;
+}) {
+  const size = 280;
+  const cx = size / 2;
+  const cy = size / 2;
+  const r = 124;
+  const holeR = 42;
+  const labelR = (holeR + r) / 2 + 4; // radio donde van talla/%
+
+  const COLOR_SEGUNDA = '#f472b6'; // rosita — 2da calidad
+
+  type Slice = {
+    key: string;
+    label: string; // número de talla o "2da"
+    calidad: '1ra' | '2da';
+    kg: number;
+    cajas: number;
+    color: string;
+  };
+
+  const raw: Slice[] = items.map((t, i) => ({
+    key: `t-${t.talla}`,
+    label: String(t.talla),
+    calidad: '1ra' as const,
+    kg: Number(t.kg) || 0,
+    cajas: Number(t.cajas) || 0,
+    color: colors[i % colors.length],
+  }));
+
+  const kg2 = Math.max(0, Number(kgSegunda) || 0);
+  if (kg2 > 0) {
+    raw.push({
+      key: 'segunda',
+      label: '2da',
+      calidad: '2da',
+      kg: kg2,
+      cajas: 0,
+      color: COLOR_SEGUNDA,
+    });
+  }
+
+  const totalKg = raw.reduce((s, t) => s + t.kg, 0);
+  const slices = raw
+    .map((s) => ({
+      ...s,
+      pct: totalKg > 0 ? (s.kg / totalKg) * 100 : 0,
+    }))
+    .filter((s) => s.kg > 0.001 || s.pct > 0.001)
+    .sort((a, b) => {
+      // 1ra por % desc, 2da al final
+      if (a.calidad !== b.calidad) return a.calidad === '2da' ? 1 : -1;
+      return b.pct - a.pct;
+    });
+
+  const sumPct = slices.reduce((s, x) => s + x.pct, 0) || 1;
+  const kgPrimera = slices
+    .filter((s) => s.calidad === '1ra')
+    .reduce((s, x) => s + x.kg, 0);
+
+  const polar = (angleDeg: number, radius: number) => {
+    const rad = ((angleDeg - 90) * Math.PI) / 180;
+    return { x: cx + radius * Math.cos(rad), y: cy + radius * Math.sin(rad) };
+  };
+
+  let angle = 0;
+  const paths = slices.map((s) => {
+    const sweep = (s.pct / sumPct) * 360;
+    const start = angle;
+    const end = angle + sweep;
+    angle = end;
+    const mid = start + sweep / 2;
+    if (sweep >= 359.99) {
+      return {
+        ...s,
+        d: `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.01} ${cy - r} A ${r} ${r} 0 1 1 ${cx} ${cy - r} Z`,
+        mid,
+        sweep,
+      };
+    }
+    const large = sweep > 180 ? 1 : 0;
+    const p0 = polar(start, r);
+    const p1 = polar(end, r);
+    const d = `M ${cx} ${cy} L ${p0.x} ${p0.y} A ${r} ${r} 0 ${large} 1 ${p1.x} ${p1.y} Z`;
+    return { ...s, d, mid, sweep };
+  });
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexWrap: 'wrap',
+        gap: 24,
+        alignItems: 'center',
+        padding: '12px 8px',
+        background: '#f8fafc',
+        border: '1px solid #e2e8f0',
+        borderRadius: 12,
+      }}
+    >
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        role="img"
+        aria-label="Distribución por talla 1ra y 2da calidad"
+      >
+        {paths.map((p) => (
+          <path
+            key={p.key}
+            d={p.d}
+            fill={p.color}
+            stroke="#fff"
+            strokeWidth={2.5}
+          >
+            <title>
+              {p.calidad === '2da'
+                ? `2da calidad: ${p.pct.toFixed(1)}% · ${formatKg(p.kg)} kg`
+                : `Talla ${p.label}: ${p.pct.toFixed(1)}% · ${formatKg(p.kg)} kg · ${p.cajas} cajas`}
+            </title>
+          </path>
+        ))}
+
+        {/* Etiquetas dentro de cada gajo: talla + % */}
+        {paths.map((p) => {
+          // gajos muy chicos: solo talla si cabe un poco
+          if (p.sweep < 12) return null;
+          const pt = polar(p.mid, labelR);
+          const showPct = p.sweep >= 22;
+          const showKg = p.sweep >= 38;
+          return (
+            <g key={`lbl-${p.key}`}>
+              <text
+                x={pt.x}
+                y={pt.y + (showPct ? -8 : 0)}
+                textAnchor="middle"
+                dominantBaseline="middle"
+                style={{
+                  fontSize: p.calidad === '2da' ? 13 : 16,
+                  fontWeight: 800,
+                  fill: '#fff',
+                  paintOrder: 'stroke',
+                  stroke: 'rgba(0,0,0,0.25)',
+                  strokeWidth: 2.5,
+                }}
+              >
+                {p.label}
+              </text>
+              {showPct && (
+                <text
+                  x={pt.x}
+                  y={pt.y + 10}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    fill: '#fff',
+                    paintOrder: 'stroke',
+                    stroke: 'rgba(0,0,0,0.2)',
+                    strokeWidth: 2,
+                  }}
+                >
+                  {p.pct.toFixed(1)}%
+                </text>
+              )}
+              {showKg && (
+                <text
+                  x={pt.x}
+                  y={pt.y + 24}
+                  textAnchor="middle"
+                  dominantBaseline="middle"
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 600,
+                    fill: 'rgba(255,255,255,0.95)',
+                    paintOrder: 'stroke',
+                    stroke: 'rgba(0,0,0,0.2)',
+                    strokeWidth: 1.5,
+                  }}
+                >
+                  {formatKg(p.kg)} kg
+                </text>
+              )}
+            </g>
+          );
+        })}
+
+        {/* Centro: total salida (1ra+2da) */}
+        <circle cx={cx} cy={cy} r={holeR} fill="#fff" />
+        <text
+          x={cx}
+          y={cy - 10}
+          textAnchor="middle"
+          style={{ fontSize: 10, fill: '#64748b', fontWeight: 600 }}
+        >
+          Total
+        </text>
+        <text
+          x={cx}
+          y={cy + 6}
+          textAnchor="middle"
+          style={{ fontSize: 12, fill: '#0f172a', fontWeight: 800 }}
+        >
+          {formatKg(totalKg)} kg
+        </text>
+        <text
+          x={cx}
+          y={cy + 20}
+          textAnchor="middle"
+          style={{ fontSize: 9, fill: '#94a3b8', fontWeight: 600 }}
+        >
+          1ra+2da
+        </text>
+      </svg>
+
+      <div style={{ flex: '1 1 260px', minWidth: 220 }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+          <thead>
+            <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+              <th style={{ padding: '4px 6px' }}>Segmento</th>
+              <th style={{ padding: '4px 6px' }}>Cal.</th>
+              <th style={{ padding: '4px 6px' }}>%</th>
+              <th style={{ padding: '4px 6px' }}>Kg</th>
+              <th style={{ padding: '4px 6px' }}>Cajas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {slices.map((s) => (
+              <tr key={s.key} style={{ borderTop: '1px solid #e2e8f0' }}>
+                <td style={{ padding: '6px', fontWeight: 700 }}>
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: 10,
+                      height: 10,
+                      borderRadius: 2,
+                      background: s.color,
+                      marginRight: 8,
+                      verticalAlign: 'middle',
+                    }}
+                  />
+                  {s.calidad === '2da' ? '2da (jugo)' : `Talla ${s.label}`}
+                </td>
+                <td style={{ padding: '6px', color: s.calidad === '2da' ? '#9d174d' : '#166534' }}>
+                  {s.calidad}
+                </td>
+                <td style={{ padding: '6px', fontWeight: 800 }}>{s.pct.toFixed(1)}%</td>
+                <td style={{ padding: '6px', color: '#475569' }}>{formatKg(s.kg)}</td>
+                <td style={{ padding: '6px', color: '#475569' }}>
+                  {s.calidad === '2da' ? '—' : s.cajas}
+                </td>
+              </tr>
+            ))}
+            <tr style={{ borderTop: '2px solid #cbd5e1', background: '#f1f5f9' }}>
+              <td colSpan={2} style={{ padding: '8px 6px', fontWeight: 700 }}>
+                Total
+              </td>
+              <td style={{ padding: '8px 6px', fontWeight: 800 }}>100%</td>
+              <td style={{ padding: '8px 6px', fontWeight: 700 }}>{formatKg(totalKg)}</td>
+              <td style={{ padding: '8px 6px' }} />
+            </tr>
+          </tbody>
+        </table>
+        <p style={{ fontSize: 11, color: '#64748b', margin: '8px 0 0' }}>
+          1ra: {formatKg(kgPrimera)} kg (
+          {totalKg ? ((kgPrimera / totalKg) * 100).toFixed(1) : '0'}%) · 2da:{' '}
+          {formatKg(kg2)} kg (
+          {totalKg ? ((kg2 / totalKg) * 100).toFixed(1) : '0'}%)
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function kgHa(kg: number, ha: number) {
   if (!ha) return null;
   return Math.round((kg / ha) * 100) / 100;
@@ -637,7 +922,17 @@ export default function Reportes({ token }: ReportesProps) {
     color: vista === id ? 'white' : '#334155',
   });
 
-  const tallaColors = ['#dcfce7', '#e0f2fe', '#fef9c3', '#fce7f3', '#ede9fe', '#ffedd5', '#f1f5f9'];
+  /** Colores vivos para pastel de tallas (1ra) */
+  const tallaPieColors = [
+    '#15803d',
+    '#0284c7',
+    '#ca8a04',
+    '#db2777',
+    '#7c3aed',
+    '#ea580c',
+    '#0f766e',
+    '#4f46e5',
+  ];
 
   return (
     <div style={{ background: 'white', padding: 25, borderRadius: 10 }}>
@@ -751,36 +1046,22 @@ export default function Reportes({ token }: ReportesProps) {
             </div>
           </div>
 
-          {/* % por talla (principal) */}
-          {porTalla.length > 0 && (
+          {/* % por talla + 2da — gráfica de pastel */}
+          {(porTalla.length > 0 || (a.kg_segunda ?? 0) > 0) && (
             <div style={{ marginTop: 8, marginBottom: 12 }}>
-              <h4 style={{ margin: '0 0 8px', fontWeight: 700 }}>% por talla (1ra)</h4>
+              <h4 style={{ margin: '0 0 8px', fontWeight: 700 }}>
+                Distribución por talla (1ra) y 2da calidad
+              </h4>
               <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-                % de cada tamaño sobre kg de 1ra. RPC: 140+ · Cartón: ≤140 (la 140 puede ser ambas).
+                Cada gajo muestra la talla (o 2da) y el % de kg sobre el total empacado (1ra+2da).
+                El segmento rosado es 2da calidad (jugo). RPC: 140+ · Cartón: ≤140.
               </p>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10 }}>
-                {porTalla.map((t, i) => (
-                  <div
-                    key={t.talla}
-                    style={{
-                      ...cardPrimary,
-                      background: tallaColors[i % tallaColors.length],
-                      minWidth: 110,
-                    }}
-                  >
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#334155' }}>
-                      Talla {t.talla}
-                    </div>
-                    <div style={{ fontSize: 28, fontWeight: 800 }}>{t.pct_de_primera}%</div>
-                    <div style={{ fontSize: 11, color: '#64748b' }}>
-                      {fmtKg(t.kg)} kg · {t.cajas} cajas
-                    </div>
-                    <div style={{ fontSize: 11, color: '#94a3b8' }}>
-                      {t.pct_de_entrada}% del campo
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <TallaPieChart
+                items={porTalla}
+                colors={tallaPieColors}
+                kgSegunda={a.kg_segunda ?? 0}
+                fmtKg={fmtKg}
+              />
             </div>
           )}
 
