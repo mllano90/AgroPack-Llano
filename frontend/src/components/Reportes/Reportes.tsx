@@ -1093,6 +1093,8 @@ export default function Reportes({ token }: ReportesProps) {
             data={dashboard}
             proyeccion={proyeccion}
             onRefresh={load}
+            empaquesLimon={empaquesLimon}
+            corridas={corridas}
           />
         </div>
       )}

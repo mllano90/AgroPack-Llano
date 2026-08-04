@@ -1,6 +1,11 @@
 import { useState } from 'react';
-import type { DashboardData, InventarioCampoItem, InventarioFinalItem } from '../../types';
-import type { ProyeccionInventarioApi } from '../../lib/api';
+import type {
+  DashboardData,
+  EmpaqueRecord,
+  InventarioCampoItem,
+  InventarioFinalItem,
+} from '../../types';
+import type { CorridaRendimientoApi, ProyeccionInventarioApi } from '../../lib/api';
 import { formatFechaCorta } from '../../lib/dates';
 import { DIAS_DESVERDIZADO, KG_POR_PRESENTACION } from '../../lib/constants';
 
@@ -9,6 +14,170 @@ interface Props {
   proyeccion?: ProyeccionInventarioApi | null;
   loading?: boolean;
   onRefresh?: () => void;
+  /** Empaques limón para trazar stock → corrida */
+  empaquesLimon?: EmpaqueRecord[];
+  /** Corridas de reportes (ids_empaques) */
+  corridas?: CorridaRendimientoApi[];
+}
+
+type OrigenLinea = {
+  corridaId: number;
+  empaqueId: number;
+  fecha: string;
+  cajas: number;
+  label: string;
+};
+
+function parseDetalle(raw: EmpaqueRecord['detalle_corrida'] | string | null | undefined) {
+  if (!raw) return null;
+  if (typeof raw === 'string') {
+    try {
+      return JSON.parse(raw) as NonNullable<EmpaqueRecord['detalle_corrida']>;
+    } catch {
+      return null;
+    }
+  }
+  return raw;
+}
+
+function normTalla(t: unknown): string {
+  if (t == null || t === '') return '';
+  return String(t).replace(/^#/, '').trim();
+}
+
+function normPres(p: unknown): string {
+  return String(p || '').trim();
+}
+
+function normFecha(f: unknown): string {
+  if (!f) return '';
+  return String(f).slice(0, 10);
+}
+
+/** ¿La línea de producción corresponde al SKU de inventario? */
+function matchProduccionSku(
+  p: { presentacion?: string | null; talla?: string | null; lote?: string | null; fecha_empaque?: string | null },
+  presentacion: string,
+  talla: string | null | undefined,
+  lote: string | null | undefined,
+  fechaEmpaque: string | null | undefined
+): boolean {
+  if (normPres(p.presentacion) !== presentacion) return false;
+  if (presentacion === 'bins_jugo') return true;
+  if (normTalla(p.talla) !== normTalla(talla)) return false;
+  if (presentacion === 'rpc_granel') {
+    if (lote && (p.lote || '').trim() && (p.lote || '').trim() !== String(lote).trim()) {
+      return false;
+    }
+    const fe = normFecha(fechaEmpaque);
+    const pfe = normFecha(p.fecha_empaque);
+    if (fe && pfe && fe !== pfe) return false;
+  }
+  return true;
+}
+
+/**
+ * Atribuye el stock actual a corridas (FIFO por fecha de empaque).
+ * Así 450 cajas en piso se reparten a las corridas que las produjeron.
+ */
+function origenesPorStock(
+  empaques: EmpaqueRecord[],
+  corridas: CorridaRendimientoApi[],
+  presentacion: string,
+  talla: string | null | undefined,
+  stockActual: number,
+  lote?: string | null,
+  fechaEmpaque?: string | null
+): { origenes: OrigenLinea[]; totalProducido: number } {
+  const empToCorrida = new Map<number, CorridaRendimientoApi>();
+  for (const c of corridas) {
+    const ids = c.ids_empaques?.length ? c.ids_empaques : [c.id];
+    for (const id of ids) empToCorrida.set(id, c);
+  }
+
+  type ProdLine = {
+    empaqueId: number;
+    corridaId: number;
+    fecha: string;
+    label: string;
+    cajas: number;
+    sortKey: string;
+  };
+  const lines: ProdLine[] = [];
+
+  for (const e of empaques) {
+    const det = parseDetalle(e.detalle_corrida);
+    if (det?.anulado) continue;
+    const corrida = empToCorrida.get(e.id);
+    const corridaId = corrida?.id ?? e.id;
+    const fecha =
+      (corrida?.fecha && String(corrida.fecha).slice(0, 10)) ||
+      (e.fecha ? String(e.fecha).slice(0, 10) : '') ||
+      '';
+    const label = corrida
+      ? `Corrida #${corrida.id}`
+      : `Empaque #${e.id}`;
+
+    for (const p of det?.produccion || []) {
+      if (
+        !matchProduccionSku(p, presentacion, talla, lote, fechaEmpaque)
+      ) {
+        continue;
+      }
+      const cajas = Math.round(Number(p.cantidad) || 0);
+      if (cajas <= 0) continue;
+      const feLine = normFecha(p.fecha_empaque) || fecha;
+      lines.push({
+        empaqueId: e.id,
+        corridaId,
+        fecha: feLine || fecha,
+        label,
+        cajas,
+        sortKey: `${feLine || fecha}|${e.id}`,
+      });
+    }
+  }
+
+  // Más antigua primero → FIFO para stock restante
+  lines.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  const totalProducido = lines.reduce((s, l) => s + l.cajas, 0);
+
+  let restante = Math.max(0, Math.round(stockActual || 0));
+  const byCorrida = new Map<number, OrigenLinea>();
+
+  for (const l of lines) {
+    if (restante <= 0) break;
+    const take = Math.min(l.cajas, restante);
+    restante -= take;
+    const prev = byCorrida.get(l.corridaId);
+    if (prev) {
+      prev.cajas += take;
+    } else {
+      byCorrida.set(l.corridaId, {
+        corridaId: l.corridaId,
+        empaqueId: l.empaqueId,
+        fecha: l.fecha,
+        cajas: take,
+        label: l.label,
+      });
+    }
+  }
+
+  // Si sobra stock sin historial de empaque (import/ajuste), línea “sin corrida”
+  if (restante > 0) {
+    byCorrida.set(-1, {
+      corridaId: -1,
+      empaqueId: 0,
+      fecha: '',
+      cajas: restante,
+      label: 'Sin corrida registrada (ajuste/importación)',
+    });
+  }
+
+  const origenes = Array.from(byCorrida.values()).sort((a, b) =>
+    String(b.fecha).localeCompare(String(a.fecha))
+  );
+  return { origenes, totalProducido };
 }
 
 /** Uva: parrillas de 90 cajas (igual que landing Inventarios) */
@@ -124,8 +293,12 @@ export default function InventariosReporte({
   proyeccion = null,
   loading,
   onRefresh,
+  empaquesLimon = [],
+  corridas = [],
 }: Props) {
   const [productTab, setProductTab] = useState<'uva' | 'limon'>('limon');
+  /** groupKey de línea de inventario final expandida */
+  const [expandedInv, setExpandedInv] = useState<string | null>(null);
 
   if (loading) {
     return <p style={{ color: '#64748b' }}>Cargando inventarios…</p>;
@@ -348,10 +521,24 @@ export default function InventariosReporte({
       {isLimon && (
         <>
           <h3>🍋 Inventario Final - Limón Amarillo</h3>
+          <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
+            Clic en una línea para ver de qué <strong>corrida</strong> sale el stock (cajas/bins
+            por corrida).
+          </p>
           {visibleLimonFinal.length > 0 ? (
             (() => {
               const grupos = visibleLimonFinal.reduce<
-                Record<string, { label: string; total: number; presentacion: string }>
+                Record<
+                  string,
+                  {
+                    label: string;
+                    total: number;
+                    presentacion: string;
+                    talla: string | null;
+                    lote: string | null;
+                    fecha_empaque: string | null;
+                  }
+                >
               >((acc, item) => {
                 const pres = item.presentacion || 'otro';
                 const tallaPart = item.talla ? `#${item.talla}` : '';
@@ -361,7 +548,9 @@ export default function InventariosReporte({
                   pres === 'rpc_granel' && item.fecha_empaque
                     ? ` ${formatFechaCorta(item.fecha_empaque)}`
                     : '';
-                const key = `${pres}${tallaPart}${lotePart}${fechaPart}`;
+                const key = `${pres}|${item.talla || ''}|${item.lote || ''}|${
+                  item.fecha_empaque || ''
+                }`;
                 if (!acc[key]) {
                   const base =
                     pres === 'rpc_granel'
@@ -379,29 +568,186 @@ export default function InventariosReporte({
                     label: `${base} ${tallaPart}${lotePart}${fechaPart}`.trim(),
                     total: 0,
                     presentacion: pres,
+                    talla: item.talla ? String(item.talla) : null,
+                    lote: item.lote ? String(item.lote) : null,
+                    fecha_empaque: item.fecha_empaque
+                      ? String(item.fecha_empaque).slice(0, 10)
+                      : null,
                   };
                 }
                 acc[key].total += item.cantidad_stock || 0;
                 return acc;
               }, {});
 
-              return Object.entries(grupos).map(([groupKey, { label, total, presentacion }]) => (
-                <div
-                  key={groupKey}
-                  style={{
-                    marginBottom: '8px',
-                    padding: '8px 12px',
-                    background: '#fefce8',
-                    borderRadius: '6px',
-                    border: '1px solid #e2e8f0',
-                  }}
-                >
-                  <strong>{label}</strong>:{' '}
-                  <strong style={{ color: '#14532d' }}>
-                    {formatParrillasLimon(presentacion, total)}
-                  </strong>
-                </div>
-              ));
+              return Object.entries(grupos).map(
+                ([groupKey, { label, total, presentacion, talla, lote, fecha_empaque }]) => {
+                  const open = expandedInv === groupKey;
+                  const { origenes, totalProducido } = open
+                    ? origenesPorStock(
+                        empaquesLimon,
+                        corridas,
+                        presentacion,
+                        talla,
+                        total,
+                        lote,
+                        fecha_empaque
+                      )
+                    : { origenes: [] as OrigenLinea[], totalProducido: 0 };
+
+                  return (
+                    <div
+                      key={groupKey}
+                      style={{
+                        marginBottom: 8,
+                        borderRadius: 6,
+                        border: open ? '2px solid #15803d' : '1px solid #e2e8f0',
+                        background: '#fefce8',
+                        overflow: 'hidden',
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpandedInv((prev) => (prev === groupKey ? null : groupKey))
+                        }
+                        style={{
+                          width: '100%',
+                          textAlign: 'left',
+                          padding: '10px 12px',
+                          border: 'none',
+                          background: 'transparent',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          fontSize: 14,
+                          color: '#0f172a',
+                        }}
+                      >
+                        <span style={{ color: '#64748b', fontWeight: 700, width: 16 }}>
+                          {open ? '▾' : '▸'}
+                        </span>
+                        <span style={{ flex: 1 }}>
+                          <strong>{label}</strong>:{' '}
+                          <strong style={{ color: '#14532d' }}>
+                            {formatParrillasLimon(presentacion, total)}
+                          </strong>
+                          <span style={{ color: '#64748b', fontWeight: 400, marginLeft: 6 }}>
+                            ({total}{' '}
+                            {presentacion === 'bins_jugo'
+                              ? 'bin(s)'
+                              : presentacion === 'rpc_granel'
+                                ? 'RPC'
+                                : 'cajas'}
+                            )
+                          </span>
+                        </span>
+                        <span style={{ fontSize: 11, color: '#64748b' }}>
+                          {open ? 'ocultar' : 'ver corridas'}
+                        </span>
+                      </button>
+
+                      {open && (
+                        <div
+                          style={{
+                            padding: '0 12px 12px 36px',
+                            borderTop: '1px solid #fde68a',
+                            background: '#fffbeb',
+                          }}
+                        >
+                          {origenes.length === 0 ? (
+                            <p style={{ fontSize: 13, color: '#64748b', margin: '10px 0 0' }}>
+                              No hay empaques con producción de este SKU (o faltan datos de
+                              corrida).
+                            </p>
+                          ) : (
+                            <>
+                              <p
+                                style={{
+                                  fontSize: 12,
+                                  color: '#854d0e',
+                                  margin: '10px 0 8px',
+                                }}
+                              >
+                                Stock actual atribuido a corridas (FIFO por fecha). Producido en
+                                historial: {totalProducido}{' '}
+                                {presentacion === 'bins_jugo' ? 'bins' : 'cajas'}.
+                              </p>
+                              <table
+                                style={{
+                                  width: '100%',
+                                  borderCollapse: 'collapse',
+                                  fontSize: 13,
+                                }}
+                              >
+                                <thead>
+                                  <tr style={{ textAlign: 'left', color: '#64748b', fontSize: 11 }}>
+                                    <th style={{ padding: '4px 6px' }}>Corrida</th>
+                                    <th style={{ padding: '4px 6px' }}>Fecha</th>
+                                    <th style={{ padding: '4px 6px', textAlign: 'center' }}>
+                                      Cantidad
+                                    </th>
+                                    <th style={{ padding: '4px 6px', textAlign: 'center' }}>
+                                      Equiv.
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {origenes.map((o) => (
+                                    <tr
+                                      key={`${o.corridaId}-${o.empaqueId}-${o.fecha}`}
+                                      style={{ borderTop: '1px solid #fde68a' }}
+                                    >
+                                      <td style={{ padding: '6px' }}>
+                                        <strong>{o.label}</strong>
+                                        {o.empaqueId > 0 && o.corridaId !== o.empaqueId && (
+                                          <span style={{ color: '#94a3b8', fontSize: 11 }}>
+                                            {' '}
+                                            · emp. #{o.empaqueId}
+                                          </span>
+                                        )}
+                                      </td>
+                                      <td style={{ padding: '6px', color: '#475569' }}>
+                                        {o.fecha
+                                          ? formatFechaCorta(o.fecha)
+                                          : '—'}
+                                      </td>
+                                      <td
+                                        style={{
+                                          padding: '6px',
+                                          textAlign: 'center',
+                                          fontWeight: 700,
+                                        }}
+                                      >
+                                        {o.cajas}{' '}
+                                        {presentacion === 'bins_jugo'
+                                          ? 'bin(s)'
+                                          : presentacion === 'rpc_granel'
+                                            ? 'RPC'
+                                            : 'cajas'}
+                                      </td>
+                                      <td
+                                        style={{
+                                          padding: '6px',
+                                          textAlign: 'center',
+                                          color: '#166534',
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        {formatParrillasLimon(presentacion, o.cajas)}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                }
+              );
             })()
           ) : (
             <p style={{ color: '#64748b' }}>No hay producto final de limón con stock.</p>
