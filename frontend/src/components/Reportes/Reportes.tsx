@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useState, type CSSProperties } from 'react';
+import { Fragment, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   getRendimientosLimon,
   getProyeccionInventario,
@@ -714,31 +714,49 @@ function computeFromEmpaques(
   return { corridas, por_lote, acumulado };
 }
 
-/** % por talla desde empaques (fallback cliente) */
-function computeTallasFromEmpaques(empaques: EmpaqueRecord[]): TallaRendimientoApi[] {
+/**
+ * Mix de tallas 1ra + kg 2da a partir de empaques.
+ * Incluye conversiones granel→final salvo soloCampo.
+ * Omite rpc_granel (WIP) del mix de 1ra.
+ */
+function computeTallasYSegundaFromEmpaques(
+  empaques: EmpaqueRecord[],
+  opts?: { soloCampo?: boolean }
+): { porTalla: TallaRendimientoApi[]; kgSegunda: number; kgPrimera: number } {
   const kgT: Record<string, number> = {};
   const cajasT: Record<string, number> = {};
   let binsTotal = 0;
   let kg1 = 0;
+  let kg2 = 0;
   for (const e of empaques) {
     const det = parseDetalle(e.detalle_corrida as any);
     if (det?.anulado) continue;
-    if (det?.tipo === 'conversion_rpc_granel') continue;
+    const esConv = det?.tipo === 'conversion_rpc_granel';
+    if (opts?.soloCampo && esConv) continue;
     const consumos = det?.consumos || [];
     const produccion = det?.produccion || [];
-    binsTotal += consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0);
+    if (!esConv) {
+      binsTotal += consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0);
+    }
     for (const p of produccion) {
-      if (p.presentacion === 'bins_jugo') continue;
       const cant = Number(p.cantidad) || 0;
-      if (cant <= 0 || !p.talla) continue;
-      const kg = (KG_PRES[p.presentacion] || 0) * cant;
-      kgT[p.talla] = (kgT[p.talla] || 0) + kg;
-      cajasT[p.talla] = (cajasT[p.talla] || 0) + cant;
+      if (cant <= 0) continue;
+      const pres = String(p.presentacion || '');
+      if (pres === 'bins_jugo') {
+        kg2 += (KG_PRES.bins_jugo || 900) * cant;
+        continue;
+      }
+      if (pres === 'rpc_granel') continue;
+      if (!p.talla) continue;
+      const talla = String(p.talla);
+      const kg = (KG_PRES[pres] || 0) * cant;
+      kgT[talla] = (kgT[talla] || 0) + kg;
+      cajasT[talla] = (cajasT[talla] || 0) + cant;
       kg1 += kg;
     }
   }
   const kgE = binsTotal * PESO_BIN_CAMPO_KG;
-  return Object.keys(kgT)
+  const porTalla = Object.keys(kgT)
     .sort((a, b) => Number(a) - Number(b))
     .map((t) => ({
       talla: t,
@@ -748,6 +766,16 @@ function computeTallasFromEmpaques(empaques: EmpaqueRecord[]): TallaRendimientoA
       pct_de_entrada: kgE ? Math.round((kgT[t] / kgE) * 10000) / 100 : 0,
       parrillas: Math.round(((cajasT[t] || 0) / CAJAS_PARRILLA_RPC) * 100) / 100,
     }));
+  return {
+    porTalla,
+    kgSegunda: Math.round(kg2 * 100) / 100,
+    kgPrimera: Math.round(kg1 * 100) / 100,
+  };
+}
+
+/** % por talla desde empaques (fallback cliente, solo corridas de campo) */
+function computeTallasFromEmpaques(empaques: EmpaqueRecord[]): TallaRendimientoApi[] {
+  return computeTallasYSegundaFromEmpaques(empaques, { soloCampo: true }).porTalla;
 }
 
 export default function Reportes({ token }: ReportesProps) {
@@ -769,6 +797,11 @@ export default function Reportes({ token }: ReportesProps) {
   const [expandidos, setExpandidos] = useState<Set<number>>(new Set());
   const [dashboard, setDashboard] = useState<DashboardData | null>(null);
   const [reporteEmbarques, setReporteEmbarques] = useState<EmbarquesReporteApi | null>(null);
+  /** Empaques limón (para recalcular gráfica al filtrar corridas) */
+  const [empaquesLimon, setEmpaquesLimon] = useState<EmpaqueRecord[]>([]);
+  /** Fuente de la gráfica de pastel: acumulado total (default) o corridas elegidas */
+  const [graficaModo, setGraficaModo] = useState<'acumulado' | 'seleccion'>('acumulado');
+  const [corridasGraficaIds, setCorridasGraficaIds] = useState<Set<number>>(new Set());
 
   const toggleExpand = (id: number) => {
     setExpandidos((prev) => {
@@ -793,6 +826,18 @@ export default function Reportes({ token }: ReportesProps) {
         acumulado: Corrida | null;
       } | null = null;
 
+      // Siempre cargar empaques (gráfica filtrable + fallback)
+      let empaquesAll: EmpaqueRecord[] = [];
+      try {
+        empaquesAll = await getEmpaques(token);
+      } catch {
+        empaquesAll = [];
+      }
+      const limonAll = empaquesAll.filter((e) =>
+        String(e.producto || '').toLowerCase().includes('limon')
+      );
+      setEmpaquesLimon(limonAll);
+
       try {
         const apiData = await getRendimientosLimon(token);
         ha = apiData.hectareas ?? HECTAREAS_RANCHO;
@@ -810,8 +855,7 @@ export default function Reportes({ token }: ReportesProps) {
       }
 
       if (!data || (data.corridas.length === 0 && data.por_lote.length === 0)) {
-        const empaques = await getEmpaques(token);
-        const limon = empaques.filter((e) => String(e.producto || '').toLowerCase().includes('limon'));
+        const limon = limonAll;
         const conDetalle = limon.filter((e) => {
           const d = parseDetalle(e.detalle_corrida as any);
           return Boolean(
@@ -825,8 +869,8 @@ export default function Reportes({ token }: ReportesProps) {
         setDebugInfo(
           `Empaques limón: ${limon.length} · Con datos de corrida: ${conDetalle.length}`
         );
-        const computed = computeFromEmpaques(empaques, ha);
-        const tallasLocal = computeTallasFromEmpaques(empaques);
+        const computed = computeFromEmpaques(empaquesAll, ha);
+        const tallasLocal = computeTallasFromEmpaques(empaquesAll);
         const porLoteRecalc = (computed.por_lote || []).map((l) =>
           enrichLote(l, HECTAREAS_POR_LOTE)
         );
@@ -864,6 +908,9 @@ export default function Reportes({ token }: ReportesProps) {
       setPorLote(data?.por_lote || []);
       setPorTalla(data?.por_talla || []);
       setAcumulado(data?.acumulado || null);
+      // Mantener selección de corridas que sigan existiendo
+      const alive = new Set((data?.corridas || []).map((c) => c.id));
+      setCorridasGraficaIds((prev) => new Set([...prev].filter((id) => alive.has(id))));
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
       setError(
@@ -879,6 +926,86 @@ export default function Reportes({ token }: ReportesProps) {
   useEffect(() => {
     if (token) load();
   }, [token]);
+
+  /** Corridas elegibles para graficar — hooks SIEMPRE antes de returns condicionales */
+  const corridasParaGrafica = useMemo(
+    () =>
+      corridas.filter((c) => {
+        return (c.kg_primera || 0) > 0 || (c.kg_segunda || 0) > 0 || (c.bins_campo || 0) > 0;
+      }),
+    [corridas]
+  );
+
+  const graficaData = useMemo(() => {
+    if (graficaModo === 'acumulado') {
+      return {
+        porTalla,
+        kgSegunda: acumulado?.kg_segunda ?? 0,
+        titulo: 'Distribución por talla (1ra) y 2da calidad — acumulado total',
+        subtitulo:
+          'Todas las corridas. Cada gajo = talla o 2da; % sobre kg empacados (1ra+2da).',
+      };
+    }
+    const selected = corridasParaGrafica.filter((c) => corridasGraficaIds.has(c.id));
+    if (selected.length === 0) {
+      return {
+        porTalla: [] as TallaRendimientoApi[],
+        kgSegunda: 0,
+        titulo: 'Distribución por talla — corridas seleccionadas',
+        subtitulo: 'Selecciona una o más corridas abajo para graficar.',
+        vacio: true as const,
+      };
+    }
+    const empIds = new Set<number>();
+    for (const c of selected) {
+      const ids = c.ids_empaques?.length ? c.ids_empaques : [c.id];
+      for (const id of ids) empIds.add(id);
+    }
+    const subset = empaquesLimon.filter((e) => empIds.has(e.id));
+    const computed = computeTallasYSegundaFromEmpaques(subset, { soloCampo: false });
+    let porTallaSel = computed.porTalla;
+    let kg2 = computed.kgSegunda;
+    if (subset.length === 0) {
+      kg2 = selected.reduce((s, c) => s + (c.kg_segunda || 0), 0);
+      porTallaSel = [];
+    } else if (kg2 === 0) {
+      const kg2Corr = selected.reduce((s, c) => s + (c.kg_segunda || 0), 0);
+      if (kg2Corr > 0) kg2 = kg2Corr;
+    }
+    const labels = selected
+      .map((c) => `#${c.id} ${c.fecha}`)
+      .slice(0, 6)
+      .join(', ');
+    const extra = selected.length > 6 ? ` +${selected.length - 6}` : '';
+    return {
+      porTalla: porTallaSel,
+      kgSegunda: kg2,
+      titulo: `Distribución por talla — ${selected.length} corrida(s)`,
+      subtitulo: `Selección: ${labels}${extra}. % sobre 1ra+2da de esas corridas.`,
+    };
+  }, [
+    graficaModo,
+    porTalla,
+    acumulado?.kg_segunda,
+    corridasParaGrafica,
+    corridasGraficaIds,
+    empaquesLimon,
+  ]);
+
+  const toggleCorridaGrafica = (id: number) => {
+    setCorridasGraficaIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAllCorridasGrafica = () => {
+    setCorridasGraficaIds(new Set(corridasParaGrafica.map((c) => c.id)));
+  };
+
+  const clearCorridasGrafica = () => setCorridasGraficaIds(new Set());
 
   if (loading) {
     return (
@@ -902,6 +1029,7 @@ export default function Reportes({ token }: ReportesProps) {
   }
 
   const a = acumulado;
+
   const seccionBtn = (id: SeccionReporte): CSSProperties => ({
     padding: '10px 18px',
     border: 'none',
@@ -1046,22 +1174,245 @@ export default function Reportes({ token }: ReportesProps) {
             </div>
           </div>
 
-          {/* % por talla + 2da — gráfica de pastel */}
-          {(porTalla.length > 0 || (a.kg_segunda ?? 0) > 0) && (
+          {/* % por talla + 2da — gráfica de pastel (acumulado o corridas elegidas) */}
+          {(porTalla.length > 0 ||
+            (a.kg_segunda ?? 0) > 0 ||
+            corridasParaGrafica.length > 0) && (
             <div style={{ marginTop: 8, marginBottom: 12 }}>
-              <h4 style={{ margin: '0 0 8px', fontWeight: 700 }}>
-                Distribución por talla (1ra) y 2da calidad
-              </h4>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 10,
+                  alignItems: 'center',
+                  marginBottom: 8,
+                }}
+              >
+                <h4 style={{ margin: 0, fontWeight: 700, flex: '1 1 auto' }}>
+                  {graficaData.titulo}
+                </h4>
+                <div
+                  style={{
+                    display: 'inline-flex',
+                    borderRadius: 8,
+                    overflow: 'hidden',
+                    border: '1px solid #cbd5e1',
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setGraficaModo('acumulado')}
+                    style={{
+                      padding: '8px 14px',
+                      border: 'none',
+                      cursor: 'pointer',
+                      fontWeight: graficaModo === 'acumulado' ? 700 : 500,
+                      background: graficaModo === 'acumulado' ? '#0f172a' : '#fff',
+                      color: graficaModo === 'acumulado' ? '#fff' : '#334155',
+                      fontSize: 13,
+                    }}
+                  >
+                    Acumulado total
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGraficaModo('seleccion')}
+                    style={{
+                      padding: '8px 14px',
+                      border: 'none',
+                      borderLeft: '1px solid #cbd5e1',
+                      cursor: 'pointer',
+                      fontWeight: graficaModo === 'seleccion' ? 700 : 500,
+                      background: graficaModo === 'seleccion' ? '#0f172a' : '#fff',
+                      color: graficaModo === 'seleccion' ? '#fff' : '#334155',
+                      fontSize: 13,
+                    }}
+                  >
+                    Elegir corridas
+                  </button>
+                </div>
+              </div>
               <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-                Cada gajo muestra la talla (o 2da) y el % de kg sobre el total empacado (1ra+2da).
-                El segmento rosado es 2da calidad (jugo). RPC: 140+ · Cartón: 75–200.
+                {graficaData.subtitulo} Segmento rosado = 2da (jugo).
               </p>
-              <TallaPieChart
-                items={porTalla}
-                colors={tallaPieColors}
-                kgSegunda={a.kg_segunda ?? 0}
-                fmtKg={fmtKg}
-              />
+
+              {graficaModo === 'seleccion' && (
+                <div
+                  style={{
+                    marginBottom: 12,
+                    padding: 12,
+                    background: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexWrap: 'wrap',
+                      gap: 8,
+                      alignItems: 'center',
+                      marginBottom: 10,
+                    }}
+                  >
+                    <strong style={{ fontSize: 13 }}>Corridas a graficar</strong>
+                    <span style={{ fontSize: 12, color: '#64748b' }}>
+                      {corridasGraficaIds.size} de {corridasParaGrafica.length} seleccionada(s)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={selectAllCorridasGrafica}
+                      style={{
+                        marginLeft: 'auto',
+                        padding: '5px 10px',
+                        fontSize: 12,
+                        borderRadius: 6,
+                        border: '1px solid #cbd5e1',
+                        background: '#fff',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Todas
+                    </button>
+                    <button
+                      type="button"
+                      onClick={clearCorridasGrafica}
+                      style={{
+                        padding: '5px 10px',
+                        fontSize: 12,
+                        borderRadius: 6,
+                        border: '1px solid #cbd5e1',
+                        background: '#fff',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Ninguna
+                    </button>
+                  </div>
+                  {corridasParaGrafica.length === 0 ? (
+                    <p style={{ fontSize: 13, color: '#94a3b8', margin: 0 }}>
+                      No hay corridas con datos.
+                    </p>
+                  ) : (
+                    <div
+                      style={{
+                        maxHeight: 320,
+                        overflowY: 'auto',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: 8,
+                      }}
+                    >
+                      <table
+                        style={{
+                          width: '100%',
+                          borderCollapse: 'collapse',
+                          fontSize: 13,
+                          minWidth: 560,
+                        }}
+                      >
+                        <thead>
+                          <tr
+                            style={{
+                              background: '#f1f5f9',
+                              textAlign: 'left',
+                              position: 'sticky',
+                              top: 0,
+                              zIndex: 1,
+                            }}
+                          >
+                            <th style={{ ...th, width: 40, textAlign: 'center' }}></th>
+                            <th style={{ ...th, textAlign: 'center' }}>Fecha proceso</th>
+                            <th style={{ ...th, textAlign: 'center' }}>Bins campo</th>
+                            <th style={{ ...th, textAlign: 'center' }}>RPC (cajas)</th>
+                            <th style={{ ...th, textAlign: 'center' }}>Cartón (cajas)</th>
+                            <th style={{ ...th, textAlign: 'center' }}>Bins 2da</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...corridasParaGrafica]
+                            .sort((x, y) =>
+                              String(y.fecha || '').localeCompare(String(x.fecha || ''))
+                            )
+                            .map((c) => {
+                              const checked = corridasGraficaIds.has(c.id);
+                              return (
+                                <tr
+                                  key={c.id}
+                                  onClick={() => toggleCorridaGrafica(c.id)}
+                                  style={{
+                                    borderBottom: '1px solid #f1f5f9',
+                                    background: checked ? '#f0fdf4' : '#fff',
+                                    cursor: 'pointer',
+                                  }}
+                                >
+                                  <td
+                                    style={{ ...td, width: 40, textAlign: 'center' }}
+                                    onClick={(e) => e.stopPropagation()}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={() => toggleCorridaGrafica(c.id)}
+                                      title={`Corrida #${c.id}`}
+                                    />
+                                  </td>
+                                  <td style={{ ...td, textAlign: 'center' }}>
+                                    <strong>{c.fecha || '—'}</strong>
+                                    <div style={{ fontSize: 11, color: '#94a3b8' }}>#{c.id}</div>
+                                  </td>
+                                  <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>
+                                    {c.bins_campo ?? 0}
+                                  </td>
+                                  <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>
+                                    {c.cajas_rpc ?? 0}
+                                  </td>
+                                  <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>
+                                    {c.cajas_carton ?? 0}
+                                  </td>
+                                  <td style={{ ...td, textAlign: 'center', fontWeight: 600 }}>
+                                    {c.bins_jugo ?? 0}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {graficaModo === 'seleccion' &&
+              corridasGraficaIds.size > 0 &&
+              graficaData.porTalla.length === 0 &&
+              graficaData.kgSegunda <= 0 ? (
+                <p
+                  style={{
+                    fontSize: 13,
+                    color: '#854d0e',
+                    background: '#fef9c3',
+                    padding: 10,
+                    borderRadius: 8,
+                  }}
+                >
+                  Las corridas seleccionadas no tienen desglose de tallas en empaque (o no se
+                  encontraron los registros). Prueba otras corridas o vuelve a{' '}
+                  <strong>Acumulado total</strong>.
+                </p>
+              ) : graficaModo === 'seleccion' && corridasGraficaIds.size === 0 ? (
+                <p style={{ fontSize: 13, color: '#64748b' }}>
+                  Marca las corridas de interés para actualizar la gráfica.
+                </p>
+              ) : (
+                (graficaData.porTalla.length > 0 || graficaData.kgSegunda > 0) && (
+                  <TallaPieChart
+                    items={graficaData.porTalla}
+                    colors={tallaPieColors}
+                    kgSegunda={graficaData.kgSegunda}
+                    fmtKg={fmtKg}
+                  />
+                )
+              )}
             </div>
           )}
 
