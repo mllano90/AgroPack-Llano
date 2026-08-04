@@ -77,8 +77,11 @@ function matchProduccionSku(
 }
 
 /**
- * Atribuye el stock actual a corridas (FIFO por fecha de empaque).
- * Así 450 cajas en piso se reparten a las corridas que las produjeron.
+ * Atribuye el stock actual a corridas reales de empaque.
+ *
+ * Tras embarques, lo que queda en piso es lo más reciente (LIFO):
+ * se consume primero la producción más nueva hacia atrás.
+ * Antes se usaba FIFO y todo el jugo residual caía en la corrida #1.
  */
 function origenesPorStock(
   empaques: EmpaqueRecord[],
@@ -89,10 +92,18 @@ function origenesPorStock(
   lote?: string | null,
   fechaEmpaque?: string | null
 ): { origenes: OrigenLinea[]; totalProducido: number } {
+  // empaque_id → corrida de reportes (preferir la de mayor id si hay solapes)
   const empToCorrida = new Map<number, CorridaRendimientoApi>();
-  for (const c of corridas) {
+  const corridasSorted = [...corridas].sort((a, b) => (a.id || 0) - (b.id || 0));
+  for (const c of corridasSorted) {
     const ids = c.ids_empaques?.length ? c.ids_empaques : [c.id];
-    for (const id of ids) empToCorrida.set(id, c);
+    for (const id of ids) {
+      // Si un empaque ya está en un proceso fusionado, no pisar con corrida huérfana menor
+      const prev = empToCorrida.get(id);
+      if (!prev || (c.id || 0) >= (prev.id || 0)) {
+        empToCorrida.set(id, c);
+      }
+    }
   }
 
   type ProdLine = {
@@ -101,6 +112,7 @@ function origenesPorStock(
     fecha: string;
     label: string;
     cajas: number;
+    /** Para LIFO: fecha desc, luego empaque id desc */
     sortKey: string;
   };
   const lines: ProdLine[] = [];
@@ -108,38 +120,40 @@ function origenesPorStock(
   for (const e of empaques) {
     const det = parseDetalle(e.detalle_corrida);
     if (det?.anulado) continue;
+    // No contar WIP a granel como stock de final al emparejar (ya filtrado en match)
     const corrida = empToCorrida.get(e.id);
+    // Preferir siempre el id de empaque como ancla real; la corrida de reportes
+    // es la etiqueta de proceso (puede fusionar varios empaques).
     const corridaId = corrida?.id ?? e.id;
-    const fecha =
-      (corrida?.fecha && String(corrida.fecha).slice(0, 10)) ||
-      (e.fecha ? String(e.fecha).slice(0, 10) : '') ||
-      '';
+    const fechaEmpaqueRec = e.fecha ? String(e.fecha).slice(0, 10) : '';
+    // Fecha de proceso: del empaque (día real de packing), no solo del fusionado
+    const fechaProceso = fechaEmpaqueRec || (corrida?.fecha ? String(corrida.fecha).slice(0, 10) : '');
     const label = corrida
       ? `Corrida #${corrida.id}`
       : `Empaque #${e.id}`;
 
     for (const p of det?.produccion || []) {
-      if (
-        !matchProduccionSku(p, presentacion, talla, lote, fechaEmpaque)
-      ) {
+      if (!matchProduccionSku(p, presentacion, talla, lote, fechaEmpaque)) {
         continue;
       }
       const cajas = Math.round(Number(p.cantidad) || 0);
       if (cajas <= 0) continue;
-      const feLine = normFecha(p.fecha_empaque) || fecha;
+      const feLine = normFecha(p.fecha_empaque) || fechaProceso;
+      // sortKey LIFO: fecha más nueva + id empaque más alto primero
+      const sortKey = `${feLine.padStart(10, '0')}|${String(e.id).padStart(8, '0')}`;
       lines.push({
         empaqueId: e.id,
         corridaId,
-        fecha: feLine || fecha,
+        fecha: feLine || fechaProceso,
         label,
         cajas,
-        sortKey: `${feLine || fecha}|${e.id}`,
+        sortKey,
       });
     }
   }
 
-  // Más antigua primero → FIFO para stock restante
-  lines.sort((a, b) => a.sortKey.localeCompare(b.sortKey));
+  // LIFO: más reciente primero (lo que queda en inventario no es lo más viejo)
+  lines.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
   const totalProducido = lines.reduce((s, l) => s + l.cajas, 0);
 
   let restante = Math.max(0, Math.round(stockActual || 0));
@@ -152,6 +166,10 @@ function origenesPorStock(
     const prev = byCorrida.get(l.corridaId);
     if (prev) {
       prev.cajas += take;
+      // conservar fecha más reciente ya vista
+      if (l.fecha && (!prev.fecha || l.fecha > prev.fecha)) {
+        prev.fecha = l.fecha;
+      }
     } else {
       byCorrida.set(l.corridaId, {
         corridaId: l.corridaId,
@@ -163,7 +181,6 @@ function origenesPorStock(
     }
   }
 
-  // Si sobra stock sin historial de empaque (import/ajuste), línea “sin corrida”
   if (restante > 0) {
     byCorrida.set(-1, {
       corridaId: -1,
@@ -174,9 +191,12 @@ function origenesPorStock(
     });
   }
 
-  const origenes = Array.from(byCorrida.values()).sort((a, b) =>
-    String(b.fecha).localeCompare(String(a.fecha))
-  );
+  // Mostrar más reciente arriba
+  const origenes = Array.from(byCorrida.values()).sort((a, b) => {
+    const df = String(b.fecha || '').localeCompare(String(a.fecha || ''));
+    if (df !== 0) return df;
+    return (b.corridaId || 0) - (a.corridaId || 0);
+  });
   return { origenes, totalProducido };
 }
 
@@ -669,8 +689,9 @@ export default function InventariosReporte({
                                   margin: '10px 0 8px',
                                 }}
                               >
-                                Stock actual atribuido a corridas (FIFO por fecha). Producido en
-                                historial: {totalProducido}{' '}
+                                Stock actual atribuido a corridas más recientes (LIFO: lo
+                                embarcado se asume de corridas viejas). Producido en historial:{' '}
+                                {totalProducido}{' '}
                                 {presentacion === 'bins_jugo' ? 'bins' : 'cajas'}.
                               </p>
                               <table
