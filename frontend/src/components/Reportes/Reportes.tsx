@@ -1054,7 +1054,7 @@ export default function Reportes({ token }: ReportesProps) {
               </h4>
               <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
                 Cada gajo muestra la talla (o 2da) y el % de kg sobre el total empacado (1ra+2da).
-                El segmento rosado es 2da calidad (jugo). RPC: 140+ · Cartón: ≤140.
+                El segmento rosado es 2da calidad (jugo). RPC: 140+ · Cartón: 75–200.
               </p>
               <TallaPieChart
                 items={porTalla}

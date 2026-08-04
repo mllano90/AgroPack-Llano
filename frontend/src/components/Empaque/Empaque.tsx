@@ -897,7 +897,7 @@ export default function Empaque({
                 <>
                   Flujo: lavado → <strong>RPC a granel 22 kg por talla y lote</strong> y/o final;
                   2da = bins jugo. El granel conserva el lote de campo. RPC final: tallas 140+ ·
-                  Cartón: ≤140.
+                  Cartón: 75–200 (incluye 165 y 200).
                 </>
               ) : (
                 <>
@@ -946,13 +946,13 @@ export default function Empaque({
                     },
                     { value: 'rpc_18', label: 'RPC 18', hint: 'tallas 140+' },
                     { value: 'rpc_12', label: 'RPC 12', hint: 'tallas 140+' },
-                    { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas ≤140' },
+                    { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas 75–200' },
                     { value: 'bins_jugo', label: 'Bins jugo (2da)', hint: '900 kg' },
                   ] as const)
                 : ([
                     { value: 'rpc_18', label: 'RPC 18', hint: 'tallas 140+' },
                     { value: 'rpc_12', label: 'RPC 12', hint: 'tallas 140+' },
-                    { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas ≤140' },
+                    { value: 'caja_40lbs', label: 'Cartón 40 lbs', hint: 'tallas 75–200' },
                   ] as const)
               ).map((opt) => {
                 const active = prodPresentacion === opt.value;
@@ -1041,9 +1041,14 @@ export default function Empaque({
                     </div>
                   ))}
                 </div>
-                {tallasActivas.includes('140') && (
+                {(tallasActivas.includes('140') ||
+                  tallasActivas.includes('165') ||
+                  tallasActivas.includes('200')) &&
+                  (esPresentacionCarton(prodPresentacion) ||
+                    esPresentacionRpc(prodPresentacion)) && (
                   <p style={{ fontSize: 11, color: '#b45309', margin: '8px 0 0' }}>
-                    * Talla 140: válida en RPC y en cartón (elige la presentación correcta arriba).
+                    * Tallas 140 / 165 / 200: válidas en RPC y en cartón (elige la presentación
+                    correcta arriba).
                   </p>
                 )}
               </div>
