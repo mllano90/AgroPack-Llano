@@ -77,15 +77,16 @@ export default function Empaque({
       cantidad: number;
     }>
   >([]);
-  const [lineasProduccion, setLineasProduccion] = useState<
-    Array<{
-      presentacion: string;
-      talla: string | null;
-      cantidad: number;
-      lote?: string | null;
-      fecha_empaque?: string | null;
-    }>
-  >([]);
+  type LineaProduccion = {
+    presentacion: string;
+    talla: string | null;
+    cantidad: number;
+    lote?: string | null;
+    fecha_empaque?: string | null;
+    /** Origen de captura: no se borra al cambiar de pestaña */
+    origen: 'desverdizado' | 'conversion_granel';
+  };
+  const [lineasProduccion, setLineasProduccion] = useState<LineaProduccion[]>([]);
   const [convirtiendo, setConvirtiendo] = useState(false);
 
   const createEmpaqueMutation = useCreateEmpaque(token);
@@ -194,26 +195,37 @@ export default function Empaque({
     setCantidadBinsJugo('');
   };
 
+  /** Origen de la pestaña activa (captura desverdizado vs conversión granel) */
+  const origenCaptura = (): LineaProduccion['origen'] =>
+    modoLimon === 'granel' ? 'conversion_granel' : 'desverdizado';
+
   /** Convierte los campos fijos de talla (o jugo) en líneas de producción */
   const agregarPresentacionConTallas = () => {
     if (!prodPresentacion) {
       return alert('Selecciona una presentación');
     }
+    const origen = origenCaptura();
 
     if (prodPresentacion === 'bins_jugo') {
+      if (origen === 'conversion_granel') {
+        return alert('Bins jugo se capturan en el flujo desde desverdizado');
+      }
       const cant = parseInt(cantidadBinsJugo, 10) || 0;
       if (cant <= 0) return alert('Ingresa la cantidad de bins de jugo');
       setLineasProduccion([
         ...lineasProduccion,
-        { presentacion: 'bins_jugo', talla: null, cantidad: cant },
+        { presentacion: 'bins_jugo', talla: null, cantidad: cant, origen: 'desverdizado' },
       ]);
       setCantidadBinsJugo('');
       return;
     }
 
-    // Lote de origen para granel
+    // Lote de origen para granel WIP (solo desde desverdizado)
     let loteOrigen: string | null = null;
     if (prodPresentacion === 'rpc_granel') {
+      if (origen === 'conversion_granel') {
+        return alert('En conversión elige el granel a consumir en la lista de inventario, no como producción');
+      }
       if (lotesEnConsumo.length === 1) {
         loteOrigen = lotesEnConsumo[0];
       } else if (lotesEnConsumo.length > 1) {
@@ -231,26 +243,37 @@ export default function Empaque({
       }
     }
 
+    // Conversión granel → final: heredar lote si hay un solo consumo granel
+    if (origen === 'conversion_granel') {
+      if (prodPresentacion === 'rpc_granel') {
+        return alert('La conversión produce RPC 12/18 o cartón, no más granel');
+      }
+    }
+
     const tallas = tallasParaPresentacion(prodPresentacion);
-    const nuevas: Array<{
-      presentacion: string;
-      talla: string | null;
-      cantidad: number;
-      lote?: string | null;
-      fecha_empaque?: string | null;
-    }> = [];
+    const nuevas: LineaProduccion[] = [];
     for (const t of tallas) {
       const cant = parseInt(tallaCantidades[t] || '', 10) || 0;
       if (cant > 0) {
-        const row: {
-          presentacion: string;
-          talla: string | null;
-          cantidad: number;
-          lote?: string | null;
-          fecha_empaque?: string | null;
-        } = { presentacion: prodPresentacion, talla: t, cantidad: cant };
+        const row: LineaProduccion = {
+          presentacion: prodPresentacion,
+          talla: t,
+          cantidad: cant,
+          origen,
+        };
         if (loteOrigen) {
           row.lote = loteOrigen;
+          row.fecha_empaque = fechaEmpaque || null;
+        } else if (origen === 'conversion_granel') {
+          const lotesG = [
+            ...new Set(consumosGranel.map((c) => c.lote).filter(Boolean)),
+          ] as string[];
+          if (lotesG.length === 1) {
+            row.lote = lotesG[0];
+          }
+          row.fecha_empaque = fechaEmpaque || null;
+        } else if (lotesEnConsumo.length === 1) {
+          row.lote = lotesEnConsumo[0];
           row.fecha_empaque = fechaEmpaque || null;
         }
         nuevas.push(row);
@@ -296,143 +319,204 @@ export default function Empaque({
             100
           ).toFixed(2)
         );
-      } else if (modoLimon === 'granel') {
-        // Conversión RPC a granel (por talla + lote) → final
-        let produccion = [...lineasProduccion];
-        if (prodPresentacion && prodPresentacion !== 'rpc_granel' && prodPresentacion !== 'bins_jugo') {
-          for (const t of tallasParaPresentacion(prodPresentacion)) {
-            const cant = parseInt(tallaCantidades[t] || '', 10) || 0;
+      } else {
+        // Limón: puede registrar AMBOS en un solo botón
+        // 1) Bins desverdizado → producción (granel WIP / final / jugo)
+        // 2) Consumo de granel en inventario → conversión a final
+        // Al cambiar de pestaña NO se borra lo capturado.
+
+        const flushFormDesv = (): LineaProduccion[] => {
+          const extra: LineaProduccion[] = [];
+          if (modoLimon !== 'desverdizado' || !prodPresentacion) return extra;
+          if (prodPresentacion === 'bins_jugo') {
+            const cant = parseInt(cantidadBinsJugo, 10) || 0;
             if (cant > 0) {
-              const lotesUnicos = [
-                ...new Set(consumosGranel.map((c) => c.lote).filter(Boolean)),
-              ] as string[];
-              produccion.push({
-                presentacion: prodPresentacion,
-                talla: t,
+              extra.push({
+                presentacion: 'bins_jugo',
+                talla: null,
                 cantidad: cant,
-                lote: lotesUnicos.length === 1 ? lotesUnicos[0] : null,
+                origen: 'desverdizado',
               });
             }
+            return extra;
           }
-        }
-        produccion = produccion.filter(
-          (p) => p.presentacion !== 'rpc_granel' && p.presentacion !== 'bins_jugo'
-        );
-        if (consumosGranel.length === 0) {
-          return alert('Agrega al menos un consumo de RPC a granel (talla y lote)');
-        }
-        for (const c of consumosGranel) {
-          if (!c.lote) {
-            return alert('Cada consumo de granel debe tener lote de origen');
-          }
-          if (!c.fecha_empaque) {
-            return alert(
-              'Cada consumo de granel debe tener la fecha del día en que se empacó'
-            );
-          }
-          const key = granelKey(c.talla, c.lote, c.fecha_empaque);
-          const row = stockGranelRows.find((r) => r.rowKey === key);
-          const stock = row?.cantidad || 0;
-          const yaOtros = consumosGranel
-            .filter(
-              (x) => x !== c && granelKey(x.talla, x.lote, x.fecha_empaque) === key
-            )
-            .reduce((s, x) => s + x.cantidad, 0);
-          if (c.cantidad + yaOtros > stock) {
-            return alert(
-              `Stock insuficiente granel lote ${c.lote} #${c.talla || 's/t'} (${c.fecha_empaque}): hay ${stock}`
-            );
-          }
-        }
-        if (produccion.length === 0) {
-          return alert('Agrega producción final (RPC 12/18 o cartón) a partir del granel');
-        }
-        setConvirtiendo(true);
-        try {
-          const res = await convertirRpcGranel(token, {
-            mercado: mercadoEmpaque,
-            fecha: fechaEmpaque,
-            consumos_granel: consumosGranel.map((c) => ({
-              talla: c.talla,
-              lote: c.lote,
-              fecha_empaque: c.fecha_empaque,
-              cantidad: c.cantidad,
-            })),
-            produccion,
-            numero_empacador: 'EMP-01',
-          });
-          alert(`✅ ${res.message}`);
-          setConsumosGranel([]);
-          setSelectedGranelKey('');
-          setSelectedGranelCant('');
-          setLineasProduccion([]);
-          setProdPresentacion('');
-          resetLimonProduccionForm();
-          onEmpaqueRegistered();
-        } finally {
-          setConvirtiendo(false);
-        }
-        return;
-      } else {
-        if (consumosDesverdizado.length === 0) {
-          return alert('Agrega al menos un consumo de desverdizado');
-        }
-        let produccion = [...lineasProduccion];
-        if (prodPresentacion === 'bins_jugo') {
-          const cant = parseInt(cantidadBinsJugo, 10) || 0;
-          if (cant > 0) {
-            produccion.push({ presentacion: 'bins_jugo', talla: null, cantidad: cant });
-          }
-        } else if (prodPresentacion === 'rpc_granel') {
           const loteG =
-            lotesEnConsumo.length === 1
-              ? lotesEnConsumo[0]
-              : loteProduccionGranel.trim() || null;
-          if (!loteG) {
-            return alert('Indica el lote de origen del RPC a granel');
+            prodPresentacion === 'rpc_granel'
+              ? lotesEnConsumo.length === 1
+                ? lotesEnConsumo[0]
+                : loteProduccionGranel.trim() || null
+              : lotesEnConsumo.length === 1
+                ? lotesEnConsumo[0]
+                : null;
+          if (prodPresentacion === 'rpc_granel' && !loteG) {
+            throw new Error('Indica el lote de origen del RPC a granel');
           }
           for (const t of tallasParaPresentacion(prodPresentacion)) {
             const cant = parseInt(tallaCantidades[t] || '', 10) || 0;
             if (cant > 0) {
-              produccion.push({
-                presentacion: 'rpc_granel',
+              extra.push({
+                presentacion: prodPresentacion,
                 talla: t,
                 cantidad: cant,
                 lote: loteG,
                 fecha_empaque: fechaEmpaque,
+                origen: 'desverdizado',
               });
             }
           }
-        } else if (prodPresentacion) {
-          const loteUnico = lotesEnConsumo.length === 1 ? lotesEnConsumo[0] : null;
+          return extra;
+        };
+
+        const flushFormConv = (): LineaProduccion[] => {
+          const extra: LineaProduccion[] = [];
+          if (modoLimon !== 'granel' || !prodPresentacion) return extra;
+          if (
+            prodPresentacion === 'rpc_granel' ||
+            prodPresentacion === 'bins_jugo'
+          ) {
+            return extra;
+          }
+          const lotesUnicos = [
+            ...new Set(consumosGranel.map((c) => c.lote).filter(Boolean)),
+          ] as string[];
           for (const t of tallasParaPresentacion(prodPresentacion)) {
             const cant = parseInt(tallaCantidades[t] || '', 10) || 0;
             if (cant > 0) {
-              produccion.push({
+              extra.push({
                 presentacion: prodPresentacion,
                 talla: t,
                 cantidad: cant,
-                lote: loteUnico,
+                lote: lotesUnicos.length === 1 ? lotesUnicos[0] : null,
                 fecha_empaque: fechaEmpaque,
+                origen: 'conversion_granel',
               });
             }
           }
+          return extra;
+        };
+
+        let formExtraDesv: LineaProduccion[] = [];
+        let formExtraConv: LineaProduccion[] = [];
+        try {
+          formExtraDesv = flushFormDesv();
+          formExtraConv = flushFormConv();
+        } catch (e: any) {
+          return alert(e?.message || String(e));
         }
-        if (produccion.length === 0) {
+
+        const prodDesv = [
+          ...lineasProduccion.filter((l) => l.origen === 'desverdizado'),
+          ...formExtraDesv,
+        ];
+        const prodConv = [
+          ...lineasProduccion.filter((l) => l.origen === 'conversion_granel'),
+          ...formExtraConv,
+        ].filter(
+          (p) => p.presentacion !== 'rpc_granel' && p.presentacion !== 'bins_jugo'
+        );
+
+        const haceDesv = consumosDesverdizado.length > 0;
+        const haceConv = consumosGranel.length > 0;
+
+        if (!haceDesv && !haceConv) {
           return alert(
-            'Agrega producción: RPC a granel por talla, RPC/cartón final, o bins jugo'
+            'Agrega consumos de desverdizado y/o de RPC a granel (puedes capturar ambos sin borrar al cambiar de pestaña).'
           );
         }
-        // Asegurar lote en granel
-        for (const p of produccion) {
+        if (haceDesv && prodDesv.length === 0) {
+          return alert(
+            'Tienes bins de desverdizado: agrega producción (RPC/cartón/granel/jugo) desde la pestaña 1.'
+          );
+        }
+        if (haceConv && prodConv.length === 0) {
+          return alert(
+            'Tienes consumo de granel: agrega producción final (RPC 12/18 o cartón) en la pestaña 2.'
+          );
+        }
+        for (const p of prodDesv) {
           if (p.presentacion === 'rpc_granel' && !p.lote) {
             return alert('Cada línea de RPC a granel debe tener lote de origen');
           }
         }
-        payload.consumos_desverdizado = consumosDesverdizado;
-        payload.produccion = produccion;
-        payload.cantidad_cajas_campo_usadas = 0;
-        payload.cantidad_cajas_carton_producidas = 0;
+        if (haceConv) {
+          for (const c of consumosGranel) {
+            if (!c.lote) {
+              return alert('Cada consumo de granel debe tener lote de origen');
+            }
+            if (!c.fecha_empaque) {
+              return alert(
+                'Cada consumo de granel debe tener la fecha del día en que se empacó'
+              );
+            }
+            const key = granelKey(c.talla, c.lote, c.fecha_empaque);
+            const row = stockGranelRows.find((r) => r.rowKey === key);
+            const stock = row?.cantidad || 0;
+            const yaOtros = consumosGranel
+              .filter(
+                (x) => x !== c && granelKey(x.talla, x.lote, x.fecha_empaque) === key
+              )
+              .reduce((s, x) => s + x.cantidad, 0);
+            if (c.cantidad + yaOtros > stock) {
+              return alert(
+                `Stock insuficiente granel lote ${c.lote} #${c.talla || 's/t'} (${c.fecha_empaque}): hay ${stock}`
+              );
+            }
+          }
+        }
+
+        const mensajes: string[] = [];
+
+        // 1) Empaque desde desverdizado (no pierde datos al haber capturado también granel)
+        if (haceDesv) {
+          payload.consumos_desverdizado = consumosDesverdizado;
+          payload.produccion = prodDesv.map(({ origen: _o, ...rest }) => rest);
+          payload.cantidad_cajas_campo_usadas = 0;
+          payload.cantidad_cajas_carton_producidas = 0;
+          await createEmpaqueMutation.mutateAsync(payload);
+          mensajes.push('Empaque desde desverdizado registrado');
+        }
+
+        // 2) Conversión granel → final (independiente; conserva captura de bins)
+        if (haceConv) {
+          setConvirtiendo(true);
+          try {
+            const res = await convertirRpcGranel(token, {
+              mercado: mercadoEmpaque,
+              fecha: fechaEmpaque,
+              consumos_granel: consumosGranel.map((c) => ({
+                talla: c.talla,
+                lote: c.lote,
+                fecha_empaque: c.fecha_empaque,
+                cantidad: c.cantidad,
+              })),
+              produccion: prodConv.map(({ origen: _o, ...rest }) => rest),
+              numero_empacador: 'EMP-01',
+            });
+            mensajes.push(res.message || 'Conversión de granel registrada');
+          } finally {
+            setConvirtiendo(false);
+          }
+        }
+
+        alert(`✅ ${mensajes.join('\n')}`);
+        setCajasCampoUsadas('');
+        setCajasCartonProducidas('');
+        setVariedadEmpaque('');
+        setMercadoEmpaque('nacional');
+        setFechaEmpaque(todayInputDate());
+        setConsumosDesverdizado([]);
+        setLoteProduccionGranel('');
+        setSelectedLote('');
+        setSelectedBinsToUse('');
+        setConsumosGranel([]);
+        setSelectedGranelKey('');
+        setSelectedGranelCant('');
+        setLineasProduccion([]);
+        setProdPresentacion('');
+        resetLimonProduccionForm();
+        onEmpaqueRegistered();
+        cargarDesverdizado();
+        return;
       }
 
       await createEmpaqueMutation.mutateAsync(payload);
@@ -572,9 +656,8 @@ export default function Empaque({
             <button
               type="button"
               onClick={() => {
+                // Solo cambia pestaña: NO borra consumos ni producción capturada
                 setModoLimon('desverdizado');
-                setConsumosGranel([]);
-                setLineasProduccion([]);
                 setProdPresentacion('');
                 resetLimonProduccionForm();
               }}
@@ -596,9 +679,8 @@ export default function Empaque({
             <button
               type="button"
               onClick={() => {
+                // Solo cambia pestaña: conserva bins y producción de desverdizado
                 setModoLimon('granel');
-                setConsumosDesverdizado([]);
-                setLineasProduccion([]);
                 setProdPresentacion('');
                 resetLimonProduccionForm();
               }}
@@ -618,6 +700,33 @@ export default function Empaque({
               </div>
             </button>
           </div>
+          {(consumosDesverdizado.length > 0 ||
+            consumosGranel.length > 0 ||
+            lineasProduccion.length > 0) && (
+            <p
+              style={{
+                fontSize: 12,
+                color: '#166534',
+                background: '#f0fdf4',
+                border: '1px solid #bbf7d0',
+                borderRadius: 8,
+                padding: '8px 12px',
+                margin: '0 0 12px',
+              }}
+            >
+              Puedes capturar <strong>ambos</strong> flujos: al cambiar de pestaña no se borra lo
+              ya agregado.
+              {consumosDesverdizado.length > 0 && (
+                <> · Bins desverdizado: {consumosDesverdizado.length} lote(s)</>
+              )}
+              {consumosGranel.length > 0 && (
+                <> · Consumos granel: {consumosGranel.length}</>
+              )}
+              {lineasProduccion.length > 0 && (
+                <> · Líneas producción: {lineasProduccion.length}</>
+              )}
+            </p>
+          )}
 
           {modoLimon === 'granel' && (
             <div
@@ -1099,10 +1208,24 @@ export default function Empaque({
 
           {lineasProduccion.length > 0 && (
             <div style={{ margin: '8px 0', fontSize: 13 }}>
-              <strong>Producción agregada:</strong>
+              <strong>Producción agregada (se conserva al cambiar de pestaña):</strong>
               <ul style={{ margin: '6px 0', paddingLeft: 20 }}>
                 {lineasProduccion.map((l, i) => (
                   <li key={i} style={{ marginBottom: 4 }}>
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        marginRight: 6,
+                        padding: '1px 6px',
+                        borderRadius: 4,
+                        background:
+                          l.origen === 'conversion_granel' ? '#e0f2fe' : '#dcfce7',
+                        color: '#0f172a',
+                      }}
+                    >
+                      {l.origen === 'conversion_granel' ? 'desde granel' : 'desde bins'}
+                    </span>
                     {labelPresentacion(l.presentacion)}
                     {l.talla ? ` #${l.talla}` : ''}
                     {l.lote ? ` · lote ${l.lote}` : ''}

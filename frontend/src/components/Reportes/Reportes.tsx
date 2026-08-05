@@ -389,6 +389,75 @@ function enrichCorrida(c: Corrida, ha: number): Corrida {
   };
 }
 
+/** Suma indicadores de un conjunto de corridas (misma lógica que acumulado API). */
+function acumularCorridasSeleccionadas(selected: Corrida[], ha: number): Corrida {
+  // Conversiones puras: no suman bins de campo; procesos/campo sí
+  const conCampo = selected.filter(
+    (c) => (c.tipo_corrida || 'campo') !== 'conversion_granel'
+  );
+  const base = conCampo.length > 0 ? conCampo : selected;
+
+  const bins = base.reduce((s, c) => s + (c.bins_campo || 0), 0);
+  const kg1 = selected.reduce((s, c) => s + (c.kg_primera || 0), 0);
+  const kg2 = selected.reduce((s, c) => s + (c.kg_segunda || 0), 0);
+  const kgE = base.reduce((s, c) => s + (c.kg_entrada || 0), 0) || bins * PESO_BIN_CAMPO_KG;
+  const kgS = kg1 + kg2;
+  const kgRpc = selected.reduce((s, c) => s + (c.kg_rpc || 0), 0);
+  const kgCarton = selected.reduce((s, c) => s + (c.kg_carton || 0), 0);
+  const cRpc = selected.reduce((s, c) => s + (c.cajas_rpc || 0), 0);
+  const cCarton = selected.reduce((s, c) => s + (c.cajas_carton || 0), 0);
+  const bJugo = selected.reduce((s, c) => s + (c.bins_jugo || 0), 0);
+  const pRpc = selected.reduce((s, c) => s + (c.parrillas_rpc || 0), 0);
+  const pCarton = selected.reduce((s, c) => s + (c.parrillas_carton || 0), 0);
+  const pJugo = selected.reduce((s, c) => s + (c.parrillas_jugo || 0), 0);
+  const pPrimera =
+    Math.round(
+      (selected.reduce((s, c) => s + (c.parrillas_primera ?? 0), 0) || pRpc + pCarton) * 100
+    ) / 100;
+  // Si parrillas_primera no viene, derivar de cajas
+  const pPrimeraFinal =
+    pPrimera > 0
+      ? pPrimera
+      : Math.round((cRpc / CAJAS_PARRILLA_RPC + cCarton / CAJAS_PARRILLA_CARTON) * 100) / 100;
+  const pTotal = Math.round((pPrimeraFinal + bJugo) * 100) / 100;
+  const binsPorParr =
+    pPrimeraFinal > 0 && bins > 0
+      ? Math.round((bins / pPrimeraFinal) * 100) / 100
+      : null;
+
+  return {
+    id: 0,
+    fecha: 'seleccion',
+    numero_empacador: null,
+    tipo_corrida: 'campo',
+    bins_campo: bins,
+    kg_entrada: Math.round(kgE * 100) / 100,
+    kg_primera: Math.round(kg1 * 100) / 100,
+    kg_segunda: Math.round(kg2 * 100) / 100,
+    kg_salida: Math.round(kgS * 100) / 100,
+    pct_primera: kgE ? Math.round((kg1 / kgE) * 10000) / 100 : 0,
+    pct_segunda: kgE ? Math.round((kg2 / kgE) * 10000) / 100 : 0,
+    pct_recuperacion: kgE ? Math.round((kgS / kgE) * 10000) / 100 : 0,
+    kg_rpc: Math.round(kgRpc * 100) / 100,
+    kg_carton: Math.round(kgCarton * 100) / 100,
+    pct_rpc_de_primera: kg1 ? Math.round((kgRpc / kg1) * 10000) / 100 : 0,
+    pct_carton_de_primera: kg1 ? Math.round((kgCarton / kg1) * 10000) / 100 : 0,
+    cajas_rpc: cRpc,
+    cajas_carton: cCarton,
+    bins_jugo: bJugo,
+    parrillas_rpc: Math.round(pRpc * 100) / 100,
+    parrillas_carton: Math.round(pCarton * 100) / 100,
+    parrillas_jugo: pJugo || bJugo,
+    parrillas_primera: pPrimeraFinal,
+    parrillas_total: pTotal,
+    bins_por_parrilla: binsPorParr,
+    kg_por_ha: kgHa(kgS, ha),
+    kg_primera_por_ha: kgHa(kg1, ha),
+    kg_segunda_por_ha: kgHa(kg2, ha),
+    lotes_resumen: `${selected.length} corrida(s) seleccionada(s)`,
+  };
+}
+
 function resumenConsumosGranel(
   cg: Array<{
     lote?: string | null;
@@ -936,6 +1005,26 @@ export default function Reportes({ token }: ReportesProps) {
     [corridas]
   );
 
+  /** Corridas marcadas para vista filtrada */
+  const corridasSeleccionadas = useMemo(
+    () => corridasParaGrafica.filter((c) => corridasGraficaIds.has(c.id)),
+    [corridasParaGrafica, corridasGraficaIds]
+  );
+
+  /**
+   * Resumen de indicadores: total del rancho o solo las corridas elegidas.
+   * Misma fuente que la gráfica de pastel.
+   */
+  const resumenVista = useMemo((): Corrida | null => {
+    if (graficaModo === 'acumulado') {
+      return acumulado;
+    }
+    if (corridasSeleccionadas.length === 0) {
+      return null;
+    }
+    return acumularCorridasSeleccionadas(corridasSeleccionadas, hectareas);
+  }, [graficaModo, acumulado, corridasSeleccionadas, hectareas]);
+
   const graficaData = useMemo(() => {
     if (graficaModo === 'acumulado') {
       return {
@@ -946,18 +1035,17 @@ export default function Reportes({ token }: ReportesProps) {
           'Todas las corridas. Cada gajo = talla o 2da; % sobre kg empacados (1ra+2da).',
       };
     }
-    const selected = corridasParaGrafica.filter((c) => corridasGraficaIds.has(c.id));
-    if (selected.length === 0) {
+    if (corridasSeleccionadas.length === 0) {
       return {
         porTalla: [] as TallaRendimientoApi[],
         kgSegunda: 0,
         titulo: 'Distribución por talla — corridas seleccionadas',
-        subtitulo: 'Selecciona una o más corridas abajo para graficar.',
+        subtitulo: 'Selecciona una o más corridas abajo para graficar y ver el resumen.',
         vacio: true as const,
       };
     }
     const empIds = new Set<number>();
-    for (const c of selected) {
+    for (const c of corridasSeleccionadas) {
       const ids = c.ids_empaques?.length ? c.ids_empaques : [c.id];
       for (const id of ids) empIds.add(id);
     }
@@ -966,30 +1054,35 @@ export default function Reportes({ token }: ReportesProps) {
     let porTallaSel = computed.porTalla;
     let kg2 = computed.kgSegunda;
     if (subset.length === 0) {
-      kg2 = selected.reduce((s, c) => s + (c.kg_segunda || 0), 0);
+      kg2 = corridasSeleccionadas.reduce((s, c) => s + (c.kg_segunda || 0), 0);
       porTallaSel = [];
     } else if (kg2 === 0) {
-      const kg2Corr = selected.reduce((s, c) => s + (c.kg_segunda || 0), 0);
+      const kg2Corr = corridasSeleccionadas.reduce((s, c) => s + (c.kg_segunda || 0), 0);
       if (kg2Corr > 0) kg2 = kg2Corr;
     }
-    const labels = selected
+    // Preferir kg 2da del resumen de corridas si el detalle de empaque difiere poco
+    if (resumenVista && (resumenVista.kg_segunda || 0) > 0 && kg2 === 0) {
+      kg2 = resumenVista.kg_segunda;
+    }
+    const labels = corridasSeleccionadas
       .map((c) => `#${c.id} ${c.fecha}`)
       .slice(0, 6)
       .join(', ');
-    const extra = selected.length > 6 ? ` +${selected.length - 6}` : '';
+    const extra =
+      corridasSeleccionadas.length > 6 ? ` +${corridasSeleccionadas.length - 6}` : '';
     return {
       porTalla: porTallaSel,
       kgSegunda: kg2,
-      titulo: `Distribución por talla — ${selected.length} corrida(s)`,
-      subtitulo: `Selección: ${labels}${extra}. % sobre 1ra+2da de esas corridas.`,
+      titulo: `Distribución por talla — ${corridasSeleccionadas.length} corrida(s)`,
+      subtitulo: `Selección: ${labels}${extra}. Resumen e indicadores solo de esas corridas.`,
     };
   }, [
     graficaModo,
     porTalla,
     acumulado?.kg_segunda,
-    corridasParaGrafica,
-    corridasGraficaIds,
+    corridasSeleccionadas,
     empaquesLimon,
+    resumenVista,
   ]);
 
   const toggleCorridaGrafica = (id: number) => {
@@ -1028,7 +1121,10 @@ export default function Reportes({ token }: ReportesProps) {
     );
   }
 
-  const a = acumulado;
+  /** Indicadores visibles: total o selección */
+  const a = resumenVista;
+  const modoSeleccion = graficaModo === 'seleccion';
+  const sinSeleccion = modoSeleccion && corridasSeleccionadas.length === 0;
 
   const seccionBtn = (id: SeccionReporte): CSSProperties => ({
     padding: '10px 18px',
@@ -1123,122 +1219,73 @@ export default function Reportes({ token }: ReportesProps) {
         <p style={{ fontSize: 12, color: '#64748b' }}>{debugInfo}</p>
       )}
 
-      {/* Acumulado — principales primero */}
-      {a && a.bins_campo > 0 && (
+      {/* Selector de alcance: total o corridas (afecta resumen + gráfica) */}
+      {(acumulado || corridasParaGrafica.length > 0) && (
         <div style={{ marginTop: 20 }}>
-          <h3 style={{ marginBottom: 8 }}>Acumulado — indicadores principales</h3>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
-            <div style={{ ...cardPrimary, background: '#dcfce7' }}>
-              <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>% 1ra calidad</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>{a.pct_primera}%</div>
-              <div style={{ fontSize: 12, color: '#64748b' }}>{fmtKg(a.kg_primera)} kg · {fmtNum(a.kg_primera_por_ha)} kg/ha</div>
-            </div>
-            <div style={{ ...cardPrimary, background: '#fef9c3' }}>
-              <div style={{ fontSize: 12, color: '#854d0e', fontWeight: 600 }}>% 2da calidad</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: '#713f12' }}>{a.pct_segunda}%</div>
-              <div style={{ fontSize: 12, color: '#64748b' }}>{fmtKg(a.kg_segunda)} kg · {fmtNum(a.kg_segunda_por_ha)} kg/ha</div>
-            </div>
-            <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
-              <div style={{ fontSize: 12, color: '#075985', fontWeight: 600 }}>Bins / parrilla (1ra)</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: '#0c4a6e' }}>
-                {a.bins_por_parrilla != null ? a.bins_por_parrilla : '—'}
-              </div>
-              <div style={{ fontSize: 12, color: '#64748b' }}>
-                {a.bins_campo} bins ÷ {a.parrillas_primera ?? '—'} parr. 1ra
-              </div>
-            </div>
-            <div style={{ ...cardPrimary, background: '#f0fdf4' }}>
-              <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Kg totales / ha</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>
-                {fmtNum(a.kg_por_ha)}
-              </div>
-              <div style={{ fontSize: 12, color: '#64748b' }}>
-                {fmtKg(a.kg_salida)} kg ÷ {hectareas} ha
-              </div>
-            </div>
-            <div style={{ ...cardPrimary, background: '#dbeafe' }}>
-              <div style={{ fontSize: 12, color: '#1e40af', fontWeight: 600 }}>% 1ra en RPC</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: '#1e3a8a' }}>
-                {fmtNum(a.pct_rpc_de_primera, 1)}%
-              </div>
-              <div style={{ fontSize: 12, color: '#64748b' }}>
-                {fmtKg(a.kg_rpc ?? 0)} kg · {a.cajas_rpc} cajas
-              </div>
-            </div>
-            <div style={{ ...cardPrimary, background: '#ffedd5' }}>
-              <div style={{ fontSize: 12, color: '#9a3412', fontWeight: 600 }}>% 1ra en cartón</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: '#7c2d12' }}>
-                {fmtNum(a.pct_carton_de_primera, 1)}%
-              </div>
-              <div style={{ fontSize: 12, color: '#64748b' }}>
-                {fmtKg(a.kg_carton ?? 0)} kg · {a.cajas_carton} cajas
-              </div>
-            </div>
-          </div>
-
-          {/* % por talla + 2da — gráfica de pastel (acumulado o corridas elegidas) */}
-          {(porTalla.length > 0 ||
-            (a.kg_segunda ?? 0) > 0 ||
-            corridasParaGrafica.length > 0) && (
-            <div style={{ marginTop: 8, marginBottom: 12 }}>
-              <div
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 10,
+              alignItems: 'center',
+              marginBottom: 12,
+            }}
+          >
+            <h3 style={{ margin: 0, flex: '1 1 auto' }}>
+              {modoSeleccion
+                ? sinSeleccion
+                  ? 'Selección de corridas'
+                  : `Resumen — ${corridasSeleccionadas.length} corrida(s)`
+                : 'Acumulado — indicadores principales'}
+            </h3>
+            <div
+              style={{
+                display: 'inline-flex',
+                borderRadius: 8,
+                overflow: 'hidden',
+                border: '1px solid #cbd5e1',
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setGraficaModo('acumulado')}
                 style={{
-                  display: 'flex',
-                  flexWrap: 'wrap',
-                  gap: 10,
-                  alignItems: 'center',
-                  marginBottom: 8,
+                  padding: '8px 14px',
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontWeight: graficaModo === 'acumulado' ? 700 : 500,
+                  background: graficaModo === 'acumulado' ? '#0f172a' : '#fff',
+                  color: graficaModo === 'acumulado' ? '#fff' : '#334155',
+                  fontSize: 13,
                 }}
               >
-                <h4 style={{ margin: 0, fontWeight: 700, flex: '1 1 auto' }}>
-                  {graficaData.titulo}
-                </h4>
-                <div
-                  style={{
-                    display: 'inline-flex',
-                    borderRadius: 8,
-                    overflow: 'hidden',
-                    border: '1px solid #cbd5e1',
-                  }}
-                >
-                  <button
-                    type="button"
-                    onClick={() => setGraficaModo('acumulado')}
-                    style={{
-                      padding: '8px 14px',
-                      border: 'none',
-                      cursor: 'pointer',
-                      fontWeight: graficaModo === 'acumulado' ? 700 : 500,
-                      background: graficaModo === 'acumulado' ? '#0f172a' : '#fff',
-                      color: graficaModo === 'acumulado' ? '#fff' : '#334155',
-                      fontSize: 13,
-                    }}
-                  >
-                    Acumulado total
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setGraficaModo('seleccion')}
-                    style={{
-                      padding: '8px 14px',
-                      border: 'none',
-                      borderLeft: '1px solid #cbd5e1',
-                      cursor: 'pointer',
-                      fontWeight: graficaModo === 'seleccion' ? 700 : 500,
-                      background: graficaModo === 'seleccion' ? '#0f172a' : '#fff',
-                      color: graficaModo === 'seleccion' ? '#fff' : '#334155',
-                      fontSize: 13,
-                    }}
-                  >
-                    Elegir corridas
-                  </button>
-                </div>
-              </div>
-              <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-                {graficaData.subtitulo} Segmento rosado = 2da (jugo).
-              </p>
+                Acumulado total
+              </button>
+              <button
+                type="button"
+                onClick={() => setGraficaModo('seleccion')}
+                style={{
+                  padding: '8px 14px',
+                  border: 'none',
+                  borderLeft: '1px solid #cbd5e1',
+                  cursor: 'pointer',
+                  fontWeight: graficaModo === 'seleccion' ? 700 : 500,
+                  background: graficaModo === 'seleccion' ? '#0f172a' : '#fff',
+                  color: graficaModo === 'seleccion' ? '#fff' : '#334155',
+                  fontSize: 13,
+                }}
+              >
+                Elegir corridas
+              </button>
+            </div>
+          </div>
+          <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, marginBottom: 12 }}>
+            {modoSeleccion
+              ? 'El resumen (% 1ra, kg/ha, parrillas) y la gráfica usan solo las corridas marcadas.'
+              : 'Resumen y gráfica del total del rancho (todas las corridas).'}
+          </p>
 
-              {graficaModo === 'seleccion' && (
+          {modoSeleccion && (
                 <div
                   style={{
                     marginBottom: 12,
@@ -1384,71 +1431,149 @@ export default function Reportes({ token }: ReportesProps) {
                 </div>
               )}
 
-              {graficaModo === 'seleccion' &&
-              corridasGraficaIds.size > 0 &&
-              graficaData.porTalla.length === 0 &&
-              graficaData.kgSegunda <= 0 ? (
-                <p
-                  style={{
-                    fontSize: 13,
-                    color: '#854d0e',
-                    background: '#fef9c3',
-                    padding: 10,
-                    borderRadius: 8,
-                  }}
-                >
-                  Las corridas seleccionadas no tienen desglose de tallas en empaque (o no se
-                  encontraron los registros). Prueba otras corridas o vuelve a{' '}
-                  <strong>Acumulado total</strong>.
-                </p>
-              ) : graficaModo === 'seleccion' && corridasGraficaIds.size === 0 ? (
-                <p style={{ fontSize: 13, color: '#64748b' }}>
-                  Marca las corridas de interés para actualizar la gráfica.
-                </p>
-              ) : (
-                (graficaData.porTalla.length > 0 || graficaData.kgSegunda > 0) && (
-                  <TallaPieChart
-                    items={graficaData.porTalla}
-                    colors={tallaPieColors}
-                    kgSegunda={graficaData.kgSegunda}
-                    fmtKg={fmtKg}
-                  />
-                )
-              )}
-            </div>
-          )}
+          {/* Indicadores principales (total o solo corridas elegidas) */}
+          {sinSeleccion ? (
+            <p style={{ fontSize: 13, color: '#64748b', marginBottom: 16 }}>
+              Marca una o más corridas para ver el resumen (% 1ra, kg/ha, parrillas) y la gráfica.
+            </p>
+          ) : a ? (
+            <>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+                <div style={{ ...cardPrimary, background: '#dcfce7' }}>
+                  <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>% 1ra calidad</div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>
+                    {a.pct_primera}%
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {fmtKg(a.kg_primera)} kg · {fmtNum(a.kg_primera_por_ha)} kg/ha
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#fef9c3' }}>
+                  <div style={{ fontSize: 12, color: '#854d0e', fontWeight: 600 }}>% 2da calidad</div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#713f12' }}>
+                    {a.pct_segunda}%
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {fmtKg(a.kg_segunda)} kg · {fmtNum(a.kg_segunda_por_ha)} kg/ha
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
+                  <div style={{ fontSize: 12, color: '#075985', fontWeight: 600 }}>
+                    Bins / parrilla (1ra)
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#0c4a6e' }}>
+                    {a.bins_por_parrilla != null ? a.bins_por_parrilla : '—'}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {a.bins_campo} bins ÷ {a.parrillas_primera ?? '—'} parr. 1ra
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#f0fdf4' }}>
+                  <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>
+                    Kg totales / ha
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>
+                    {fmtNum(a.kg_por_ha)}
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {fmtKg(a.kg_salida)} kg ÷ {hectareas} ha
+                    {modoSeleccion ? ' (rancho)' : ''}
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#dbeafe' }}>
+                  <div style={{ fontSize: 12, color: '#1e40af', fontWeight: 600 }}>
+                    % 1ra en RPC
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#1e3a8a' }}>
+                    {fmtNum(a.pct_rpc_de_primera, 1)}%
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {fmtKg(a.kg_rpc ?? 0)} kg · {a.cajas_rpc} cajas
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#ffedd5' }}>
+                  <div style={{ fontSize: 12, color: '#9a3412', fontWeight: 600 }}>
+                    % 1ra en cartón
+                  </div>
+                  <div style={{ fontSize: 32, fontWeight: 800, color: '#7c2d12' }}>
+                    {fmtNum(a.pct_carton_de_primera, 1)}%
+                  </div>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>
+                    {fmtKg(a.kg_carton ?? 0)} kg · {a.cajas_carton} cajas
+                  </div>
+                </div>
+              </div>
 
-          <h4 style={{ margin: '16px 0 8px', color: '#64748b', fontWeight: 600 }}>Detalle (secundario)</h4>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
-            <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: '#64748b' }}>Bins de campo</div>
-              <div style={{ fontSize: 20, fontWeight: 700 }}>{a.bins_campo}</div>
-              <div style={{ fontSize: 12 }}>{fmtKg(a.kg_entrada)} kg entrada</div>
-            </div>
-            <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: '#64748b' }}>Kg 1ra / 2da / total</div>
-              <div style={{ fontSize: 16, fontWeight: 700 }}>
-                {fmtKg(a.kg_primera)} · {fmtKg(a.kg_segunda)} · {fmtKg(a.kg_salida)}
+              {/* Gráfica de pastel alineada al mismo alcance */}
+              <div style={{ marginTop: 8, marginBottom: 12 }}>
+                <h4 style={{ margin: '0 0 8px', fontWeight: 700 }}>{graficaData.titulo}</h4>
+                <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
+                  {graficaData.subtitulo} Segmento rosado = 2da (jugo).
+                </p>
+                {modoSeleccion &&
+                corridasSeleccionadas.length > 0 &&
+                graficaData.porTalla.length === 0 &&
+                graficaData.kgSegunda <= 0 ? (
+                  <p
+                    style={{
+                      fontSize: 13,
+                      color: '#854d0e',
+                      background: '#fef9c3',
+                      padding: 10,
+                      borderRadius: 8,
+                    }}
+                  >
+                    Las corridas seleccionadas no tienen desglose de tallas en empaque. El resumen
+                    de arriba sí refleja esas corridas.
+                  </p>
+                ) : (
+                  (graficaData.porTalla.length > 0 || graficaData.kgSegunda > 0) && (
+                    <TallaPieChart
+                      items={graficaData.porTalla}
+                      colors={tallaPieColors}
+                      kgSegunda={graficaData.kgSegunda}
+                      fmtKg={fmtKg}
+                    />
+                  )
+                )}
               </div>
-              <div style={{ fontSize: 12 }}>{a.pct_recuperacion}% recuperación</div>
-            </div>
-            <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: '#64748b' }}>Parrillas 1ra / jugo / total</div>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>
-                {a.parrillas_primera ?? 0} · {a.parrillas_jugo} · {a.parrillas_total}
+
+              <h4 style={{ margin: '16px 0 8px', color: '#64748b', fontWeight: 600 }}>
+                Detalle (secundario)
+                {modoSeleccion ? ' — selección' : ''}
+              </h4>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 16 }}>
+                <div style={cardStyle}>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>Bins de campo</div>
+                  <div style={{ fontSize: 20, fontWeight: 700 }}>{a.bins_campo}</div>
+                  <div style={{ fontSize: 12 }}>{fmtKg(a.kg_entrada)} kg entrada</div>
+                </div>
+                <div style={cardStyle}>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>Kg 1ra / 2da / total</div>
+                  <div style={{ fontSize: 16, fontWeight: 700 }}>
+                    {fmtKg(a.kg_primera)} · {fmtKg(a.kg_segunda)} · {fmtKg(a.kg_salida)}
+                  </div>
+                  <div style={{ fontSize: 12 }}>{a.pct_recuperacion}% recuperación</div>
+                </div>
+                <div style={cardStyle}>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>Parrillas 1ra / jugo / total</div>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>
+                    {a.parrillas_primera ?? 0} · {a.parrillas_jugo} · {a.parrillas_total}
+                  </div>
+                  <div style={{ fontSize: 12 }}>
+                    RPC {a.parrillas_rpc} · Cartón {a.parrillas_carton}
+                  </div>
+                </div>
+                <div style={cardStyle}>
+                  <div style={{ fontSize: 12, color: '#64748b' }}>Kg/ha 1ra · 2da</div>
+                  <div style={{ fontSize: 18, fontWeight: 700 }}>
+                    {fmtNum(a.kg_primera_por_ha)} · {fmtNum(a.kg_segunda_por_ha)}
+                  </div>
+                  <div style={{ fontSize: 12 }}>sobre {hectareas} ha</div>
+                </div>
               </div>
-              <div style={{ fontSize: 12 }}>
-                RPC {a.parrillas_rpc} · Cartón {a.parrillas_carton}
-              </div>
-            </div>
-            <div style={cardStyle}>
-              <div style={{ fontSize: 12, color: '#64748b' }}>Kg/ha 1ra · 2da</div>
-              <div style={{ fontSize: 18, fontWeight: 700 }}>
-                {fmtNum(a.kg_primera_por_ha)} · {fmtNum(a.kg_segunda_por_ha)}
-              </div>
-              <div style={{ fontSize: 12 }}>sobre {hectareas} ha</div>
-            </div>
-          </div>
+            </>
+          ) : null}
         </div>
       )}
 
