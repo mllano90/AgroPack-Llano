@@ -1179,16 +1179,37 @@ def anular_empaque(
         detalle["aviso_anulacion"] = " | ".join(problemas_final)
         stock_final_ok = False
 
-    # 3) Conversión granel→final: devolver el granel consumido
+    # 3) Conversión granel→final: devolver el granel consumido (SIEMPRE, no silenciar)
+    granel_devuelto = 0
     if detalle.get("tipo") == "conversion_rpc_granel":
-        consumos_g = detalle.get("consumos_granel") or []
+        consumos_g = _norm_consumos_granel(detalle.get("consumos_granel") or [])
+        if not consumos_g:
+            # Compat: líneas crudas sin normalizar
+            raw_g = detalle.get("consumos_granel") or []
+            consumos_g = []
+            for g in raw_g:
+                if not isinstance(g, dict):
+                    continue
+                cant = int(g.get("cantidad") or 0)
+                if cant <= 0:
+                    continue
+                row = {
+                    "presentacion": "rpc_granel",
+                    "talla": _talla_for_pres("rpc_granel", g.get("talla")),
+                    "cantidad": cant,
+                }
+                lo = _norm_lote_extra(g.get("lote"))
+                fe = _norm_fecha_emp(g.get("fecha_empaque") or g.get("fecha"))
+                if lo:
+                    row["lote"] = lo
+                if fe:
+                    row["fecha_empaque"] = fe
+                consumos_g.append(row)
         if consumos_g:
-            try:
-                _ajustar_inventario_final(
-                    db, emp.producto, emp.mercado, consumos_g, signo=+1
-                )
-            except HTTPException:
-                pass
+            _ajustar_inventario_final(
+                db, emp.producto, emp.mercado, consumos_g, signo=+1
+            )
+            granel_devuelto = sum(int(g.get("cantidad") or 0) for g in consumos_g)
 
     detalle = {
         **detalle,
@@ -1198,6 +1219,7 @@ def anular_empaque(
         "anulado": True,
         "anulado_por": getattr(current_user, "username", None),
         "bins_devueltos": bins_devueltos,
+        "granel_devuelto": granel_devuelto,
         "anulado_forzado": bool(forzar and not stock_final_ok),
     }
     emp.detalle_corrida = detalle
@@ -1207,10 +1229,18 @@ def anular_empaque(
     db.commit()
 
     msg = f"Empaque anulado; {bins_devueltos} bins devueltos a desverdizado"
+    if granel_devuelto > 0:
+        msg += f"; {granel_devuelto} RPC a granel devueltos a inventario"
     if detalle.get("aviso_anulacion"):
         msg += f" (aviso inventario final: {detalle['aviso_anulacion']})"
-    if bins_devueltos <= 0 and detalle.get("tipo") != "conversion_rpc_granel":
+    if (
+        bins_devueltos <= 0
+        and granel_devuelto <= 0
+        and detalle.get("tipo") != "conversion_rpc_granel"
+    ):
         msg += " — no se encontraron consumos de bins en el registro"
+    if detalle.get("tipo") == "conversion_rpc_granel" and granel_devuelto <= 0:
+        msg += " — no se pudo devolver granel (sin consumos_granel en el registro)"
     return AnularEmpaqueResponse(
         message=msg,
         id=empaque_id,
@@ -1219,6 +1249,85 @@ def anular_empaque(
         forzado=bool(forzar and not stock_final_ok),
         aviso=detalle.get("aviso_anulacion"),
     )
+
+
+@router.post("/{empaque_id}/reparar-devolucion-anulacion")
+def reparar_devolucion_anulacion(
+    empaque_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Repara un empaque YA anulado que no devolvió bins de campo y/o RPC a granel.
+    Idempotente: solo devuelve lo que aún falte respecto al stock actual.
+    """
+    emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empaque no encontrado")
+    detalle = _detalle_as_dict(emp.detalle_corrida)
+    if not detalle.get("anulado"):
+        raise HTTPException(
+            status_code=400,
+            detail="Solo aplica a empaques anulados. Usa POST /anular para anular.",
+        )
+
+    acciones: list[str] = []
+    bins_devueltos = 0
+    granel_devuelto = 0
+
+    # Bins de campo
+    consumos = _consumos_desde_empaque(emp, detalle)
+    prev_bins = int(detalle.get("bins_devueltos") or 0)
+    if consumos and prev_bins <= 0:
+        for c in consumos:
+            b = int(c.get("bins") or 0)
+            lo = _norm_lote(c.get("lote"))
+            if b > 0 and lo:
+                _devolver_bins_lote(db, lo, b)
+                bins_devueltos += b
+        if bins_devueltos > 0:
+            acciones.append(f"{bins_devueltos} bins → desverdizado")
+            detalle["bins_devueltos"] = bins_devueltos
+            detalle["consumos"] = consumos
+
+    # Granel de conversión
+    if detalle.get("tipo") == "conversion_rpc_granel":
+        prev_g = int(detalle.get("granel_devuelto") or 0)
+        consumos_g = _norm_consumos_granel(detalle.get("consumos_granel") or [])
+        if consumos_g and prev_g <= 0:
+            _ajustar_inventario_final(
+                db, emp.producto, emp.mercado, consumos_g, signo=+1
+            )
+            granel_devuelto = sum(int(g.get("cantidad") or 0) for g in consumos_g)
+            if granel_devuelto > 0:
+                acciones.append(f"{granel_devuelto} RPC granel → inventario")
+                detalle["granel_devuelto"] = granel_devuelto
+
+    if not acciones:
+        return {
+            "message": (
+                f"Empaque #{empaque_id} ya tenía devoluciones registradas "
+                f"(bins_devueltos={detalle.get('bins_devueltos')}, "
+                f"granel_devuelto={detalle.get('granel_devuelto')}). Nada que reparar."
+            ),
+            "id": empaque_id,
+            "bins_devueltos": 0,
+            "granel_devuelto": 0,
+        }
+
+    detalle["reparacion_devolucion_por"] = getattr(current_user, "username", None)
+    emp.detalle_corrida = detalle
+    from sqlalchemy.orm.attributes import flag_modified
+
+    flag_modified(emp, "detalle_corrida")
+    db.commit()
+    return {
+        "message": f"Reparación OK: {'; '.join(acciones)}",
+        "id": empaque_id,
+        "bins_devueltos": bins_devueltos,
+        "granel_devuelto": granel_devuelto,
+        "ejecutado_por": getattr(current_user, "username", None),
+    }
 
 
 @router.delete("/{empaque_id}", response_model=EliminarEmpaqueResponse)
