@@ -115,28 +115,62 @@ def _match_desverdizado_por_lote(db: Session, lote: str) -> list:
     return [r for r in rows if _norm_lote(r.lote).casefold() == ln]
 
 
-def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
+def _parse_fecha_opt(val) -> "date | None":
+    from datetime import date, datetime
+
+    if val is None or val == "":
+        return None
+    if isinstance(val, date) and not isinstance(val, datetime):
+        return val
+    s = str(val).strip()[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _consumir_bins_lote(
+    db: Session, lote: str, bins: int, fecha_recepcion=None
+) -> list[dict]:
     """
     Descuenta bins de un lote en desverdizado.
-    Match flexible de lote (strip / case); FIFO por fecha de corte.
+    Match flexible de lote (strip / case).
+
+    - Con fecha_recepcion: solo de filas de esa fecha de corte.
+    - Sin fecha: FIFO por fecha de corte (más antigua primero).
+
+    Devuelve desglose [{lote, bins, fecha_recepcion}, ...] para anular
+    devolviendo a la fecha exacta (evita mezclar 03-ago con 05-ago del mismo lote).
     """
     lote_n = _norm_lote(lote)
     bins = int(bins or 0)
     if bins <= 0 or not lote_n:
         raise HTTPException(status_code=400, detail="lote y bins > 0 son requeridos")
 
+    fecha_obj = _parse_fecha_opt(fecha_recepcion)
     candidatos = _match_desverdizado_por_lote(db, lote_n)
     desvs = [d for d in candidatos if int(d.cantidad_bins or 0) > 0]
+    if fecha_obj is not None:
+        desvs = [
+            d
+            for d in desvs
+            if d.fecha_recepcion and d.fecha_recepcion == fecha_obj
+        ]
+    # FIFO: ya vienen ordenados por fecha_recepcion ASC en _match
     restante = bins
     disp = sum(int(d.cantidad_bins or 0) for d in desvs)
     if disp < bins:
+        extra = (
+            f" en fecha de corte {fecha_obj}" if fecha_obj is not None else ""
+        )
         raise HTTPException(
             status_code=400,
             detail=(
-                f"No hay suficientes bins en desverdizado para lote '{lote_n}'. "
+                f"No hay suficientes bins en desverdizado para lote '{lote_n}'{extra}. "
                 f"Disponible: {disp}, solicitado: {bins}"
             ),
         )
+    desglose: list[dict] = []
     for d in desvs:
         if restante <= 0:
             break
@@ -150,111 +184,381 @@ def _consumir_bins_lote(db: Session, lote: str, bins: int) -> None:
             d.estado = "empaquetado"
         elif (d.estado or "") == "en_desverdizado":
             d.estado = "listo_empaque"
+        fr = d.fecha_recepcion
+        row = {
+            "lote": lote_n,
+            "bins": usar,
+            "fecha_recepcion": str(fr) if fr else None,
+        }
+        desglose.append(row)
     if restante > 0:
         raise HTTPException(
             status_code=400,
             detail=f"No hay suficientes bins en desverdizado para lote '{lote_n}'. Faltan {restante}",
         )
     db.flush()
+    return desglose
 
 
 def _agregar_consumos_desverdizado(db: Session, consumos: list | None) -> list[dict]:
     """
     Normaliza y aplica consumos de desverdizado (crea empaque / editar).
-    Agrupa por lote para no fallar con líneas duplicadas del mismo lote.
+
+    Agrupa por (lote, fecha_recepcion):
+    - Si la UI manda fecha de corte, se descuenta solo de esa fecha.
+    - Si no manda fecha, FIFO global del lote y se DESGLOSA el resultado
+      por fecha para poder anular sin mezclar cortes.
     """
     from collections import defaultdict
 
-    acc: dict[str, int] = defaultdict(int)
+    # clave: (lote, fecha_str|None) → bins
+    acc: dict[tuple[str, str | None], int] = defaultdict(int)
     for c in consumos or []:
-        lo = _norm_lote(c.get("lote") if isinstance(c, dict) else None)
+        if not isinstance(c, dict):
+            continue
+        lo = _norm_lote(c.get("lote"))
         try:
-            bi = int((c.get("bins") if isinstance(c, dict) else 0) or 0)
+            bi = int(c.get("bins") or 0)
         except (TypeError, ValueError):
             bi = 0
-        if lo and bi > 0:
-            acc[lo] += bi
+        if not lo or bi <= 0:
+            continue
+        fr = c.get("fecha_recepcion")
+        fr_s = str(fr).strip()[:10] if fr else None
+        if fr_s == "":
+            fr_s = None
+        acc[(lo, fr_s)] += bi
     if not acc:
         raise HTTPException(
             status_code=400,
             detail="Indica al menos un consumo de desverdizado (lote + bins > 0)",
         )
-    normalizados = [{"lote": lo, "bins": bi} for lo, bi in acc.items()]
-    for c in normalizados:
-        _consumir_bins_lote(db, c["lote"], c["bins"])
+    normalizados: list[dict] = []
+    for (lo, fr_s), bi in acc.items():
+        partes = _consumir_bins_lote(db, lo, bi, fr_s)
+        if partes:
+            normalizados.extend(partes)
+        else:
+            normalizados.append(
+                {"lote": lo, "bins": bi, "fecha_recepcion": fr_s}
+            )
     return normalizados
 
 
-def _devolver_bins_lote(db: Session, lote: str, bins: int) -> None:
+def _resumen_consumos(consumos: list[dict] | None) -> str:
+    """Texto legible: 'lote@fecha:bins, ...' (fecha opcional)."""
+    parts = []
+    for c in consumos or []:
+        lo = _norm_lote(c.get("lote") if isinstance(c, dict) else None)
+        if not lo:
+            continue
+        try:
+            bi = int(c.get("bins") or 0)
+        except (TypeError, ValueError):
+            bi = 0
+        if bi <= 0:
+            continue
+        fr = c.get("fecha_recepcion") if isinstance(c, dict) else None
+        if fr:
+            parts.append(f"{lo}@{str(fr)[:10]}:{bi}")
+        else:
+            parts.append(f"{lo}:{bi}")
+    return ", ".join(parts)
+
+
+def _inferir_fechas_consumos_legacy(db: Session, consumos: list[dict]) -> list[dict]:
+    """
+    Empaques antiguos solo guardaron {lote, bins} sin fecha_recepcion.
+    Al anular, reparte cada línea por reverse-FIFO de cupo de recepción
+    (lo más nuevo con cupo libre primero = inverso del consumo FIFO).
+    Así 65 bins de 8502 vuelven al 05-ago y no se mezclan con el 03-ago.
+    """
+    from app.models.inventory import RecepcionCampo
+
+    out: list[dict] = []
+    for c in consumos or []:
+        if not isinstance(c, dict):
+            continue
+        lo = _norm_lote(c.get("lote"))
+        try:
+            bi = int(c.get("bins") or 0)
+        except (TypeError, ValueError):
+            bi = 0
+        if not lo or bi <= 0:
+            continue
+        fr_exist = c.get("fecha_recepcion")
+        if fr_exist:
+            out.append(
+                {
+                    "lote": lo,
+                    "bins": bi,
+                    "fecha_recepcion": str(fr_exist).strip()[:10],
+                }
+            )
+            continue
+
+        # Stock actual por fecha
+        candidatos = _match_desverdizado_por_lote(db, lo)
+        stock_por_fecha: dict = {}
+        for r in candidatos:
+            if (r.estado or "").lower() == "eliminado":
+                continue
+            if not r.fecha_recepcion:
+                continue
+            stock_por_fecha[r.fecha_recepcion] = stock_por_fecha.get(
+                r.fecha_recepcion, 0
+            ) + int(r.cantidad_bins or 0)
+
+        # Recibido por fecha
+        recv_por_fecha: dict = {}
+        recs = (
+            db.query(RecepcionCampo)
+            .filter(RecepcionCampo.producto == Producto.LIMON_AMARILLO)
+            .order_by(RecepcionCampo.id.desc())
+            .all()
+        )
+        for rec in recs:
+            if _norm_lote(rec.lote).casefold() != lo.casefold():
+                continue
+            fr = getattr(rec, "fecha_corte", None) or getattr(rec, "fecha", None)
+            if not fr:
+                continue
+            recv_por_fecha[fr] = recv_por_fecha.get(fr, 0) + int(
+                rec.cantidad_bins or 0
+            )
+
+        restante = bi
+        # reverse-FIFO: fechas más nuevas primero
+        for fr in sorted(
+            set(list(recv_por_fecha.keys()) + list(stock_por_fecha.keys())),
+            reverse=True,
+        ):
+            if restante <= 0:
+                break
+            recibido = int(recv_por_fecha.get(fr, 0))
+            actual = int(stock_por_fecha.get(fr, 0))
+            cupo = max(0, recibido - actual) if recibido > 0 else 0
+            if cupo <= 0:
+                continue
+            tomar = min(restante, cupo)
+            out.append(
+                {
+                    "lote": lo,
+                    "bins": tomar,
+                    "fecha_recepcion": str(fr),
+                }
+            )
+            stock_por_fecha[fr] = actual + tomar
+            restante -= tomar
+
+        if restante > 0:
+            # Sin cupo inferible: devolver sin fecha (fallback reverse-FIFO en _devolver)
+            out.append({"lote": lo, "bins": restante})
+    return out
+
+
+def _devolver_bins_lote(
+    db: Session, lote: str, bins: int, fecha_recepcion=None
+) -> None:
     """
     Devuelve bins a desverdizado al anular/editar empaque.
-    Prefiere fila existente del mismo lote (empaquetado > con stock > otras).
-    Solo crea fila nueva si no hay ninguna del lote; intenta vincular recepcion_id.
+
+    Si se conoce fecha_recepcion (corte), devuelve a esa fila o crea una con esa fecha
+    (evita mezclar p.ej. corte 03-ago con 05-ago del mismo lote).
+
+    Sin fecha: reverse-FIFO por recepción:
+      el consumo FIFO saca primero lo más viejo, así que al devolver se rellena
+      primero la capacidad libre de las recepciones más nuevas (p.ej. 05-ago antes
+      que 03-ago). Nunca mezcla todo en una sola fecha si hay cupo en otra.
     """
+    from datetime import date, timedelta
+    from app.core.constants import DIAS_DESVERDIZADO
+    from app.models.inventory import RecepcionCampo
+
     bins = int(bins or 0)
     lote_n = _norm_lote(lote)
     if bins <= 0 or not lote_n:
         return
 
+    fecha_obj = _parse_fecha_opt(fecha_recepcion)
     candidatos = _match_desverdizado_por_lote(db, lote_n)
 
-    def sort_key(r):
-        est = (r.estado or "").lower()
-        if est == "empaquetado":
-            prio = 0
-        elif est == "eliminado":
-            prio = 3
-        elif (r.cantidad_bins or 0) > 0:
-            prio = 1
-        else:
-            prio = 2
-        return (prio, -(r.id or 0))
-
-    candidatos = sorted(candidatos, key=sort_key)
-    des = candidatos[0] if candidatos else None
-
-    if des:
+    def _add_to_row(des, n: int) -> None:
         des.lote = _norm_lote(des.lote) or lote_n
-        des.cantidad_bins = int(des.cantidad_bins or 0) + bins
-        # Reactivar sin inventar estados raros; unificar a listo_empaque si estaba cerrado
+        des.cantidad_bins = int(des.cantidad_bins or 0) + int(n)
         if (des.estado or "").lower() in ("empaquetado", "eliminado", ""):
             des.estado = "listo_empaque"
         elif (des.estado or "").lower() not in ("en_desverdizado", "listo_empaque"):
             des.estado = "listo_empaque"
+
+    def _crear_fila(fecha_rec: date, n: int, recepcion_id=None) -> None:
+        nuevo = InventarioDesverdizado(
+            producto=Producto.LIMON_AMARILLO,
+            cantidad_bins=int(n),
+            lote=lote_n,
+            fecha_recepcion=fecha_rec,
+            fecha_tentativa_salida=fecha_rec + timedelta(days=DIAS_DESVERDIZADO),
+            estado="listo_empaque",
+            recepcion_id=recepcion_id,
+        )
+        db.add(nuevo)
+
+    def _recs_lote() -> list:
+        return [
+            r
+            for r in (
+                db.query(RecepcionCampo)
+                .filter(RecepcionCampo.producto == Producto.LIMON_AMARILLO)
+                .order_by(RecepcionCampo.id.desc())
+                .all()
+            )
+            if _norm_lote(r.lote).casefold() == lote_n.casefold()
+        ]
+
+    # 1) Match exacto por fecha de corte si la conocemos
+    if fecha_obj is not None:
+        same_fecha = [
+            r
+            for r in candidatos
+            if r.fecha_recepcion
+            and r.fecha_recepcion == fecha_obj
+            and (r.estado or "").lower() != "eliminado"
+        ]
+        if same_fecha:
+            same_fecha.sort(
+                key=lambda r: (
+                    0
+                    if (r.estado or "").lower() == "empaquetado"
+                    or int(r.cantidad_bins or 0) == 0
+                    else 1,
+                    -(r.id or 0),
+                )
+            )
+            _add_to_row(same_fecha[0], bins)
+            db.flush()
+            return
+
+        recs = _recs_lote()
+        rec = next(
+            (
+                r
+                for r in recs
+                if getattr(r, "fecha_corte", None) == fecha_obj
+                or getattr(r, "fecha", None) == fecha_obj
+            ),
+            None,
+        )
+        _crear_fila(fecha_obj, bins, rec.id if rec else None)
         db.flush()
         return
 
-    # Sin filas del lote: último recurso — crear vinculando recepción histórica si existe
-    from datetime import date, timedelta
-    from app.core.constants import DIAS_DESVERDIZADO
-    from app.models.inventory import RecepcionCampo
+    # 2) Sin fecha: reverse-FIFO por cupo de recepción (más nueva primero)
+    # stock actual por fecha de corte
+    stock_por_fecha: dict = {}
+    rows_por_fecha: dict = {}
+    for r in candidatos:
+        if (r.estado or "").lower() == "eliminado":
+            continue
+        fr = r.fecha_recepcion
+        if not fr:
+            continue
+        stock_por_fecha[fr] = stock_por_fecha.get(fr, 0) + int(r.cantidad_bins or 0)
+        rows_por_fecha.setdefault(fr, []).append(r)
 
-    rec = (
-        db.query(RecepcionCampo)
-        .filter(RecepcionCampo.producto == Producto.LIMON_AMARILLO)
-        .order_by(RecepcionCampo.id.desc())
-        .all()
-    )
-    rec_match = next(
-        (r for r in rec if _norm_lote(r.lote).casefold() == lote_n.casefold()),
-        None,
-    )
+    # Recepciones del lote: fecha → (cantidad recibida, recepcion_id)
+    recv_por_fecha: dict = {}
+    for rec in _recs_lote():
+        fr = getattr(rec, "fecha_corte", None) or getattr(rec, "fecha", None)
+        if not fr:
+            continue
+        prev = recv_por_fecha.get(fr)
+        if prev:
+            recv_por_fecha[fr] = (prev[0] + int(rec.cantidad_bins or 0), prev[1])
+        else:
+            recv_por_fecha[fr] = (int(rec.cantidad_bins or 0), rec.id)
+
+    restante = bins
+    # Cupo libre = recibido − stock actual (lo que se “puede” reponer en esa fecha)
+    fechas_orden = sorted(set(list(recv_por_fecha.keys()) + list(stock_por_fecha.keys())), reverse=True)
+    for fr in fechas_orden:
+        if restante <= 0:
+            break
+        recibido, rec_id = recv_por_fecha.get(fr, (0, None))
+        actual = int(stock_por_fecha.get(fr, 0))
+        # Si no hay recepción registrada, no inventar cupo; se maneja al final
+        if recibido <= 0 and fr not in stock_por_fecha:
+            continue
+        cupo = max(0, recibido - actual) if recibido > 0 else 0
+        # Filas vacías/empaquetadas de esa fecha también absorben sin límite de cupo
+        # (por si recepción no está o cantidades desfasadas)
+        vacias = [
+            r
+            for r in rows_por_fecha.get(fr, [])
+            if int(r.cantidad_bins or 0) == 0
+            or (r.estado or "").lower() == "empaquetado"
+        ]
+        if cupo <= 0 and not vacias:
+            continue
+        tomar = restante if vacias and cupo <= 0 else min(restante, cupo if cupo > 0 else restante)
+        if tomar <= 0:
+            continue
+        if vacias:
+            vacias.sort(key=lambda r: -(r.id or 0))
+            _add_to_row(vacias[0], tomar)
+        elif fr in rows_por_fecha and rows_por_fecha[fr]:
+            # Hay fila con stock parcial de esa fecha: sumar ahí (misma fecha OK)
+            rows_por_fecha[fr].sort(key=lambda r: -(r.id or 0))
+            _add_to_row(rows_por_fecha[fr][0], tomar)
+        else:
+            _crear_fila(fr, tomar, rec_id)
+        stock_por_fecha[fr] = actual + tomar
+        restante -= tomar
+
+    if restante <= 0:
+        db.flush()
+        return
+
+    # 3) Resto: preferir filas empaquetadas/vacías (fecha más nueva), si no crear
+    #    con la recepción más reciente del lote
+    vacias_glob = [
+        r
+        for r in candidatos
+        if (r.estado or "").lower() != "eliminado"
+        and (
+            int(r.cantidad_bins or 0) == 0
+            or (r.estado or "").lower() == "empaquetado"
+        )
+    ]
+    if vacias_glob:
+        vacias_glob.sort(
+            key=lambda r: (r.fecha_recepcion or date.min, r.id or 0),
+            reverse=True,
+        )
+        _add_to_row(vacias_glob[0], restante)
+        db.flush()
+        return
+
+    # Último recurso: NO mezclar en fila de otra fecha con stock.
+    # Crear con recepción más reciente del lote.
+    recs = _recs_lote()
+    rec_match = recs[0] if recs else None
     hoy = date.today()
     fecha_rec = (
-        getattr(rec_match, "fecha_corte", None)
-        or getattr(rec_match, "fecha", None)
-        or hoy
+        (getattr(rec_match, "fecha_corte", None) or getattr(rec_match, "fecha", None))
+        if rec_match
+        else hoy
     )
-    nuevo = InventarioDesverdizado(
-        producto=Producto.LIMON_AMARILLO,
-        cantidad_bins=bins,
-        lote=lote_n,
-        fecha_recepcion=fecha_rec,
-        fecha_tentativa_salida=fecha_rec + timedelta(days=DIAS_DESVERDIZADO),
-        estado="listo_empaque",
-        recepcion_id=rec_match.id if rec_match else None,
-    )
-    db.add(nuevo)
+    # Si ya existe fila de esa fecha, sumar ahí
+    same = [
+        r
+        for r in candidatos
+        if r.fecha_recepcion == fecha_rec and (r.estado or "").lower() != "eliminado"
+    ]
+    if same:
+        same.sort(key=lambda r: -(r.id or 0))
+        _add_to_row(same[0], restante)
+    else:
+        _crear_fila(fecha_rec, restante, rec_match.id if rec_match else None)
     db.flush()
 
 
@@ -341,13 +645,106 @@ def _consolidar_filas_inventario(db: Session, rows: list, mercado) -> object | N
     return keep
 
 
-def _ajustar_inventario_final(db: Session, producto: Producto, mercado, produccion: list, signo: int) -> None:
+def _restar_una_linea_final(
+    db: Session,
+    mercado,
+    linea: dict,
+    *,
+    best_effort: bool = False,
+) -> tuple[int, str | None]:
+    """
+    Resta una línea de producción del inventario final.
+    Devuelve (cantidad_restada, problema|None).
+    best_effort=True: resta lo disponible (puede ser parcial) y reporta faltante.
+    best_effort=False: exige stock completo o lanza HTTP 400.
+    """
+    pres = (linea.get("presentacion") or "").strip()
+    cant = int(linea.get("cantidad") or 0)
+    talla_val = _talla_for_pres(pres, linea.get("talla"))
+    lote_val = _norm_lote_extra(linea.get("lote"))
+    fecha_val = _norm_fecha_emp(linea.get("fecha_empaque") or linea.get("fecha"))
+    if not pres or cant <= 0:
+        return 0, None
+
+    label = _sku_label(pres, talla_val, lote_val, fecha_val)
+    rows = _rows_para_ajuste(
+        db,
+        pres,
+        talla_val,
+        mercado,
+        lote_val,
+        fecha_val,
+        al_restar=True,
+    )
+    if len(rows) > 1:
+        keep = _consolidar_filas_inventario(db, rows, mercado)
+        rows = [keep] if keep is not None else rows
+    # Releer filas por si consolidó
+    if not rows:
+        rows = _rows_para_ajuste(
+            db, pres, talla_val, mercado, lote_val, fecha_val, al_restar=True
+        )
+    total = sum(int(r.cantidad_stock or 0) for r in rows if r is not None)
+    if total <= 0:
+        msg = f"Stock insuficiente de {label} (hay 0, se intentan restar {cant})"
+        if best_effort:
+            return 0, msg
+        raise HTTPException(status_code=400, detail=msg)
+    if total < cant and not best_effort:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Stock insuficiente de {label} "
+                f"(hay {total}, se intentan restar {cant})"
+            ),
+        )
+
+    a_restar = min(cant, total)
+    restante = a_restar
+    for inv in rows:
+        if inv is None or restante <= 0:
+            continue
+        disp = int(inv.cantidad_stock or 0)
+        if disp <= 0:
+            continue
+        toma = min(disp, restante)
+        inv.cantidad_stock = disp - toma
+        inv.fecha_actualizacion = datetime.utcnow()
+        restante -= toma
+
+    problema = None
+    if a_restar < cant:
+        problema = (
+            f"Stock parcial de {label}: se revirtieron {a_restar} de {cant} "
+            f"(faltan {cant - a_restar}; probablemente ya se convirtieron/embarcaron)"
+        )
+    return a_restar, problema
+
+
+def _ajustar_inventario_final(
+    db: Session,
+    producto: Producto,
+    mercado,
+    produccion: list,
+    signo: int,
+    *,
+    best_effort: bool = False,
+) -> tuple[list[dict], list[str]]:
     """
     Suma (signo=+1) o resta (signo=-1) producción en inventario final.
-    Resta: descuenta en FIFO sobre TODAS las filas del mismo SKU (talla/lote/fecha),
-    porque pueden existir filas duplicadas y la UI ya muestra el total sumado.
-    Suma: consolida duplicados y suma en una sola fila (no crea otra igual).
+
+    Resta: descuenta en FIFO sobre TODAS las filas del mismo SKU (talla/lote/fecha).
+    Suma: consolida duplicados y suma en una sola fila.
+
+    best_effort (solo resta): no aborta si una línea no tiene stock completo;
+    revierte lo posible en cada línea y devuelve (revertidas, problemas).
+    Así anular no deja granel/cartón huérfanos cuando otra línea falló primero.
+
+    Devuelve (lineas_aplicadas, problemas).
     """
+    aplicadas: list[dict] = []
+    problemas: list[str] = []
+
     for linea in produccion or []:
         pres = (linea.get("presentacion") or "").strip()
         cant = int(linea.get("cantidad") or 0)
@@ -367,6 +764,26 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 detail="RPC a granel requiere fecha de empaque (día de la corrida)",
             )
 
+        if signo < 0:
+            restado, problema = _restar_una_linea_final(
+                db, mercado, linea, best_effort=best_effort
+            )
+            if restado > 0:
+                aplicadas.append(
+                    {
+                        "presentacion": pres,
+                        "talla": talla_val,
+                        "lote": lote_val,
+                        "fecha_empaque": fecha_val,
+                        "cantidad": restado,
+                        "solicitado": cant,
+                    }
+                )
+            if problema:
+                problemas.append(problema)
+            continue
+
+        # signo > 0: sumar
         label = _sku_label(pres, talla_val, lote_val, fecha_val)
         rows = _rows_para_ajuste(
             db,
@@ -375,42 +792,8 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
             mercado,
             lote_val,
             fecha_val,
-            al_restar=(signo < 0),
+            al_restar=False,
         )
-
-        if signo < 0:
-            # Consolidar duplicados y luego restar del total
-            if len(rows) > 1:
-                keep = _consolidar_filas_inventario(db, rows, mercado)
-                rows = [keep] if keep is not None else rows
-            total = sum(int(r.cantidad_stock or 0) for r in rows)
-            if total < cant:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        f"Stock insuficiente de {label} "
-                        f"(hay {total}, se intentan restar {cant})"
-                    ),
-                )
-            restante = cant
-            for inv in rows:
-                if restante <= 0:
-                    break
-                disp = int(inv.cantidad_stock or 0)
-                if disp <= 0:
-                    continue
-                toma = min(disp, restante)
-                inv.cantidad_stock = disp - toma
-                inv.fecha_actualizacion = datetime.utcnow()
-                restante -= toma
-            if restante > 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Stock insuficiente de {label} (faltaron {restante})",
-                )
-            continue
-
-        # signo > 0: sumar — preferir fila existente (fusionando duplicados)
         if rows:
             if len(rows) > 1:
                 keep = _consolidar_filas_inventario(db, rows, mercado)
@@ -419,6 +802,15 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
             if keep is not None:
                 keep.cantidad_stock = int(keep.cantidad_stock or 0) + cant
                 keep.fecha_actualizacion = datetime.utcnow()
+                aplicadas.append(
+                    {
+                        "presentacion": pres,
+                        "talla": talla_val,
+                        "lote": lote_val,
+                        "fecha_empaque": fecha_val,
+                        "cantidad": cant,
+                    }
+                )
                 continue
 
         calidad = _calidad_pres(pres)
@@ -442,6 +834,17 @@ def _ajustar_inventario_final(db: Session, producto: Producto, mercado, producci
                 fecha_actualizacion=datetime.utcnow(),
             )
         )
+        aplicadas.append(
+            {
+                "presentacion": pres,
+                "talla": talla_val,
+                "lote": lote_val,
+                "fecha_empaque": fecha_val,
+                "cantidad": cant,
+            }
+        )
+
+    return aplicadas, problemas
 
 
 def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[str]:
@@ -688,9 +1091,7 @@ def crear_empaque(
             lineas_guardadas, consumos, fecha_empaque=str(fecha_emp)
         )
         bins_usados = sum(int(c.get("bins") or 0) for c in consumos)
-        lotes = ", ".join(
-            f"{c.get('lote')}:{c.get('bins')}" for c in consumos if c.get("lote")
-        ) or empaque.lote_desverdizado
+        lotes = _resumen_consumos(consumos) or empaque.lote_desverdizado
         detalle_corrida = {
             "consumos": consumos,
             "produccion": lineas_guardadas,
@@ -791,7 +1192,11 @@ def _norm_consumos(raw: list | None) -> list[dict]:
         bins = int(c.get("bins") or 0)
         if not lote or bins <= 0:
             continue
-        out.append({"lote": lote, "bins": bins})
+        row: dict = {"lote": lote, "bins": bins}
+        fr = c.get("fecha_recepcion")
+        if fr:
+            row["fecha_recepcion"] = str(fr).strip()[:10]
+        out.append(row)
     return out
 
 
@@ -901,6 +1306,8 @@ def editar_empaque_completo(
             "lote": emp.lote_desverdizado or "SIN_LOTE",
             "bins": int(emp.bins_desverdizado_usados),
         }]
+    # Empaques legacy sin fecha_recepcion → inferir por reverse-FIFO
+    old_consumos = _inferir_fechas_consumos_legacy(db, old_consumos)
     old_produccion = _norm_produccion(detalle.get("produccion"))
     if not old_produccion and emp.presentacion and emp.cantidad_producida:
         old_produccion = [{
@@ -909,11 +1316,16 @@ def editar_empaque_completo(
             "cantidad": emp.cantidad_producida,
         }]
 
-    new_consumos = (
-        _norm_consumos(body.consumos)
-        if body.consumos is not None
-        else old_consumos
-    )
+    es_conversion = detalle.get("tipo") == "conversion_rpc_granel"
+
+    # Consumos: si el cliente manda lista vacía o null, conservar los del proceso.
+    # Agregar jugo/cartón no implica nuevos bins de campo: salen de los ya usados.
+    if body.consumos is None:
+        new_consumos = list(old_consumos)
+    else:
+        new_consumos = _norm_consumos(body.consumos)
+        if not new_consumos and old_consumos:
+            new_consumos = list(old_consumos)
     new_produccion = (
         _norm_produccion(body.produccion)
         if body.produccion is not None
@@ -930,26 +1342,57 @@ def editar_empaque_completo(
         new_produccion = _recuperar_lotes_granel_desde_old(
             old_produccion, new_produccion
         )
+        # Para etiquetar granel: consumos del proceso o lotes ya en producción vieja
+        cons_para_etiqueta = new_consumos or old_consumos
+        if not cons_para_etiqueta:
+            # fallback: lotes presentes en producción anterior (granel WIP)
+            cons_para_etiqueta = [
+                {"lote": _norm_lote_extra(p.get("lote")), "bins": 1}
+                for p in old_produccion
+                if _norm_lote_extra(p.get("lote"))
+            ]
         new_produccion = _etiquetar_produccion_con_lote(
             new_produccion,
-            new_consumos or old_consumos,
+            cons_para_etiqueta,
             fecha_empaque=str(fecha_edit) if fecha_edit else None,
         )
 
-    if body.consumos is not None and not new_consumos:
-        raise HTTPException(status_code=400, detail="Debe haber al menos un consumo (lote + bins > 0)")
+    if not new_consumos and not es_conversion and body.produccion is not None:
+        # Empaque desde desverdizado sin consumos conocidos: solo bloquear si tampoco
+        # hay producción solo de ajustes imposibles. Conversión sí puede no tener consumos.
+        if not old_consumos and emp.bins_desverdizado_usados:
+            new_consumos = [{
+                "lote": _norm_lote(emp.lote_desverdizado) or "SIN_LOTE",
+                "bins": int(emp.bins_desverdizado_usados),
+            }]
     if body.produccion is not None and not new_produccion:
         raise HTTPException(status_code=400, detail="Debe haber al menos una línea de producción")
 
-    # 1) Devolver consumos viejos al desverdizado
-    for c in old_consumos:
-        _devolver_bins_lote(db, c["lote"], c["bins"])
+    def _clave_consumo(c: dict) -> tuple:
+        return (
+            _norm_lote(c.get("lote")).casefold(),
+            int(c.get("bins") or 0),
+            str(c.get("fecha_recepcion") or "")[:10],
+        )
 
-    # 2) Consumir nuevos lotes (agrupados / match flexible)
-    if new_consumos:
-        new_consumos = _agregar_consumos_desverdizado(db, new_consumos)
+    consumos_cambiaron = sorted(_clave_consumo(c) for c in old_consumos) != sorted(
+        _clave_consumo(c) for c in new_consumos
+    )
+
+    # 1–2) Solo mover desverdizado si los lotes/bins de campo cambiaron.
+    #     Si solo se agrega jugo/cartón/granel a la producción, no se tocan bins.
+    if consumos_cambiaron:
+        for c in old_consumos:
+            _devolver_bins_lote(
+                db, c["lote"], c["bins"], c.get("fecha_recepcion")
+            )
+        if new_consumos:
+            new_consumos = _agregar_consumos_desverdizado(db, new_consumos)
+        else:
+            new_consumos = []
     else:
-        new_consumos = []
+        # Conservar desglose con fecha_recepcion del registro original
+        new_consumos = list(old_consumos) if old_consumos else list(new_consumos)
 
     # 3) Ajuste NETO de producción (no restar todo y sumar: evita fallos de stock intermedio)
     mercado_dest = body.mercado if body.mercado is not None else emp.mercado
@@ -968,14 +1411,15 @@ def editar_empaque_completo(
             signo=int(net["_signo"]),
         )
 
-    bins_total = sum(c["bins"] for c in new_consumos)
-    lotes = ", ".join(f"{c['lote']}:{c['bins']}" for c in new_consumos)
+    bins_total = sum(int(c.get("bins") or 0) for c in new_consumos) or int(
+        detalle.get("bins_campo") or emp.bins_desverdizado_usados or 0
+    )
     detalle = {
         **detalle,
         "consumos": new_consumos,
         "produccion": new_produccion,
         "bins_campo": bins_total,
-        "lotes_resumen": lotes,
+        "lotes_resumen": _resumen_consumos(new_consumos) or detalle.get("lotes_resumen"),
         "editado_por": getattr(current_user, "username", None),
     }
     emp.detalle_corrida = detalle
@@ -1024,18 +1468,24 @@ def agregar_consumo_lote(
     if detalle.get("anulado"):
         raise HTTPException(status_code=400, detail="El empaque está anulado")
 
-    _consumir_bins_lote(db, body.lote.strip(), body.bins)
+    fr_body = getattr(body, "fecha_recepcion", None)
+    partes = _consumir_bins_lote(db, body.lote.strip(), body.bins, fr_body)
 
     consumos = list(detalle.get("consumos") or [])
-    consumos.append({"lote": body.lote.strip(), "bins": body.bins})
+    if partes:
+        consumos.extend(partes)
+    else:
+        row = {"lote": body.lote.strip(), "bins": body.bins}
+        if fr_body:
+            row["fecha_recepcion"] = str(fr_body).strip()[:10]
+        consumos.append(row)
     bins_total = sum(int(c.get("bins") or 0) for c in consumos)
-    lotes = ", ".join(f"{c.get('lote')}:{c.get('bins')}" for c in consumos if c.get("lote"))
     detalle = {
         **detalle,
         "consumos": consumos,
         "produccion": detalle.get("produccion") or [],
         "bins_campo": bins_total,
-        "lotes_resumen": lotes,
+        "lotes_resumen": _resumen_consumos(consumos),
     }
     emp.detalle_corrida = detalle
     _sync_legacy_empaque_fields(
@@ -1127,6 +1577,9 @@ def anular_empaque(
         raise HTTPException(status_code=400, detail="Este empaque ya está anulado")
 
     consumos = _consumos_desde_empaque(emp, detalle)
+    # Crítico: empaques viejos sin fecha_recepcion → inferir por cupo de recepción
+    # (reverse-FIFO) para no devolver bins del 05-ago al stock del 03-ago del mismo lote.
+    consumos = _inferir_fechas_consumos_legacy(db, consumos)
     produccion = _norm_produccion(detalle.get("produccion"))
     if not produccion and emp.presentacion and emp.cantidad_producida:
         produccion = [{
@@ -1153,31 +1606,62 @@ def anular_empaque(
             ),
         )
 
-    # 1) PRIMERO devolver bins a desverdizado (campo)
+    # 1) PRIMERO devolver bins a desverdizado (campo) — por lote y fecha de corte
     bins_devueltos = 0
+    detalle_bins_devueltos: list[dict] = []
     for c in consumos:
         b = int(c.get("bins") or 0)
         lo = _norm_lote(c.get("lote"))
         if b > 0 and lo:
-            _devolver_bins_lote(db, lo, b)
+            fr = c.get("fecha_recepcion")
+            _devolver_bins_lote(db, lo, b, fr)
             bins_devueltos += b
+            item = {"lote": lo, "bins": b}
+            if fr:
+                item["fecha_recepcion"] = fr
+            detalle_bins_devueltos.append(item)
 
-    # 2) Restar producción del inventario final
+    # 2) Restar producción del inventario final (cartón, RPC, granel, jugo…)
+    #    best_effort al forzar: revierte CADA línea posible (antes se abortaba en la
+    #    primera falta y quedaba granel/cartón del proceso en inventario).
     stock_final_ok = True
+    produccion_revertida: list[dict] = []
+    problemas_rev: list[str] = []
     if produccion:
         try:
-            _ajustar_inventario_final(db, emp.producto, emp.mercado, produccion, signo=-1)
+            produccion_revertida, problemas_rev = _ajustar_inventario_final(
+                db,
+                emp.producto,
+                emp.mercado,
+                produccion,
+                signo=-1,
+                best_effort=bool(forzar),
+            )
         except HTTPException as e:
-            # Solo llega aquí si forzar=True y el stock cambió entre check y apply
             if e.status_code == 400 and forzar:
-                detalle["aviso_anulacion"] = str(e.detail)
-                stock_final_ok = False
+                # Seguridad: reintentar línea a línea en best_effort
+                produccion_revertida, problemas_rev = _ajustar_inventario_final(
+                    db,
+                    emp.producto,
+                    emp.mercado,
+                    produccion,
+                    signo=-1,
+                    best_effort=True,
+                )
+                if not problemas_rev:
+                    problemas_rev = [str(e.detail)]
             else:
                 raise
+        if problemas_rev:
+            stock_final_ok = False
+            detalle["aviso_anulacion"] = " | ".join(problemas_rev)
 
-    if problemas_final and forzar and "aviso_anulacion" not in detalle:
-        detalle["aviso_anulacion"] = " | ".join(problemas_final)
-        stock_final_ok = False
+    if problemas_final and forzar and not stock_final_ok:
+        # Mantener pre-check en el aviso si aporta contexto extra
+        extra_pre = [p for p in problemas_final if p not in (detalle.get("aviso_anulacion") or "")]
+        if extra_pre and not problemas_rev:
+            detalle["aviso_anulacion"] = " | ".join(problemas_final)
+            stock_final_ok = False
 
     # 3) Conversión granel→final: devolver el granel consumido (SIEMPRE, no silenciar)
     granel_devuelto = 0
@@ -1211,6 +1695,18 @@ def anular_empaque(
             )
             granel_devuelto = sum(int(g.get("cantidad") or 0) for g in consumos_g)
 
+    # Marcar si el inventario final quedó como antes del proceso
+    n_prod = sum(1 for p in (produccion or []) if int(p.get("cantidad") or 0) > 0)
+    n_rev_ok = sum(
+        1
+        for r in produccion_revertida
+        if int(r.get("cantidad") or 0) >= int(r.get("solicitado") or r.get("cantidad") or 0)
+    )
+    if produccion and not stock_final_ok:
+        pass  # ya marcado
+    elif produccion and n_prod > 0 and n_rev_ok < n_prod:
+        stock_final_ok = False
+
     detalle = {
         **detalle,
         "consumos": consumos,
@@ -1219,6 +1715,9 @@ def anular_empaque(
         "anulado": True,
         "anulado_por": getattr(current_user, "username", None),
         "bins_devueltos": bins_devueltos,
+        "detalle_bins_devueltos": detalle_bins_devueltos,
+        "produccion_revertida": produccion_revertida,
+        "inventario_final_ok": bool(stock_final_ok),
         "granel_devuelto": granel_devuelto,
         "anulado_forzado": bool(forzar and not stock_final_ok),
     }
@@ -1228,14 +1727,28 @@ def anular_empaque(
     flag_modified(emp, "detalle_corrida")
     db.commit()
 
-    msg = f"Empaque anulado; {bins_devueltos} bins devueltos a desverdizado"
+    # Mensaje multi-lote explícito (evitar “solo vi 38” cuando hubo 38+28)
+    if detalle_bins_devueltos:
+        partes = [f"{d['lote']}: {d['bins']}" for d in detalle_bins_devueltos]
+        msg = (
+            f"Empaque anulado. Bins devueltos a desverdizado: "
+            f"{bins_devueltos} total ({', '.join(partes)})"
+        )
+    else:
+        msg = f"Empaque anulado; {bins_devueltos} bins devueltos a desverdizado"
     if granel_devuelto > 0:
         msg += f"; {granel_devuelto} RPC a granel devueltos a inventario"
+    if produccion_revertida:
+        n_u = sum(int(r.get("cantidad") or 0) for r in produccion_revertida)
+        msg += f"; inventario final revertido: {n_u} u. (granel/cartón/RPC/jugo)"
     if detalle.get("aviso_anulacion"):
-        msg += f" (aviso inventario final: {detalle['aviso_anulacion']})"
+        msg += f" (aviso: {detalle['aviso_anulacion']})"
+    if stock_final_ok and produccion:
+        msg += "; estado de inventarios restaurado"
     if (
         bins_devueltos <= 0
         and granel_devuelto <= 0
+        and not produccion_revertida
         and detalle.get("tipo") != "conversion_rpc_granel"
     ):
         msg += " — no se encontraron consumos de bins en el registro"
@@ -1248,6 +1761,7 @@ def anular_empaque(
         stock_final_revertido=stock_final_ok,
         forzado=bool(forzar and not stock_final_ok),
         aviso=detalle.get("aviso_anulacion"),
+        detalle_bins_devueltos=detalle_bins_devueltos,
     )
 
 
@@ -1258,8 +1772,12 @@ def reparar_devolucion_anulacion(
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
-    Repara un empaque YA anulado que no devolvió bins de campo y/o RPC a granel.
-    Idempotente: solo devuelve lo que aún falte respecto al stock actual.
+    Repara un empaque YA anulado que no revirtió todo el estado previo:
+    - bins de campo a desverdizado
+    - producción en inventario final (cartón, RPC, granel WIP, jugo)
+    - granel consumido en conversiones
+
+    Idempotente: solo aplica lo que aún falte.
     """
     emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
     if not emp:
@@ -1274,21 +1792,130 @@ def reparar_devolucion_anulacion(
     acciones: list[str] = []
     bins_devueltos = 0
     granel_devuelto = 0
+    prod_extra: list[dict] = []
 
     # Bins de campo
-    consumos = _consumos_desde_empaque(emp, detalle)
+    consumos = _inferir_fechas_consumos_legacy(
+        db, _consumos_desde_empaque(emp, detalle)
+    )
     prev_bins = int(detalle.get("bins_devueltos") or 0)
     if consumos and prev_bins <= 0:
         for c in consumos:
             b = int(c.get("bins") or 0)
             lo = _norm_lote(c.get("lote"))
             if b > 0 and lo:
-                _devolver_bins_lote(db, lo, b)
+                _devolver_bins_lote(db, lo, b, c.get("fecha_recepcion"))
                 bins_devueltos += b
         if bins_devueltos > 0:
             acciones.append(f"{bins_devueltos} bins → desverdizado")
             detalle["bins_devueltos"] = bins_devueltos
             detalle["consumos"] = consumos
+            detalle["detalle_bins_devueltos"] = [
+                {
+                    "lote": _norm_lote(c.get("lote")),
+                    "bins": int(c.get("bins") or 0),
+                    **(
+                        {"fecha_recepcion": c["fecha_recepcion"]}
+                        if c.get("fecha_recepcion")
+                        else {}
+                    ),
+                }
+                for c in consumos
+                if int(c.get("bins") or 0) > 0 and _norm_lote(c.get("lote"))
+            ]
+
+    # Producción del empaque aún en inventario final (granel/cartón/jugo no restados)
+    # Si anulación forzada abortó a medias, completar la resta best-effort.
+    prev_rev = detalle.get("produccion_revertida") or []
+    ya_rev: dict[tuple, int] = {}
+    for r in prev_rev:
+        key = (
+            (r.get("presentacion") or "").strip(),
+            _talla_for_pres(r.get("presentacion"), r.get("talla")),
+            _norm_lote_extra(r.get("lote")),
+            _norm_fecha_emp(r.get("fecha_empaque") or r.get("fecha")),
+        )
+        ya_rev[key] = ya_rev.get(key, 0) + int(r.get("cantidad") or 0)
+
+    produccion = _norm_produccion(detalle.get("produccion"))
+    pendiente: list[dict] = []
+    for p in produccion:
+        key = (
+            (p.get("presentacion") or "").strip(),
+            _talla_for_pres(p.get("presentacion"), p.get("talla")),
+            _norm_lote_extra(p.get("lote")),
+            _norm_fecha_emp(p.get("fecha_empaque") or p.get("fecha")),
+        )
+        sol = int(p.get("cantidad") or 0)
+        hecho = int(ya_rev.get(key, 0))
+        # Si no hay registro de reverso (anulación vieja), asumir 0 y restar lo que quede en stock
+        falta = max(0, sol - hecho) if prev_rev else sol
+        if falta <= 0:
+            continue
+        # Si ya se marcó inventario_final_ok, no re-restar
+        if detalle.get("inventario_final_ok") is True and prev_rev:
+            continue
+        pendiente.append({**p, "cantidad": falta})
+
+    # Anulaciones viejas sin produccion_revertida: el bug abortaba en la 1ª línea
+    # sin stock (p.ej. granel 140) y dejaba granel/jugo posteriores. El cartón
+    # SÍ se restaba antes del fallo → no re-restar cartón/RPC final.
+    if not prev_rev and produccion and detalle.get("inventario_final_ok") is not True:
+        if detalle.get("anulado_forzado") or detalle.get("aviso_anulacion"):
+            pendiente = [
+                p
+                for p in produccion
+                if (p.get("presentacion") or "").strip()
+                in ("rpc_granel", "bins_jugo")
+            ]
+
+    if pendiente:
+        prod_extra, probs = _ajustar_inventario_final(
+            db,
+            emp.producto,
+            emp.mercado,
+            pendiente,
+            signo=-1,
+            best_effort=True,
+        )
+        if prod_extra:
+            total_u = sum(int(x.get("cantidad") or 0) for x in prod_extra)
+            acciones.append(f"{total_u} u. producción → restadas de inventario final")
+            merged = list(prev_rev) + prod_extra
+            detalle["produccion_revertida"] = merged
+            # ¿quedó completo?
+            ok = not probs and all(
+                int(x.get("cantidad") or 0)
+                >= int(x.get("solicitado") or x.get("cantidad") or 0)
+                for x in merged
+            )
+            # Comprobar por SKU vs producción original
+            rev_tot: dict[tuple, int] = {}
+            for r in merged:
+                k = (
+                    (r.get("presentacion") or "").strip(),
+                    _talla_for_pres(r.get("presentacion"), r.get("talla")),
+                    _norm_lote_extra(r.get("lote")),
+                    _norm_fecha_emp(r.get("fecha_empaque") or r.get("fecha")),
+                )
+                rev_tot[k] = rev_tot.get(k, 0) + int(r.get("cantidad") or 0)
+            completo = True
+            for p in produccion:
+                k = (
+                    (p.get("presentacion") or "").strip(),
+                    _talla_for_pres(p.get("presentacion"), p.get("talla")),
+                    _norm_lote_extra(p.get("lote")),
+                    _norm_fecha_emp(p.get("fecha_empaque") or p.get("fecha")),
+                )
+                if rev_tot.get(k, 0) < int(p.get("cantidad") or 0):
+                    completo = False
+                    break
+            detalle["inventario_final_ok"] = completo and not probs
+            if probs:
+                detalle["aviso_anulacion"] = " | ".join(probs)
+            elif completo:
+                detalle.pop("aviso_anulacion", None)
+                detalle["anulado_forzado"] = False
 
     # Granel de conversión
     if detalle.get("tipo") == "conversion_rpc_granel":

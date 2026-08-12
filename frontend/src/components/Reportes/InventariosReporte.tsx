@@ -777,6 +777,22 @@ export default function InventariosReporte({
           <h3 style={{ marginTop: 28 }}>📦 Inventario en Desverdizado (Bins de Limón - 260kg)</h3>
           {visibleDesverdizado.length > 0 ? (
             <div style={{ display: 'grid', gap: '8px', marginBottom: '20px' }}>
+              <div
+                style={{
+                  padding: '10px 14px',
+                  background: '#e0f2fe',
+                  borderRadius: 8,
+                  fontWeight: 700,
+                  color: '#0c4a6e',
+                }}
+              >
+                Total disponible:{' '}
+                {visibleDesverdizado.reduce(
+                  (s, d) => s + (d.cantidad_bins_disponibles || 0),
+                  0
+                )}{' '}
+                bins en {visibleDesverdizado.length} lote(s)
+              </div>
               {visibleDesverdizado.map((d, idx) => (
                 <div
                   key={idx}
@@ -788,7 +804,10 @@ export default function InventariosReporte({
                   }}
                 >
                   <div>
-                    <strong>Lote: {d.lote}</strong> — {d.cantidad_bins_disponibles} bins
+                    <strong>Lote: {d.lote}</strong> —{' '}
+                    <strong style={{ color: '#14532d' }}>
+                      {d.cantidad_bins_disponibles} bins
+                    </strong>{' '}
                     disponibles
                   </div>
                   <div style={{ fontSize: '13px', color: '#475569' }}>

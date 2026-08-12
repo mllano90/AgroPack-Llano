@@ -156,16 +156,38 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const selected = empaques.find((e) => e.id === selectedId) || null;
   const anulado = Boolean(selected?.detalle_corrida?.anulado);
 
+  /** Consumos de desverdizado del empaque (nunca usar [] vacío como “no hay”). */
+  const consumosDesdeEmpaque = (e: EmpaqueRecord) => {
+    const raw = e.detalle_corrida?.consumos;
+    const fromDetalle = Array.isArray(raw)
+      ? raw
+          .map((c: any) => ({
+            lote: String(c?.lote || '').trim(),
+            bins: Number(c?.bins) || 0,
+            fecha_recepcion: c?.fecha_recepcion
+              ? String(c.fecha_recepcion).slice(0, 10)
+              : undefined,
+          }))
+          .filter((c) => c.lote && c.bins > 0)
+      : [];
+    if (fromDetalle.length > 0) return fromDetalle;
+    if (e.lote_desverdizado && (e.bins_desverdizado_usados || 0) > 0) {
+      return [
+        {
+          lote: String(e.lote_desverdizado).trim(),
+          bins: Number(e.bins_desverdizado_usados) || 0,
+        },
+      ];
+    }
+    return [] as Array<{ lote: string; bins: number; fecha_recepcion?: string }>;
+  };
+
   const loadEmpaqueDraft = (e: EmpaqueRecord) => {
     setSelectedId(e.id);
     setEditFecha(toInputDate(e.fecha));
     setEditEmpacador(e.numero_empacador || '');
     setEditMercado((e.mercado as 'nacional' | 'exportacion') || 'nacional');
-    const cons =
-      e.detalle_corrida?.consumos ||
-      (e.lote_desverdizado
-        ? [{ lote: e.lote_desverdizado, bins: e.bins_desverdizado_usados || 0 }]
-        : []);
+    const cons = consumosDesdeEmpaque(e);
     setEditConsumos(
       cons.map((c) => ({ lote: String(c.lote || ''), bins: String(c.bins ?? '') }))
     );
@@ -194,18 +216,34 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
     if (anulado) return alert('El empaque está anulado');
 
-    const consumos = editConsumos
+    const esConversion =
+      selected.detalle_corrida?.tipo === 'conversion_rpc_granel';
+
+    // Consumos del formulario; si vienen vacíos, heredar los del proceso original
+    // (p. ej. solo agregas bins jugo / cartón sin tocar lotes de campo).
+    let consumos = editConsumos
       .map((c) => ({ lote: c.lote.trim(), bins: parseInt(c.bins, 10) || 0 }))
       .filter((c) => c.lote && c.bins > 0);
+    if (consumos.length === 0) {
+      consumos = consumosDesdeEmpaque(selected).map((c) => ({
+        lote: c.lote,
+        bins: c.bins,
+      }));
+    }
+
     const lotesConsumo = new Set(consumos.map((c) => c.lote));
+    // Lotes de origen también desde granel ya capturado (conversión o prod)
+    for (const p of editProduccion) {
+      if ((p.lote || '').trim()) lotesConsumo.add(p.lote.trim());
+    }
     const loteUnico = consumos.length === 1 ? consumos[0].lote : null;
 
     const produccion = editProduccion
       .map((p) => {
         const presentacion = p.presentacion.trim();
         let lote = (p.lote || '').trim();
-        // Un solo consumo → heredar lote si no viene
-        if (!lote && loteUnico) lote = loteUnico;
+        // Un solo consumo → heredar lote si no viene (jugo/cartón no necesitan lote extra)
+        if (!lote && loteUnico && presentacion === 'rpc_granel') lote = loteUnico;
         const row: {
           presentacion: string;
           talla: string | null;
@@ -217,14 +255,23 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           talla: presentacion === 'bins_jugo' ? null : p.talla.trim() || null,
           cantidad: parseInt(p.cantidad, 10) || 0,
         };
-        if (lote) row.lote = lote;
+        // bins_jugo y finales no exigen lote; granel sí
+        if (lote && presentacion === 'rpc_granel') row.lote = lote;
+        else if (lote && presentacion !== 'bins_jugo') row.lote = lote;
         const fe = (p.fecha_empaque || editFecha || '').trim();
         if (fe) row.fecha_empaque = fe;
         return row;
       })
       .filter((p) => p.presentacion && p.cantidad > 0);
 
-    if (consumos.length === 0) return alert('Debe haber al menos un lote con bins > 0');
+    // Conversión granel→final: no hay consumos de desverdizado (es normal).
+    // Empaque desde campo: si no hay consumos ni en form ni en original, sí es error.
+    if (consumos.length === 0 && !esConversion) {
+      return alert(
+        'Este empaque no tiene lotes de desverdizado registrados.\n' +
+          'No se pueden inferir bins de origen. Revisa el historial del proceso.'
+      );
+    }
     if (produccion.length === 0) return alert('Debe haber al menos una línea de producción');
 
     // Validar granel multi-lote en cliente (mismo mensaje que el API)
@@ -236,18 +283,18 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         'Hay varios lotes en el empaque.\n\n' +
           'Cada línea de RPC a granel debe indicar el lote de origen.\n' +
           'No se perdió el dato: elige el lote en cada fila de granel y vuelve a guardar.\n\n' +
-          '(Agregar bins de jugo no requiere desvincular el granel.)'
+          '(Agregar bins de jugo no requiere desvincular el granel ni nuevos lotes de campo.)'
       );
     }
     for (const p of produccion) {
-      if (p.presentacion === 'rpc_granel' && p.lote && !lotesConsumo.has(p.lote)) {
+      if (p.presentacion === 'rpc_granel' && p.lote && lotesConsumo.size > 0) {
         // case-insensitive
         const ok = [...lotesConsumo].some(
           (l) => l.toLowerCase() === String(p.lote).toLowerCase()
         );
         if (!ok) {
           return alert(
-            `El lote "${p.lote}" de RPC a granel no está en los consumos de desverdizado.\n` +
+            `El lote "${p.lote}" de RPC a granel no está en los lotes del proceso.\n` +
               `Lotes válidos: ${[...lotesConsumo].join(', ')}`
           );
         }
@@ -257,7 +304,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     if (
       !confirm(
         `¿Guardar cambios del empaque #${selectedId}?\n\n` +
-          `Se ajustarán desverdizado e inventario final según los nuevos datos.`
+          `Se ajustará el inventario final (producción).\n` +
+          `Los bins de campo del proceso se conservan; jugo y demás salidas se asumen del mismo proceso.`
       )
     ) {
       return;
@@ -267,13 +315,18 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setError('');
     setOkMsg('');
     try {
-      const updated = await editarEmpaqueCompleto(token, selectedId, {
-        consumos,
+      // Si es conversión sin consumos de campo, no mandar consumos vacíos
+      // (el API conserva los del registro / no exige lote de desverdizado).
+      const payload: Parameters<typeof editarEmpaqueCompleto>[2] = {
         produccion,
         fecha: editFecha || null,
         numero_empacador: editEmpacador || null,
         mercado: editMercado,
-      });
+      };
+      if (consumos.length > 0) {
+        payload.consumos = consumos;
+      }
+      const updated = await editarEmpaqueCompleto(token, selectedId, payload);
       setOkMsg(`Empaque #${selectedId} actualizado`);
       await load();
       // recargar draft desde lista actualizada
@@ -1681,9 +1734,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       Producción (presentación / talla / cantidad / lote)
                     </h4>
                     <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, marginBottom: 8 }}>
-                      Si hay <strong>varios lotes</strong>, cada línea de{' '}
-                      <strong>RPC a granel</strong> debe tener su lote de origen. Al agregar jugo
-                      no borres los lotes del granel.
+                      <strong>Bins jugo</strong> y demás salidas se asumen de los{' '}
+                      <strong>mismos bins de campo</strong> ya usados en este proceso (no pidas lote
+                      nuevo). Si hay varios lotes, solo <strong>RPC a granel</strong> debe indicar
+                      lote de origen.
                     </p>
                     {editProduccion.map((p, i) => {
                       const lotesOpts = editConsumos

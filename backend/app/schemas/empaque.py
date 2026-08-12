@@ -22,7 +22,9 @@ class EmpaqueCreate(BaseModel):
     calidad: str | None = None  # legacy, automatic now
     cantidad_producida: int = 0
     # New for multiple lotes from desverdizado and per presentation output
-    consumos_desverdizado: list[dict] | None = None  # [{"lote": "L-001", "bins": 50}, ...]
+    # Preferir fecha_recepcion cuando el mismo lote tiene varios cortes:
+    # [{"lote": "8502 S2C3", "bins": 65, "fecha_recepcion": "2026-08-05"}, ...]
+    consumos_desverdizado: list[dict] | None = None
     # Structured production: granel puede llevar lote de origen
     # [{"presentacion": "rpc_granel", "talla": "165", "cantidad": 40, "lote": "8506 S1C4"}, ...]
     produccion: list[dict] | None = None
@@ -60,12 +62,16 @@ class AgregarConsumoRequest(BaseModel):
     """Corrige un empaque: descuenta bins de un lote olvidado."""
     lote: str
     bins: int
+    # Fecha de corte opcional: evita descontar del corte equivocado del mismo lote
+    fecha_recepcion: str | None = None
 
 
 class AnularEmpaqueResponse(BaseModel):
     message: str
     id: int
     bins_devueltos: int | None = None
+    # Desglose por lote: [{"lote": "8504 S1C2", "bins": 38}, ...]
+    detalle_bins_devueltos: list[dict] | None = None
     stock_final_revertido: bool | None = None
     forzado: bool | None = None
     aviso: str | None = None

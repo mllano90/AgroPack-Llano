@@ -53,11 +53,19 @@ export default function Empaque({
   const [mercadoEmpaque, setMercadoEmpaque] = useState<TipoMercado>('nacional');
   const [fechaEmpaque, setFechaEmpaque] = useState(todayInputDate());
 
-  // Limón: consumos desverdizado
+  // Limón: consumos desverdizado (incl. fecha_recepcion: mismo lote puede tener varios cortes)
   const [desverdizadoList, setDesverdizadoList] = useState<any[]>([]);
-  const [selectedLote, setSelectedLote] = useState('');
+  /** Fila seleccionada de desverdizado (lote + fecha de corte) */
+  const [selectedDesv, setSelectedDesv] = useState<{
+    id?: number;
+    lote: string;
+    fecha_recepcion?: string | null;
+    disponible: number;
+  } | null>(null);
   const [selectedBinsToUse, setSelectedBinsToUse] = useState('');
-  const [consumosDesverdizado, setConsumosDesverdizado] = useState<any[]>([]);
+  const [consumosDesverdizado, setConsumosDesverdizado] = useState<
+    Array<{ lote: string; bins: number; fecha_recepcion?: string | null }>
+  >([]);
 
   // Producción: presentación + campos fijos de talla
   const [modoLimon, setModoLimon] = useState<ModoLimon>('desverdizado');
@@ -506,7 +514,7 @@ export default function Empaque({
         setFechaEmpaque(todayInputDate());
         setConsumosDesverdizado([]);
         setLoteProduccionGranel('');
-        setSelectedLote('');
+        setSelectedDesv(null);
         setSelectedBinsToUse('');
         setConsumosGranel([]);
         setSelectedGranelKey('');
@@ -528,7 +536,7 @@ export default function Empaque({
       setFechaEmpaque(todayInputDate());
       setConsumosDesverdizado([]);
       setLoteProduccionGranel('');
-      setSelectedLote('');
+      setSelectedDesv(null);
       setSelectedBinsToUse('');
       setConsumosGranel([]);
       setSelectedGranelKey('');
@@ -572,7 +580,7 @@ export default function Empaque({
           setCajasCartonProducidas('');
           setTipoCultivoEmpaque('');
           setConsumosDesverdizado([]);
-          setSelectedLote('');
+          setSelectedDesv(null);
           setSelectedBinsToUse('');
           setLineasProduccion([]);
           setProdPresentacion('');
@@ -894,8 +902,25 @@ export default function Empaque({
           {modoLimon === 'desverdizado' && (
             <>
               <div style={{ margin: '8px 0' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 6, flexWrap: 'wrap' }}>
                   <strong>Inventario Desverdizado (bins de {PESO_BIN_CAMPO_KG} kg):</strong>
+                  <span
+                    style={{
+                      fontWeight: 800,
+                      color: '#0c4a6e',
+                      background: '#e0f2fe',
+                      padding: '2px 10px',
+                      borderRadius: 6,
+                      fontSize: 13,
+                    }}
+                  >
+                    Total:{' '}
+                    {desverdizadoList.reduce(
+                      (s: number, d: any) => s + (d.cantidad_bins_disponibles || 0),
+                      0
+                    )}{' '}
+                    bins
+                  </span>
                   <button
                     type="button"
                     onClick={cargarDesverdizado}
@@ -907,36 +932,63 @@ export default function Empaque({
                 {desverdizadoList.length === 0 && (
                   <div style={{ color: '#666' }}>No hay lotes disponibles</div>
                 )}
-                {desverdizadoList.map((d: any) => (
-                  <div
-                    key={d.id}
-                    style={{
-                      display: 'flex',
-                      gap: 8,
-                      alignItems: 'center',
-                      margin: '4px 0',
-                      fontSize: 13,
-                    }}
-                  >
-                    <span>
-                      Lote: <strong>{d.lote}</strong> | Bins disp:{' '}
-                      {d.cantidad_bins_disponibles} | Corte:{' '}
-                      {formatFechaCorta(d.fecha_recepcion)}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedLote(d.lote)}
-                      style={{ padding: '2px 8px', fontSize: 12 }}
+                {desverdizadoList.map((d: any) => {
+                  const isSel =
+                    selectedDesv &&
+                    selectedDesv.lote === d.lote &&
+                    String(selectedDesv.fecha_recepcion || '') ===
+                      String(d.fecha_recepcion || '') &&
+                    (selectedDesv.id == null || selectedDesv.id === d.id);
+                  return (
+                    <div
+                      key={d.id ?? `${d.lote}-${d.fecha_recepcion}`}
+                      style={{
+                        display: 'flex',
+                        gap: 8,
+                        alignItems: 'center',
+                        margin: '4px 0',
+                        fontSize: 13,
+                        padding: '6px 8px',
+                        background: isSel ? '#f0fdf4' : '#f8fafc',
+                        borderRadius: 6,
+                        border: isSel ? '2px solid #15803d' : '1px solid #e2e8f0',
+                      }}
                     >
-                      Seleccionar
-                    </button>
-                  </div>
-                ))}
+                      <span style={{ flex: 1 }}>
+                        Lote: <strong>{d.lote}</strong> —{' '}
+                        <strong style={{ color: '#14532d' }}>
+                          {d.cantidad_bins_disponibles} bins
+                        </strong>{' '}
+                        | Corte: {formatFechaCorta(d.fecha_recepcion)} | {d.estado}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setSelectedDesv({
+                            id: d.id,
+                            lote: d.lote,
+                            fecha_recepcion: d.fecha_recepcion || null,
+                            disponible: d.cantidad_bins_disponibles || 0,
+                          })
+                        }
+                        style={{ padding: '2px 8px', fontSize: 12 }}
+                      >
+                        Seleccionar
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
 
-              {selectedLote && (
+              {selectedDesv && (
                 <div style={{ display: 'flex', gap: 8, margin: '4px 0', alignItems: 'center' }}>
-                  <span>Lote: {selectedLote}</span>
+                  <span>
+                    Lote: <strong>{selectedDesv.lote}</strong>
+                    {selectedDesv.fecha_recepcion
+                      ? ` · Corte ${formatFechaCorta(selectedDesv.fecha_recepcion)}`
+                      : ''}{' '}
+                    (máx {selectedDesv.disponible})
+                  </span>
                   <input
                     type="number"
                     placeholder="Bins a usar"
@@ -948,14 +1000,26 @@ export default function Empaque({
                     type="button"
                     onClick={() => {
                       const binsNum = parseInt(selectedBinsToUse) || 0;
-                      if (binsNum > 0) {
-                        setConsumosDesverdizado([
-                          ...consumosDesverdizado,
-                          { lote: selectedLote, bins: binsNum },
-                        ]);
-                        setSelectedBinsToUse('');
-                        setSelectedLote('');
+                      if (binsNum <= 0) return;
+                      if (binsNum > selectedDesv.disponible) {
+                        return alert(
+                          `Solo hay ${selectedDesv.disponible} bins de ${selectedDesv.lote}` +
+                            (selectedDesv.fecha_recepcion
+                              ? ` (corte ${selectedDesv.fecha_recepcion})`
+                              : '')
+                        );
                       }
+                      setConsumosDesverdizado([
+                        ...consumosDesverdizado,
+                        {
+                          lote: selectedDesv.lote,
+                          bins: binsNum,
+                          // Clave para anular/devolver al corte correcto
+                          fecha_recepcion: selectedDesv.fecha_recepcion || undefined,
+                        },
+                      ]);
+                      setSelectedBinsToUse('');
+                      setSelectedDesv(null);
                     }}
                   >
                     Agregar
@@ -968,7 +1032,11 @@ export default function Empaque({
                   <strong>Consumos:</strong>{' '}
                   {consumosDesverdizado.map((c, i) => (
                     <span key={i} style={{ marginRight: 8 }}>
-                      {c.lote}:{c.bins}{' '}
+                      {c.lote}
+                      {c.fecha_recepcion
+                        ? `@${String(c.fecha_recepcion).slice(0, 10)}`
+                        : ''}
+                      :{c.bins}{' '}
                       <button
                         type="button"
                         onClick={() =>
