@@ -49,10 +49,71 @@ const cardStyle: CSSProperties = {
   minWidth: 140,
 };
 
+/** Tarjeta compacta uniforme (6 indicadores, misma altura) */
 const cardPrimary: CSSProperties = {
   ...cardStyle,
-  minWidth: 160,
-  boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+  minWidth: 0,
+  width: '100%',
+  height: '100%',
+  minHeight: 0,
+  boxSizing: 'border-box',
+  boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+  display: 'flex',
+  flexDirection: 'column',
+  justifyContent: 'flex-start',
+  gap: 2,
+  padding: '10px 12px',
+};
+
+const cardPrimaryLabel: CSSProperties = {
+  fontSize: 11,
+  fontWeight: 700,
+  letterSpacing: 0.3,
+  lineHeight: 1.2,
+  textTransform: 'uppercase',
+};
+
+const cardPrimaryValue: CSSProperties = {
+  fontSize: 26,
+  fontWeight: 800,
+  lineHeight: 1.1,
+  letterSpacing: -0.4,
+  marginTop: 2,
+};
+
+/** Chips de detalle compactos */
+const cardStatChip: CSSProperties = {
+  flex: 1,
+  minWidth: 0,
+  background: 'rgba(255,255,255,0.6)',
+  border: '1px solid rgba(15,23,42,0.06)',
+  borderRadius: 6,
+  padding: '5px 8px',
+};
+
+const cardStatChipLabel: CSSProperties = {
+  fontSize: 9,
+  fontWeight: 700,
+  color: '#64748b',
+  letterSpacing: 0.3,
+  textTransform: 'uppercase',
+  marginBottom: 1,
+};
+
+const cardStatChipValue: CSSProperties = {
+  fontSize: 13,
+  fontWeight: 800,
+  lineHeight: 1.15,
+  wordBreak: 'break-word',
+};
+
+const indicadoresGrid: CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+  gridAutoRows: '1fr',
+  gap: 10,
+  marginBottom: 12,
+  alignItems: 'stretch',
 };
 
 function fmtKg(n: number) {
@@ -1438,68 +1499,141 @@ export default function Reportes({ token }: ReportesProps) {
             </p>
           ) : a ? (
             <>
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: 12 }}>
+              {/* 3×2 compacto: los 6 del mismo tamaño */}
+              <div style={indicadoresGrid}>
                 <div style={{ ...cardPrimary, background: '#dcfce7' }}>
-                  <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>% 1ra calidad</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>
-                    {a.pct_primera}%
+                  <div style={{ ...cardPrimaryLabel, color: '#166534' }}>1ra calidad</div>
+                  <div style={{ ...cardPrimaryValue, color: '#14532d' }}>
+                    {a.pct_primera}
+                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    {fmtKg(a.kg_primera)} kg · {fmtNum(a.kg_primera_por_ha)} kg/ha
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg</div>
+                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
+                        {fmtKg(a.kg_primera)}
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg/ha</div>
+                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
+                        {fmtNum(a.kg_primera_por_ha)}
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#fef9c3' }}>
-                  <div style={{ fontSize: 12, color: '#854d0e', fontWeight: 600 }}>% 2da calidad</div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#713f12' }}>
-                    {a.pct_segunda}%
+                  <div style={{ ...cardPrimaryLabel, color: '#854d0e' }}>2da · jugo</div>
+                  <div style={{ ...cardPrimaryValue, color: '#713f12' }}>
+                    {a.pct_segunda}
+                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    {fmtKg(a.kg_segunda)} kg · {fmtNum(a.kg_segunda_por_ha)} kg/ha
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
-                  <div style={{ fontSize: 12, color: '#075985', fontWeight: 600 }}>
-                    Bins / parrilla (1ra)
-                  </div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#0c4a6e' }}>
-                    {a.bins_por_parrilla != null ? a.bins_por_parrilla : '—'}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    {a.bins_campo} bins ÷ {a.parrillas_primera ?? '—'} parr. 1ra
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg</div>
+                      <div style={{ ...cardStatChipValue, color: '#713f12' }}>
+                        {fmtKg(a.kg_segunda)}
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg/ha</div>
+                      <div style={{ ...cardStatChipValue, color: '#713f12' }}>
+                        {fmtNum(a.kg_segunda_por_ha)}
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#f0fdf4' }}>
-                  <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>
-                    Kg totales / ha
+                  <div style={{ ...cardPrimaryLabel, color: '#166534' }}>Ton / ha</div>
+                  <div style={{ ...cardPrimaryValue, color: '#14532d' }}>
+                    {(() => {
+                      const kgHaVal =
+                        a.kg_por_ha != null && a.kg_por_ha !== undefined
+                          ? Number(a.kg_por_ha)
+                          : hectareas
+                            ? a.kg_salida / hectareas
+                            : 0;
+                      const tonHa = kgHaVal / 1000;
+                      return Number.isFinite(tonHa) ? tonHa.toFixed(1) : '—';
+                    })()}
                   </div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#14532d' }}>
-                    {fmtNum(a.kg_por_ha)}
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>1ra</div>
+                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
+                        {fmtNum(a.pct_primera, 1)}%
+                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b' }}>
+                          {' '}
+                          ({fmtKg(a.kg_primera)})
+                        </span>
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Jugo</div>
+                      <div style={{ ...cardStatChipValue, color: '#854d0e' }}>
+                        {fmtNum(a.pct_segunda, 1)}%
+                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b' }}>
+                          {' '}
+                          ({fmtKg(a.kg_segunda)})
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    {fmtKg(a.kg_salida)} kg ÷ {hectareas} ha
-                    {modoSeleccion ? ' (rancho)' : ''}
+                </div>
+                <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
+                  <div style={{ ...cardPrimaryLabel, color: '#075985' }}>Bins / parrilla</div>
+                  <div style={{ ...cardPrimaryValue, color: '#0c4a6e' }}>
+                    {a.bins_por_parrilla != null ? a.bins_por_parrilla : '—'}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Bins</div>
+                      <div style={{ ...cardStatChipValue, color: '#0c4a6e' }}>{a.bins_campo}</div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Parr. 1ra</div>
+                      <div style={{ ...cardStatChipValue, color: '#0c4a6e' }}>
+                        {a.parrillas_primera ?? '—'}
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#dbeafe' }}>
-                  <div style={{ fontSize: 12, color: '#1e40af', fontWeight: 600 }}>
-                    % 1ra en RPC
+                  <div style={{ ...cardPrimaryLabel, color: '#1e40af' }}>% 1ra en RPC</div>
+                  <div style={{ ...cardPrimaryValue, color: '#1e3a8a' }}>
+                    {fmtNum(a.pct_rpc_de_primera, 1)}
+                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#1e3a8a' }}>
-                    {fmtNum(a.pct_rpc_de_primera, 1)}%
-                  </div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    {fmtKg(a.kg_rpc ?? 0)} kg · {a.cajas_rpc} cajas
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg</div>
+                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
+                        {fmtKg(a.kg_rpc ?? 0)}
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Cajas</div>
+                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>{a.cajas_rpc}</div>
+                    </div>
                   </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#ffedd5' }}>
-                  <div style={{ fontSize: 12, color: '#9a3412', fontWeight: 600 }}>
-                    % 1ra en cartón
+                  <div style={{ ...cardPrimaryLabel, color: '#9a3412' }}>% 1ra en cartón</div>
+                  <div style={{ ...cardPrimaryValue, color: '#7c2d12' }}>
+                    {fmtNum(a.pct_carton_de_primera, 1)}
+                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
-                  <div style={{ fontSize: 32, fontWeight: 800, color: '#7c2d12' }}>
-                    {fmtNum(a.pct_carton_de_primera, 1)}%
-                  </div>
-                  <div style={{ fontSize: 12, color: '#64748b' }}>
-                    {fmtKg(a.kg_carton ?? 0)} kg · {a.cajas_carton} cajas
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg</div>
+                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>
+                        {fmtKg(a.kg_carton ?? 0)}
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Cajas</div>
+                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>{a.cajas_carton}</div>
+                    </div>
                   </div>
                 </div>
               </div>
