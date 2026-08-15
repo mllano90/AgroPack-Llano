@@ -126,6 +126,16 @@ function App() {
         setToken('');
         setCurrentUser(null);
         setLoginError(typeof detail === 'string' ? detail : 'Usuario o contraseña incorrectos.');
+      } else if (status === 500 || status === 503) {
+        const d =
+          typeof detail === 'string'
+            ? detail
+            : detail
+              ? JSON.stringify(detail).slice(0, 280)
+              : 'Error interno del servidor';
+        setLoginError(
+          `API con error (${status}): ${d}. Si menciona base de datos, en Render → agropack-api revisa DATABASE_URL / Postgres.`
+        );
       } else if (msg.includes('VITE_API_URL') || msg.includes('access_token') || msg.includes('JSON')) {
         setLoginError(msg);
       } else if (!localStorage.getItem(TOKEN_KEY)) {
