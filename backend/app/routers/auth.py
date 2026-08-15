@@ -97,14 +97,33 @@ def login(
             detail="Username and password are required"
         )
 
-    user = db.query(User).filter(User.username == username).first()
-    if not user or not verify_password(password, user.hashed_password):
+    try:
+        user = db.query(User).filter(User.username == username).first()
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=(
+                f"No se pudo leer usuarios en la base de datos: "
+                f"{type(e).__name__}: {e}. "
+                "En Render → agropack-api revisa DATABASE_URL y que el Postgres esté activo."
+            ),
+        ) from e
+
+    try:
+        ok = bool(user and user.hashed_password and verify_password(password, user.hashed_password))
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error al verificar contraseña: {type(e).__name__}: {e}",
+        ) from e
+
+    if not ok:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Usuario o contraseña incorrectos",
             headers={"WWW-Authenticate": "Bearer"},
         )
-    
+
     access_token = create_access_token(data={"sub": user.username})
     return {"access_token": access_token, "token_type": "bearer"}
 
