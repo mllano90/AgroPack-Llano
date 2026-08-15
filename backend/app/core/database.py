@@ -18,18 +18,29 @@ DATABASE_URL = settings.DATABASE_URL
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
 
-# Configuración especial para SQLite
+# Configuración especial para SQLite / Postgres
 connect_args = {}
+engine_kwargs: dict = {"pool_pre_ping": True}
 if DATABASE_URL.startswith("sqlite"):
     connect_args = {"check_same_thread": False}
     print(f"📦 Usando SQLite: {DATABASE_URL}")
 else:
-    print(f"🐘 Usando PostgreSQL: {DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else 'configurado'}")
+    print(
+        f"🐘 Usando PostgreSQL: "
+        f"{DATABASE_URL.split('@')[-1] if '@' in DATABASE_URL else 'configurado'}"
+    )
+    # Render Postgres exige SSL; si la URL no lo trae, forzar
+    if "sslmode=" not in DATABASE_URL.lower():
+        connect_args["sslmode"] = "require"
+    # Evitar cuelgues largos en free tier
+    engine_kwargs["pool_recycle"] = 300
+    engine_kwargs["pool_size"] = 5
+    engine_kwargs["max_overflow"] = 5
 
 engine = create_engine(
     DATABASE_URL,
     connect_args=connect_args,
-    pool_pre_ping=True,  # Ayuda con conexiones perdidas en Postgres
+    **engine_kwargs,
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -70,7 +81,9 @@ def ensure_schema():
                 with engine.begin() as conn:
                     if DATABASE_URL.startswith("sqlite"):
                         conn.execute(
-                            text("ALTER TABLE inventario_desverdizado ADD COLUMN numero_tanda INTEGER")
+                            text(
+                                "ALTER TABLE inventario_desverdizado ADD COLUMN numero_tanda INTEGER"
+                            )
                         )
                     else:
                         conn.execute(
