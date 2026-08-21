@@ -254,6 +254,77 @@ export default function Embarques({
     }
   };
 
+  /** Recalcula totales / puede_confirmar tras editar o quitar líneas del preview. */
+  const aplicarDetallesManifiesto = (
+    detalles: ManifiestoParseResult['detalles']
+  ) => {
+    setManifestPreview((prev) => {
+      if (!prev) return prev;
+      const next = detalles.map((d) => ({
+        ...d,
+        cantidad_cajas: Math.max(0, Math.round(Number(d.cantidad_cajas) || 0)),
+        suficiente:
+          Math.max(0, Math.round(Number(d.cantidad_cajas) || 0)) <=
+          (d.stock_disponible || 0),
+      }));
+      const total = next.reduce((s, d) => s + (d.cantidad_cajas || 0), 0);
+      return {
+        ...prev,
+        detalles: next,
+        total_bultos_parseados: total,
+        puede_confirmar: next.length > 0 && next.every((d) => d.suficiente),
+      };
+    });
+  };
+
+  /** Elimina por completo un producto (línea) del resumen del manifiesto. */
+  const quitarProductoManifiesto = (index: number) => {
+    if (!manifestPreview) return;
+    const d = manifestPreview.detalles[index];
+    if (!d) return;
+    const label = getPresentacionLabel(d.presentacion, d.talla) || 'producto';
+    if (
+      !confirm(
+        `¿Quitar del embarque "${label}" (${d.cantidad_cajas} cajas)?\n` +
+          `No se descontará del inventario hasta confirmar.`
+      )
+    ) {
+      return;
+    }
+    aplicarDetallesManifiesto(manifestPreview.detalles.filter((_, i) => i !== index));
+  };
+
+  /** Ajuste parcial: cambia la cantidad de un producto (0 = quitar). */
+  const ajustarCantidadManifiesto = (index: number, raw: string) => {
+    if (!manifestPreview) return;
+    const n = parseInt(raw, 10);
+    if (Number.isNaN(n) || n < 0) return;
+    if (n === 0) {
+      aplicarDetallesManifiesto(manifestPreview.detalles.filter((_, i) => i !== index));
+      return;
+    }
+    aplicarDetallesManifiesto(
+      manifestPreview.detalles.map((d, i) =>
+        i === index ? { ...d, cantidad_cajas: n } : d
+      )
+    );
+  };
+
+  /** Quita de golpe todas las líneas con stock insuficiente. */
+  const quitarSinStockManifiesto = () => {
+    if (!manifestPreview) return;
+    const conFalta = manifestPreview.detalles.filter((d) => !d.suficiente);
+    if (conFalta.length === 0) return alert('No hay líneas con falta de stock');
+    if (
+      !confirm(
+        `¿Quitar ${conFalta.length} producto(s) sin stock suficiente del resumen?`
+      )
+    ) {
+      return;
+    }
+    aplicarDetallesManifiesto(manifestPreview.detalles.filter((d) => d.suficiente));
+  };
+
   const handleConfirmarManifiesto = async () => {
     if (!manifestPreview) return;
     if (!clienteIdEmbarque) {
@@ -283,17 +354,22 @@ export default function Embarques({
 
     setManifestConfirming(true);
     try {
-      const detalles = manifestPreview.detalles.map((d) => ({
-        producto: 'limon_amarillo' as const,
-        mercado: (d.mercado === 'nacional' ? 'nacional' : 'exportacion') as
-          | 'nacional'
-          | 'exportacion',
-        cantidad_cajas: d.cantidad_cajas,
-        presentacion: d.presentacion || undefined,
-        talla: d.talla || undefined,
-        calidad: d.calidad || undefined,
-        cajas_por_parrilla: d.cajas_por_parrilla ?? undefined,
-      }));
+      const detalles = manifestPreview.detalles
+        .filter((d) => (d.cantidad_cajas || 0) > 0)
+        .map((d) => ({
+          producto: 'limon_amarillo' as const,
+          mercado: (d.mercado === 'nacional' ? 'nacional' : 'exportacion') as
+            | 'nacional'
+            | 'exportacion',
+          cantidad_cajas: d.cantidad_cajas,
+          presentacion: d.presentacion || undefined,
+          talla: d.talla || undefined,
+          calidad: d.calidad || undefined,
+          cajas_por_parrilla: d.cajas_por_parrilla ?? undefined,
+        }));
+      if (!detalles.length) {
+        return alert('No hay productos con cantidad > 0 para confirmar');
+      }
 
       const notas = [
         manifestPreview.numero_manifiesto
@@ -430,7 +506,68 @@ export default function Embarques({
               </div>
             )}
 
-            <h4 style={{ marginBottom: 8 }}>Resumen a descontar del inventario</h4>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 8,
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 8,
+              }}
+            >
+              <h4 style={{ margin: 0 }}>Resumen a descontar del inventario</h4>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {manifestPreview.detalles.some((d) => !d.suficiente) && (
+                  <button
+                    type="button"
+                    onClick={quitarSinStockManifiesto}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: 12,
+                      background: '#fff7ed',
+                      color: '#9a3412',
+                      border: '1px solid #fdba74',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Quitar sin stock
+                  </button>
+                )}
+                {manifestPreview.detalles.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (
+                        confirm(
+                          '¿Vaciar todo el resumen del manifiesto?\nPuedes volver a leer el PDF.'
+                        )
+                      ) {
+                        aplicarDetallesManifiesto([]);
+                      }
+                    }}
+                    style={{
+                      padding: '6px 12px',
+                      fontSize: 12,
+                      background: '#fef2f2',
+                      color: '#b91c1c',
+                      border: '1px solid #fecaca',
+                      borderRadius: 6,
+                      cursor: 'pointer',
+                      fontWeight: 600,
+                    }}
+                  >
+                    Vaciar resumen
+                  </button>
+                )}
+              </div>
+            </div>
+            <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, marginBottom: 10 }}>
+              Si el PDF malinterpretó un producto, <strong>ajusta la cantidad</strong> (parcial) o{' '}
+              <strong>quítarlo</strong> antes de confirmar. Así no se bloquea el registro.
+            </p>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
@@ -439,36 +576,101 @@ export default function Embarques({
                     <th style={th}>Cantidad</th>
                     <th style={th}>Stock actual</th>
                     <th style={th}>Estado</th>
+                    <th style={th}>Acciones</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {manifestPreview.detalles.map((d, i) => (
-                    <tr
-                      key={i}
-                      style={{
-                        borderBottom: '1px solid #e2e8f0',
-                        background: d.suficiente ? undefined : '#fef2f2',
-                      }}
-                    >
-                      <td style={td}>
-                        {getPresentacionLabel(d.presentacion, d.talla)}
-                        <div style={{ fontSize: 11, color: '#64748b' }}>{d.calidad}</div>
-                      </td>
-                      <td style={td}>
-                        <strong>{d.cantidad_cajas}</strong>
-                      </td>
-                      <td style={td}>{d.stock_disponible}</td>
-                      <td style={td}>
-                        {d.suficiente ? (
-                          <span style={{ color: '#15803d', fontWeight: 600 }}>OK</span>
-                        ) : (
-                          <span style={{ color: '#dc2626', fontWeight: 600 }}>
-                            Falta stock ({d.cantidad_cajas - d.stock_disponible})
-                          </span>
-                        )}
+                  {manifestPreview.detalles.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} style={{ ...td, color: '#64748b' }}>
+                        No quedan productos en el resumen. Vuelve a leer el PDF o agrega
+                        productos en el embarque manual.
                       </td>
                     </tr>
-                  ))}
+                  ) : (
+                    manifestPreview.detalles.map((d, i) => (
+                      <tr
+                        key={`${d.presentacion}-${d.talla}-${i}`}
+                        style={{
+                          borderBottom: '1px solid #e2e8f0',
+                          background: d.suficiente ? undefined : '#fef2f2',
+                        }}
+                      >
+                        <td style={td}>
+                          {getPresentacionLabel(d.presentacion, d.talla)}
+                          <div style={{ fontSize: 11, color: '#64748b' }}>{d.calidad}</div>
+                        </td>
+                        <td style={td}>
+                          <input
+                            type="number"
+                            min={0}
+                            max={Math.max(d.cantidad_cajas, d.stock_disponible || 0) * 2 || undefined}
+                            value={d.cantidad_cajas}
+                            onChange={(e) => ajustarCantidadManifiesto(i, e.target.value)}
+                            title="Cantidad parcial a embarcar (0 = quitar)"
+                            style={{
+                              width: 88,
+                              padding: '6px 8px',
+                              border: '1px solid #cbd5e1',
+                              borderRadius: 6,
+                              fontWeight: 700,
+                            }}
+                          />
+                        </td>
+                        <td style={td}>{d.stock_disponible}</td>
+                        <td style={td}>
+                          {d.suficiente ? (
+                            <span style={{ color: '#15803d', fontWeight: 600 }}>OK</span>
+                          ) : (
+                            <span style={{ color: '#dc2626', fontWeight: 600 }}>
+                              Falta stock ({d.cantidad_cajas - d.stock_disponible})
+                            </span>
+                          )}
+                        </td>
+                        <td style={td}>
+                          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                            {!d.suficiente && d.stock_disponible > 0 && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  ajustarCantidadManifiesto(i, String(d.stock_disponible))
+                                }
+                                style={{
+                                  padding: '4px 8px',
+                                  fontSize: 11,
+                                  background: '#ecfccb',
+                                  color: '#3f6212',
+                                  border: '1px solid #bef264',
+                                  borderRadius: 4,
+                                  cursor: 'pointer',
+                                  fontWeight: 600,
+                                }}
+                                title="Ajustar al stock disponible"
+                              >
+                                Usar {d.stock_disponible}
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => quitarProductoManifiesto(i)}
+                              style={{
+                                padding: '4px 8px',
+                                fontSize: 11,
+                                background: '#fee2e2',
+                                color: '#b91c1c',
+                                border: '1px solid #fecaca',
+                                borderRadius: 4,
+                                cursor: 'pointer',
+                                fontWeight: 600,
+                              }}
+                            >
+                              Quitar
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
                 </tbody>
               </table>
             </div>
@@ -516,13 +718,19 @@ export default function Embarques({
             <button
               type="button"
               onClick={handleConfirmarManifiesto}
-              disabled={manifestConfirming || !clienteIdEmbarque}
+              disabled={
+                manifestConfirming ||
+                !clienteIdEmbarque ||
+                manifestPreview.detalles.length === 0
+              }
               style={{
                 marginTop: 16,
                 width: '100%',
                 padding: '14px 20px',
                 background:
-                  manifestConfirming || !clienteIdEmbarque
+                  manifestConfirming ||
+                  !clienteIdEmbarque ||
+                  manifestPreview.detalles.length === 0
                     ? '#94a3b8'
                     : manifestPreview.puede_confirmar
                       ? '#15803d'
@@ -533,14 +741,20 @@ export default function Embarques({
                 fontWeight: 700,
                 fontSize: 15,
                 cursor:
-                  manifestConfirming || !clienteIdEmbarque ? 'not-allowed' : 'pointer',
+                  manifestConfirming ||
+                  !clienteIdEmbarque ||
+                  manifestPreview.detalles.length === 0
+                    ? 'not-allowed'
+                    : 'pointer',
               }}
             >
               {manifestConfirming
                 ? 'Registrando y descontando…'
-                : manifestPreview.puede_confirmar
-                  ? 'Confirmar embarque y descontar inventario'
-                  : 'Confirmar (hay faltantes de stock)'}
+                : manifestPreview.detalles.length === 0
+                  ? 'Sin productos para confirmar'
+                  : manifestPreview.puede_confirmar
+                    ? `Confirmar embarque (${manifestPreview.total_bultos_parseados} bultos)`
+                    : 'Confirmar (hay faltantes de stock)'}
             </button>
           </div>
         )}
