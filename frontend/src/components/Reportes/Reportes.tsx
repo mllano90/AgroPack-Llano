@@ -15,6 +15,11 @@ import {
   PESO_BIN_CAMPO_KG,
   HECTAREAS_RANCHO,
   HECTAREAS_POR_LOTE,
+  mixVariedadParaLote,
+  seccionDesdeLote,
+  VARIEDAD_LIMON_COLOR,
+  VARIEDAD_LIMON_LABEL,
+  type VariedadLimonCampo,
 } from '../../lib/constants';
 import type { DashboardData, EmpaqueRecord } from '../../types';
 import EmbarquesReporte from './EmbarquesReporte';
@@ -410,6 +415,262 @@ function TallaPieChart({
   );
 }
 
+/**
+ * Barras de producción por lote (máx. 8), orden mayor→menor.
+ * Cada barra es apilada según el mix de variedades de la sección (S1C1…).
+ */
+function LoteBarrasChart({
+  lotes,
+  fmtKg: formatKg,
+}: {
+  lotes: Lote[];
+  fmtKg: (n: number) => string;
+}) {
+  const [hover, setHover] = useState<{
+    lote: string;
+    x: number;
+    y: number;
+  } | null>(null);
+
+  const bars = useMemo(() => {
+    return [...lotes]
+      .filter((l) => (Number(l.kg_salida) || 0) > 0 || (Number(l.bins_campo) || 0) > 0)
+      .sort((a, b) => (Number(b.kg_salida) || 0) - (Number(a.kg_salida) || 0))
+      .slice(0, 8)
+      .map((l) => {
+        const kg = Number(l.kg_salida) || 0;
+        const mix = mixVariedadParaLote(l.lote);
+        const seccion = seccionDesdeLote(l.lote);
+        const segments =
+          mix.length > 0
+            ? mix.map((m) => ({
+                variedad: m.variedad,
+                pct: m.pct,
+                kg: (kg * m.pct) / 100,
+                color: VARIEDAD_LIMON_COLOR[m.variedad],
+                label: VARIEDAD_LIMON_LABEL[m.variedad],
+              }))
+            : [
+                {
+                  variedad: 'macrophyla' as VariedadLimonCampo,
+                  pct: 100,
+                  kg,
+                  color: '#94a3b8',
+                  label: 'Sin mix definido',
+                },
+              ];
+        return { lote: l.lote, seccion, kg, bins: l.bins_campo, segments };
+      });
+  }, [lotes]);
+
+  const maxKg = Math.max(...bars.map((b) => b.kg), 1);
+  const chartH = 220;
+  const chartPadTop = 16;
+  const chartPadBottom = 36;
+  const innerH = chartH - chartPadTop - chartPadBottom;
+  const barGap = 12;
+  const n = Math.max(bars.length, 1);
+  const chartW = Math.max(520, n * 72);
+  const barW = Math.min(48, (chartW - barGap * (n + 1)) / n);
+
+  const variedadesUsadas = useMemo(() => {
+    const set = new Set<VariedadLimonCampo>();
+    for (const b of bars) {
+      for (const s of b.segments) {
+        if (s.variedad) set.add(s.variedad);
+      }
+    }
+    return Array.from(set);
+  }, [bars]);
+
+  if (bars.length === 0) {
+    return (
+      <p style={{ color: '#64748b', fontSize: 13 }}>
+        No hay producción por lote para graficar.
+      </p>
+    );
+  }
+
+  const hovered = hover ? bars.find((b) => b.lote === hover.lote) : null;
+
+  return (
+    <div style={{ marginTop: 8, marginBottom: 20 }}>
+      <h4 style={{ margin: '0 0 6px' }}>Producción por lote (kg total)</h4>
+      <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
+        {bars.length} barra(s), mayor → menor. Colores = mix de variedades por sección. Pasa el
+        cursor para ver el detalle.
+      </p>
+
+      <div style={{ position: 'relative', overflowX: 'auto' }}>
+        <svg
+          width={chartW}
+          height={chartH}
+          viewBox={`0 0 ${chartW} ${chartH}`}
+          role="img"
+          aria-label="Barras de producción por lote"
+        >
+          {/* grid lines */}
+          {[0, 0.25, 0.5, 0.75, 1].map((t) => {
+            const y = chartPadTop + innerH * (1 - t);
+            return (
+              <g key={t}>
+                <line
+                  x1={40}
+                  x2={chartW - 8}
+                  y1={y}
+                  y2={y}
+                  stroke="#e2e8f0"
+                  strokeWidth={1}
+                />
+                <text x={36} y={y + 3} textAnchor="end" style={{ fontSize: 9, fill: '#94a3b8' }}>
+                  {t === 0 ? '0' : formatKg(maxKg * t)}
+                </text>
+              </g>
+            );
+          })}
+
+          {bars.map((b, i) => {
+            const x = 48 + i * (barW + barGap);
+            let yCursor = chartPadTop + innerH;
+            return (
+              <g
+                key={b.lote}
+                onMouseEnter={(e) => {
+                  const rect = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
+                  setHover({
+                    lote: b.lote,
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top,
+                  });
+                }}
+                onMouseMove={(e) => {
+                  const rect = (e.currentTarget.ownerSVGElement as SVGSVGElement).getBoundingClientRect();
+                  setHover({
+                    lote: b.lote,
+                    x: e.clientX - rect.left,
+                    y: e.clientY - rect.top,
+                  });
+                }}
+                onMouseLeave={() => setHover(null)}
+                style={{ cursor: 'pointer' }}
+              >
+                {b.segments.map((seg, si) => {
+                  const h = Math.max(0, (seg.kg / maxKg) * innerH);
+                  yCursor -= h;
+                  const y = yCursor;
+                  const isTop = si === b.segments.length - 1;
+                  return (
+                    <rect
+                      key={`${b.lote}-${seg.variedad}-${seg.pct}`}
+                      x={x}
+                      y={y}
+                      width={barW}
+                      height={Math.max(h, h > 0 ? 1 : 0)}
+                      fill={seg.color}
+                      rx={isTop ? 3 : 0}
+                    />
+                  );
+                })}
+                <text
+                  x={x + barW / 2}
+                  y={chartH - 22}
+                  textAnchor="middle"
+                  style={{ fontSize: 10, fontWeight: 700, fill: '#334155' }}
+                >
+                  {b.seccion || b.lote.slice(-4)}
+                </text>
+                <text
+                  x={x + barW / 2}
+                  y={chartH - 8}
+                  textAnchor="middle"
+                  style={{ fontSize: 8, fill: '#94a3b8' }}
+                >
+                  {String(b.lote).split(/\s+/)[0]}
+                </text>
+              </g>
+            );
+          })}
+        </svg>
+
+        {hover && hovered && (
+          <div
+            style={{
+              position: 'absolute',
+              left: Math.min(hover.x + 12, chartW - 220),
+              top: Math.max(8, hover.y - 10),
+              background: '#0f172a',
+              color: '#f8fafc',
+              padding: '10px 12px',
+              borderRadius: 8,
+              fontSize: 12,
+              pointerEvents: 'none',
+              zIndex: 5,
+              minWidth: 200,
+              boxShadow: '0 8px 24px rgba(0,0,0,0.25)',
+            }}
+          >
+            <div style={{ fontWeight: 800, marginBottom: 4 }}>
+              {hovered.lote}
+              {hovered.seccion ? ` · ${hovered.seccion}` : ''}
+            </div>
+            <div style={{ color: '#cbd5e1', marginBottom: 6 }}>
+              {formatKg(hovered.kg)} kg · {hovered.bins} bins
+            </div>
+            {hovered.segments.map((s) => (
+              <div
+                key={s.variedad + String(s.pct)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginBottom: 3,
+                }}
+              >
+                <span
+                  style={{
+                    width: 10,
+                    height: 10,
+                    borderRadius: 2,
+                    background: s.color,
+                    flexShrink: 0,
+                  }}
+                />
+                <span style={{ flex: 1 }}>{s.label}</span>
+                <strong>{s.pct}%</strong>
+                <span style={{ color: '#94a3b8' }}>({formatKg(s.kg)} kg)</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 12,
+          marginTop: 10,
+          fontSize: 12,
+        }}
+      >
+        {variedadesUsadas.map((v) => (
+          <span key={v} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span
+              style={{
+                width: 12,
+                height: 12,
+                borderRadius: 3,
+                background: VARIEDAD_LIMON_COLOR[v],
+              }}
+            />
+            {VARIEDAD_LIMON_LABEL[v]}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function kgHa(kg: number, ha: number) {
   if (!ha) return null;
   return Math.round((kg / ha) * 100) / 100;
@@ -537,6 +798,19 @@ function resumenConsumosGranel(
       return `granel ${lote}${talla}${fe}:${g.cantidad}`;
     })
     .join(', ');
+}
+
+/** Quita sufijo @YYYY-MM-DD de lote (fecha de corte en lotes_resumen / consumos). */
+function normLoteCampoReporte(lote: string | null | undefined): string {
+  let s = String(lote || '').trim() || 'SIN_LOTE';
+  const at = s.lastIndexOf('@');
+  if (at > 0) {
+    const suf = s.slice(at + 1).trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(suf)) {
+      s = s.slice(0, at).trim() || 'SIN_LOTE';
+    }
+  }
+  return s;
 }
 
 function enrichLote(l: Lote, haPorLote: number = HECTAREAS_POR_LOTE): Lote {
@@ -725,9 +999,11 @@ function computeFromEmpaques(
     if (esConversion) continue;
 
     const totalBins = consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0) || 1;
-    const multi = new Set(consumos.map((c) => c.lote || 'SIN_LOTE')).size > 1;
+    const multi =
+      new Set(consumos.map((c) => normLoteCampoReporte(c.lote))).size > 1;
     for (const c of consumos) {
-      const lote = String(c.lote || 'SIN_LOTE').trim() || 'SIN_LOTE';
+      // Misma clave de campo aunque el consumo traiga fecha_recepcion (@YYYY-MM-DD)
+      const lote = normLoteCampoReporte(c.lote);
       const bins = Number(c.bins) || 0;
       if (bins <= 0) continue;
       const share = bins / totalBins;
@@ -1726,7 +2002,7 @@ export default function Reportes({ token }: ReportesProps) {
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
             Principales: % 1ra, % 2da, bins/parrilla (solo 1ra). Kg/ha por lote = kg ÷{' '}
             <strong>{hectareasPorLote} ha</strong> (cada lote = {hectareasPorLote} ha). Multi-lote:
-            producción prorrateada por bins.
+            producción prorrateada por bins. Lotes iguales se agrupan ignorando fecha de corte.
           </p>
           {porLote.length === 0 ? (
             <div>
@@ -1735,6 +2011,8 @@ export default function Reportes({ token }: ReportesProps) {
               </p>
             </div>
           ) : (
+            <>
+            <LoteBarrasChart lotes={porLote} fmtKg={fmtKg} />
             <div style={{ overflowX: 'auto' }}>
               <table
                 style={{
@@ -1796,6 +2074,7 @@ export default function Reportes({ token }: ReportesProps) {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </>
       )}

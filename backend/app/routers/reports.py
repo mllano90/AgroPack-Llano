@@ -78,6 +78,22 @@ def _resumen_consumos_granel(consumos_granel: list | None) -> str:
     return ", ".join(parts)
 
 
+def _norm_lote_campo_reporte(lote: str | None) -> str:
+    """
+    Clave de lote de campo para reportes.
+    En lotes_resumen a veces viene '8502 S2C3@2026-08-05' (fecha de corte);
+    eso NO es otro lote: se agrega al mismo código de campo.
+    """
+    s = (lote or "").strip() or "SIN_LOTE"
+    if "@" in s:
+        base, suf = s.rsplit("@", 1)
+        suf = (suf or "").strip()
+        # Solo quitar si parece fecha (YYYY-MM-DD…)
+        if len(suf) >= 8 and suf[:4].isdigit() and suf[4:5] == "-":
+            s = base.strip() or "SIN_LOTE"
+    return s
+
+
 def _split_produccion(produccion: list | None) -> dict:
     """Separa producción en final (RPC/cartón), granel WIP y jugo."""
     kg_rpc = 0.0
@@ -696,9 +712,9 @@ def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
         total_bins = sum(int(c["bins"]) for c in consumos_ok) or 0
         if total_bins <= 0:
             continue
-        multi_lote = len({c["lote"] for c in consumos_ok}) > 1
+        multi_lote = len({_norm_lote_campo_reporte(c["lote"]) for c in consumos_ok}) > 1
         for c in consumos_ok:
-            lote = c["lote"] or "SIN_LOTE"
+            lote = _norm_lote_campo_reporte(c["lote"])
             bins = int(c["bins"])
             share = bins / total_bins
             row = acc[lote]

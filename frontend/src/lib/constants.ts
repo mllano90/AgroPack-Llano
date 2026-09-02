@@ -96,6 +96,73 @@ export const LOTES_LIMON = [
   '8502 S2C3',
 ] as const;
 
+/** Variedades limón (portainjerto / combinación) para gráficas por lote */
+export type VariedadLimonCampo =
+  | 'lisboa_macrophyla'
+  | 'eureka_macrophyla'
+  | 'lisboa_volkameriano'
+  | 'volkameriano'
+  | 'macrophyla';
+
+export const VARIEDAD_LIMON_LABEL: Record<VariedadLimonCampo, string> = {
+  lisboa_macrophyla: 'Lisboa Macrophyla',
+  eureka_macrophyla: 'Eureka Macrophyla',
+  lisboa_volkameriano: 'Lisboa Volkameriano',
+  volkameriano: 'Volkameriano',
+  macrophyla: 'Macrophyla',
+};
+
+/** Color fijo por variedad (barras apiladas) */
+export const VARIEDAD_LIMON_COLOR: Record<VariedadLimonCampo, string> = {
+  lisboa_macrophyla: '#15803d', // verde
+  eureka_macrophyla: '#2563eb', // azul
+  lisboa_volkameriano: '#ca8a04', // ámbar
+  volkameriano: '#7c3aed', // violeta
+  macrophyla: '#ea580c', // naranja
+};
+
+export type MixVariedadPct = { variedad: VariedadLimonCampo; pct: number };
+
+/**
+ * Mix de variedades por sección/cuadro (S1C1…S2C3).
+ * pct en 0–100; la suma por sección debe ser 100.
+ */
+export const MIX_VARIEDAD_POR_SECCION: Record<string, MixVariedadPct[]> = {
+  S1C1: [{ variedad: 'lisboa_macrophyla', pct: 100 }],
+  S1C2: [
+    { variedad: 'eureka_macrophyla', pct: 70 },
+    { variedad: 'lisboa_macrophyla', pct: 30 },
+  ],
+  S1C3: [
+    { variedad: 'lisboa_macrophyla', pct: 70 },
+    { variedad: 'lisboa_volkameriano', pct: 30 },
+  ],
+  S1C4: [{ variedad: 'lisboa_volkameriano', pct: 100 }],
+  S1C5: [{ variedad: 'lisboa_volkameriano', pct: 100 }],
+  S2C1: [
+    { variedad: 'volkameriano', pct: 85 },
+    { variedad: 'lisboa_volkameriano', pct: 15 },
+  ],
+  S2C2: [{ variedad: 'volkameriano', pct: 100 }],
+  S2C3: [
+    { variedad: 'volkameriano', pct: 70 },
+    { variedad: 'macrophyla', pct: 30 },
+  ],
+};
+
+/** Extrae código de sección (S1C2, S2C3…) del nombre de lote, p.ej. "8504 S1C2". */
+export function seccionDesdeLote(lote: string | null | undefined): string | null {
+  const s = String(lote || '').toUpperCase();
+  const m = s.match(/\b(S[12]C[1-5])\b/);
+  return m ? m[1] : null;
+}
+
+export function mixVariedadParaLote(lote: string | null | undefined): MixVariedadPct[] {
+  const sec = seccionDesdeLote(lote);
+  if (!sec) return [];
+  return MIX_VARIEDAD_POR_SECCION[sec] || [];
+}
+
 export const PRESENTACIONES_LIMON = [
   { value: 'rpc_granel', label: 'RPC a granel 22 kg (por talla, 1ra en proceso)' },
   { value: 'rpc_18', label: 'RPC 18 bolsas 2lbs (tallas 140+)' },
