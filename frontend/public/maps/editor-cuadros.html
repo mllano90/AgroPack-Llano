@@ -1,0 +1,528 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Editor de polígonos — Cuadros limón</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --panel: #1e293b;
+      --line: #334155;
+      --text: #f1f5f9;
+      --muted: #94a3b8;
+      --accent: #38bdf8;
+      --ok: #4ade80;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    header h1 {
+      font-size: 15px;
+      margin: 0 12px 0 0;
+      font-weight: 800;
+    }
+    header p {
+      margin: 0;
+      font-size: 12px;
+      color: var(--muted);
+      flex: 1;
+      min-width: 200px;
+    }
+    button, select {
+      font: inherit;
+      font-size: 13px;
+      font-weight: 700;
+      border-radius: 8px;
+      border: 1px solid var(--line);
+      background: #0f172a;
+      color: var(--text);
+      padding: 8px 12px;
+      cursor: pointer;
+    }
+    button.primary {
+      background: #0369a1;
+      border-color: #0284c7;
+    }
+    button.ok {
+      background: #166534;
+      border-color: #22c55e;
+    }
+    button:hover { filter: brightness(1.1); }
+    select { min-width: 110px; }
+    .wrap {
+      flex: 1;
+      display: flex;
+      min-height: 0;
+    }
+    .canvas-wrap {
+      flex: 1;
+      overflow: auto;
+      background: #020617;
+      position: relative;
+    }
+    svg {
+      display: block;
+      width: 100%;
+      height: auto;
+      max-height: calc(100vh - 120px);
+      cursor: crosshair;
+      touch-action: none;
+      user-select: none;
+    }
+    aside {
+      width: 340px;
+      flex-shrink: 0;
+      border-left: 1px solid var(--line);
+      background: var(--panel);
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+    aside .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      padding: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    aside .tabs button {
+      padding: 6px 10px;
+      font-size: 12px;
+    }
+    aside .tabs button.active {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: var(--accent);
+    }
+    aside .body {
+      flex: 1;
+      overflow: auto;
+      padding: 12px;
+      font-size: 12px;
+    }
+    textarea {
+      width: 100%;
+      height: 280px;
+      background: #020617;
+      color: #e2e8f0;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 11px;
+      resize: vertical;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+      margin: 0 0 10px;
+    }
+    .row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 8px;
+    }
+    label.chk {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .status {
+      font-size: 11px;
+      color: var(--ok);
+      min-height: 16px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Editor de cuadros</h1>
+    <p>
+      Arrastra las <strong>esquinas</strong> (círculos). Clic en un polígono o usa el selector para
+      cambiar de cuadro. Al terminar: <strong>Copiar JSON</strong> y lo pegamos en la app.
+    </p>
+    <label class="chk"><input type="checkbox" id="showBg" checked /> Fondo guía</label>
+    <label class="chk"><input type="checkbox" id="showFill" checked /> Relleno</label>
+    <select id="sel"></select>
+    <button type="button" id="btnReset">Reset cuadro</button>
+    <button type="button" id="btnResetAll">Reset todos</button>
+    <button type="button" class="primary" id="btnCopy">Copiar JSON</button>
+    <button type="button" class="ok" id="btnCopyTs">Copiar CUADROS_GEO (TS)</button>
+  </header>
+  <div class="wrap">
+    <div class="canvas-wrap">
+      <svg id="svg" viewBox="0 0 1474 1126" xmlns="http://www.w3.org/2000/svg">
+        <image
+          id="bg"
+          href="/maps/cuadros-guia.png"
+          x="0"
+          y="0"
+          width="1474"
+          height="1126"
+          preserveAspectRatio="xMidYMid meet"
+          opacity="0.95"
+        />
+        <g id="polys"></g>
+        <g id="handles"></g>
+      </svg>
+    </div>
+    <aside>
+      <div class="tabs" id="tabs"></div>
+      <div class="body">
+        <p class="hint">
+          ViewBox fijo <code>1474 × 1126</code> (misma que la guía). 4 vértices por cuadro, en
+          orden: TL → TR → BR → BL (sentido horario).
+        </p>
+        <div class="status" id="status"></div>
+        <div class="row">
+          <button type="button" id="btnUndo" disabled>Deshacer</button>
+        </div>
+        <label style="display:block;margin:8px 0 4px;color:#94a3b8">JSON actual</label>
+        <textarea id="out" readonly></textarea>
+      </div>
+    </aside>
+  </div>
+
+  <script>
+    const VB_W = 1474;
+    const VB_H = 1126;
+
+    /** Semilla = calibración manual del usuario */
+    const DEFAULTS = {
+      S2C3: [
+        [335, 511],
+        [745, 492],
+        [714, 653],
+        [302, 666],
+      ],
+      S2C2: [
+        [293, 687],
+        [704, 664],
+        [676, 825],
+        [260, 852],
+      ],
+      S2C1: [
+        [249, 866],
+        [670, 841],
+        [637, 1013],
+        [214, 1030],
+      ],
+      S1C5: [
+        [835, 121],
+        [1254, 100],
+        [1221, 255],
+        [800, 276],
+      ],
+      S1C4: [
+        [793, 295],
+        [1216, 282],
+        [1181, 446],
+        [762, 471],
+      ],
+      S1C3: [
+        [766, 490],
+        [1174, 469],
+        [1141, 622],
+        [733, 642],
+      ],
+      S1C2: [
+        [729, 664],
+        [1133, 642],
+        [1095, 802],
+        [691, 823],
+      ],
+      S1C1: [
+        [687, 839],
+        [1095, 823],
+        [1063, 988],
+        [649, 1019],
+      ],
+    };
+
+    const ORDER = ['S2C3', 'S2C2', 'S2C1', 'S1C5', 'S1C4', 'S1C3', 'S1C2', 'S1C1'];
+    const COLORS = {
+      S2C3: '#7c3aed',
+      S2C2: '#7c3aed',
+      S2C1: '#7c3aed',
+      S1C5: '#15803d',
+      S1C4: '#15803d',
+      S1C3: '#15803d',
+      S1C2: '#15803d',
+      S1C1: '#15803d',
+    };
+
+    const STORAGE_KEY = 'agropack_cuadros_geo_v1';
+
+    function cloneDefaults() {
+      const o = {};
+      for (const k of ORDER) o[k] = DEFAULTS[k].map((p) => [...p]);
+      return o;
+    }
+
+    let data = cloneDefaults();
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        for (const k of ORDER) {
+          if (parsed[k]?.length === 4) data[k] = parsed[k];
+        }
+      }
+    } catch (_) {}
+
+    let active = 'S1C1';
+    let drag = null; // { seccion, idx }
+    let undoStack = [];
+
+    const svg = document.getElementById('svg');
+    const gPolys = document.getElementById('polys');
+    const gHandles = document.getElementById('handles');
+    const sel = document.getElementById('sel');
+    const tabs = document.getElementById('tabs');
+    const out = document.getElementById('out');
+    const status = document.getElementById('status');
+    const bg = document.getElementById('bg');
+
+    ORDER.forEach((k) => {
+      const opt = document.createElement('option');
+      opt.value = k;
+      opt.textContent = k;
+      sel.appendChild(opt);
+
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = k;
+      b.dataset.k = k;
+      b.addEventListener('click', () => setActive(k));
+      tabs.appendChild(b);
+    });
+
+    function setActive(k) {
+      active = k;
+      sel.value = k;
+      [...tabs.querySelectorAll('button')].forEach((b) => {
+        b.classList.toggle('active', b.dataset.k === k);
+      });
+      render();
+    }
+
+    function pointsStr(pts) {
+      return pts.map((p) => p.join(',')).join(' ');
+    }
+
+    function centroid(pts) {
+      const x = pts.reduce((s, p) => s + p[0], 0) / pts.length;
+      const y = pts.reduce((s, p) => s + p[1], 0) / pts.length;
+      return [x, y];
+    }
+
+    function pushUndo() {
+      undoStack.push(JSON.stringify(data));
+      if (undoStack.length > 40) undoStack.shift();
+      document.getElementById('btnUndo').disabled = false;
+    }
+
+    function persist() {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      refreshOut();
+      status.textContent = 'Guardado en este navegador (localStorage).';
+      setTimeout(() => {
+        if (status.textContent.startsWith('Guardado')) status.textContent = '';
+      }, 1500);
+    }
+
+    function toGeoExport() {
+      return ORDER.map((seccion) => {
+        const pts = data[seccion];
+        const [cx, cy] = centroid(pts);
+        return {
+          seccion,
+          points: pointsStr(pts),
+          cx: Math.round(cx),
+          cy: Math.round(cy),
+        };
+      });
+    }
+
+    function refreshOut() {
+      out.value = JSON.stringify(toGeoExport(), null, 2);
+    }
+
+    function toTsSnippet() {
+      const lines = ['const CUADROS_GEO = ['];
+      for (const item of toGeoExport()) {
+        lines.push('  {');
+        lines.push(`    seccion: '${item.seccion}',`);
+        lines.push(`    points: '${item.points}',`);
+        lines.push(`    cx: ${item.cx},`);
+        lines.push(`    cy: ${item.cy},`);
+        lines.push('  },');
+      }
+      lines.push('];');
+      return lines.join('\n');
+    }
+
+    function clientToSvg(evt) {
+      const pt = svg.createSVGPoint();
+      pt.x = evt.clientX;
+      pt.y = evt.clientY;
+      const ctm = svg.getScreenCTM().inverse();
+      const sp = pt.matrixTransform(ctm);
+      return [
+        Math.max(0, Math.min(VB_W, sp.x)),
+        Math.max(0, Math.min(VB_H, sp.y)),
+      ];
+    }
+
+    function render() {
+      const showFill = document.getElementById('showFill').checked;
+      gPolys.innerHTML = '';
+      gHandles.innerHTML = '';
+
+      for (const k of ORDER) {
+        const pts = data[k];
+        const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
+        poly.setAttribute('points', pointsStr(pts));
+        poly.setAttribute('fill', showFill ? COLORS[k] : 'none');
+        poly.setAttribute('fill-opacity', k === active ? '0.45' : '0.22');
+        poly.setAttribute('stroke', k === active ? '#f8fafc' : COLORS[k]);
+        poly.setAttribute('stroke-width', k === active ? '5' : '3');
+        poly.style.cursor = 'pointer';
+        poly.addEventListener('mousedown', (e) => {
+          e.stopPropagation();
+          setActive(k);
+        });
+        gPolys.appendChild(poly);
+
+        const [cx, cy] = centroid(pts);
+        const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        label.setAttribute('x', cx);
+        label.setAttribute('y', cy);
+        label.setAttribute('text-anchor', 'middle');
+        label.setAttribute('dominant-baseline', 'middle');
+        label.setAttribute('fill', '#fff');
+        label.setAttribute('font-size', '22');
+        label.setAttribute('font-weight', '800');
+        label.setAttribute('stroke', '#0f172a');
+        label.setAttribute('stroke-width', '4');
+        label.setAttribute('paint-order', 'stroke');
+        label.style.pointerEvents = 'none';
+        label.textContent = k;
+        gPolys.appendChild(label);
+      }
+
+      // Handles solo del activo
+      data[active].forEach((p, idx) => {
+        const c = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+        c.setAttribute('cx', p[0]);
+        c.setAttribute('cy', p[1]);
+        c.setAttribute('r', 14);
+        c.setAttribute('fill', '#fbbf24');
+        c.setAttribute('stroke', '#0f172a');
+        c.setAttribute('stroke-width', '3');
+        c.style.cursor = 'grab';
+        c.addEventListener('mousedown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          pushUndo();
+          drag = { seccion: active, idx };
+          c.style.cursor = 'grabbing';
+        });
+        gHandles.appendChild(c);
+
+        const t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        t.setAttribute('x', p[0]);
+        t.setAttribute('y', p[1] - 18);
+        t.setAttribute('text-anchor', 'middle');
+        t.setAttribute('fill', '#fde68a');
+        t.setAttribute('font-size', '14');
+        t.setAttribute('font-weight', '800');
+        t.style.pointerEvents = 'none';
+        t.textContent = String(idx + 1);
+        gHandles.appendChild(t);
+      });
+
+      refreshOut();
+    }
+
+    window.addEventListener('mousemove', (e) => {
+      if (!drag) return;
+      const [x, y] = clientToSvg(e);
+      data[drag.seccion][drag.idx] = [Math.round(x), Math.round(y)];
+      render();
+    });
+    window.addEventListener('mouseup', () => {
+      if (drag) {
+        drag = null;
+        persist();
+      }
+    });
+
+    sel.addEventListener('change', () => setActive(sel.value));
+    document.getElementById('showBg').addEventListener('change', (e) => {
+      bg.setAttribute('opacity', e.target.checked ? '0.95' : '0');
+    });
+    document.getElementById('showFill').addEventListener('change', render);
+
+    document.getElementById('btnReset').addEventListener('click', () => {
+      pushUndo();
+      data[active] = DEFAULTS[active].map((p) => [...p]);
+      persist();
+      render();
+    });
+    document.getElementById('btnResetAll').addEventListener('click', () => {
+      if (!confirm('¿Resetear TODOS los polígonos a la semilla inicial?')) return;
+      pushUndo();
+      data = cloneDefaults();
+      persist();
+      render();
+    });
+    document.getElementById('btnUndo').addEventListener('click', () => {
+      const prev = undoStack.pop();
+      if (!prev) return;
+      data = JSON.parse(prev);
+      document.getElementById('btnUndo').disabled = undoStack.length === 0;
+      persist();
+      render();
+    });
+    document.getElementById('btnCopy').addEventListener('click', async () => {
+      const text = JSON.stringify(toGeoExport(), null, 2);
+      await navigator.clipboard.writeText(text);
+      status.textContent = '✓ JSON copiado al portapapeles';
+    });
+    document.getElementById('btnCopyTs').addEventListener('click', async () => {
+      await navigator.clipboard.writeText(toTsSnippet());
+      status.textContent = '✓ Bloque CUADROS_GEO (TypeScript) copiado';
+    });
+
+    // Atajos: 1-8 cambian cuadro
+    window.addEventListener('keydown', (e) => {
+      const n = parseInt(e.key, 10);
+      if (n >= 1 && n <= 8) setActive(ORDER[n - 1]);
+    });
+
+    setActive('S1C1');
+  </script>
+</body>
+</html>

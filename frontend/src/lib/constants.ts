@@ -145,8 +145,8 @@ export const MIX_VARIEDAD_POR_SECCION: Record<string, MixVariedadPct[]> = {
   ],
   S2C2: [{ variedad: 'volkameriano', pct: 100 }],
   S2C3: [
-    { variedad: 'volkameriano', pct: 70 },
-    { variedad: 'macrophyla', pct: 30 },
+    { variedad: 'macrophyla', pct: 60 },
+    { variedad: 'volkameriano', pct: 40 },
   ],
 };
 

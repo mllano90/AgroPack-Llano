@@ -24,6 +24,7 @@ import {
 import type { DashboardData, EmpaqueRecord } from '../../types';
 import EmbarquesReporte from './EmbarquesReporte';
 import InventariosReporte from './InventariosReporte';
+import MapaCuadrosLimon from './MapaCuadrosLimon';
 
 type Corrida = CorridaRendimientoApi;
 type Lote = LoteRendimientoApi;
@@ -2004,6 +2005,8 @@ export default function Reportes({ token }: ReportesProps) {
             <strong>{hectareasPorLote} ha</strong> (cada lote = {hectareasPorLote} ha). Multi-lote:
             producción prorrateada por bins. Lotes iguales se agrupan ignorando fecha de corte.
           </p>
+          {porLote.length > 0 && <LoteBarrasChart lotes={porLote} fmtKg={fmtKg} />}
+          <MapaCuadrosLimon lotes={porLote} />
           {porLote.length === 0 ? (
             <div>
               <p style={{ color: '#64748b' }}>
@@ -2011,8 +2014,6 @@ export default function Reportes({ token }: ReportesProps) {
               </p>
             </div>
           ) : (
-            <>
-            <LoteBarrasChart lotes={porLote} fmtKg={fmtKg} />
             <div style={{ overflowX: 'auto' }}>
               <table
                 style={{
@@ -2074,7 +2075,6 @@ export default function Reportes({ token }: ReportesProps) {
                 </tbody>
               </table>
             </div>
-            </>
           )}
         </>
       )}
