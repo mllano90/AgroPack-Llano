@@ -56,11 +56,50 @@ def get_db():
         db.close()
 
 
+def ensure_producto_enum_labels():
+    """
+    Postgres: el tipo enum `producto` se creó con nombres (UVA, LIMON_AMARILLO).
+    SQLAlchemy envía Producto.MELON → 'MELON'. Sin este label fallan inserts/filtros melón.
+    No toca filas existentes de limón/uva.
+    """
+    from sqlalchemy import text
+
+    if DATABASE_URL.startswith("sqlite"):
+        return
+    labels = ("MELON", "melon")
+    try:
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+            # Descubrir labels actuales
+            existing = set()
+            try:
+                rows = conn.execute(
+                    text(
+                        "SELECT enumlabel FROM pg_enum e "
+                        "JOIN pg_type t ON e.enumtypid = t.oid "
+                        "WHERE t.typname = 'producto'"
+                    )
+                ).fetchall()
+                existing = {str(r[0]) for r in rows}
+            except Exception as ex:
+                print(f"⚠️ No se pudo listar enum producto: {ex}")
+            for lab in labels:
+                if lab in existing:
+                    continue
+                try:
+                    conn.execute(text(f"ALTER TYPE producto ADD VALUE IF NOT EXISTS '{lab}'"))
+                    print(f"✅ Enum producto: agregado '{lab}'")
+                except Exception as ex:
+                    print(f"⚠️ Enum producto ADD '{lab}': {ex}")
+    except Exception as e:
+        print(f"⚠️ ensure_producto_enum_labels: {e}")
+
+
 def ensure_schema():
     """Añade columnas nuevas sin migración Alembic (Postgres/SQLite)."""
     from sqlalchemy import text, inspect
 
     try:
+        ensure_producto_enum_labels()
         insp = inspect(engine)
         tables = insp.get_table_names()
         if "empaque" in tables:
