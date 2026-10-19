@@ -11,7 +11,9 @@ from app.models.inventory import (
     Embarque,
     InventarioDesverdizado,
     Empaque,
+    LoteMelonHectareas,
 )
+from app.core.melon_hectareas import listar_hectareas_melon, seed_lote_melon_hectareas
 from app.models.enums import Producto
 from app.schemas.reports import (
     DashboardResponse,
@@ -771,6 +773,20 @@ def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
         )
     return result
 
+@router.get("/melon/hectareas")
+def obtener_hectareas_melon(db: Session = Depends(get_db)):
+    """Catálogo de hectáreas por lote melón (área × sección × variedad)."""
+    # Si la tabla está vacía (deploy fresco), sembrarla
+    if db.query(LoteMelonHectareas).count() == 0:
+        seed_lote_melon_hectareas(db, overwrite=True)
+    items, total = listar_hectareas_melon(db)
+    return {
+        "total_hectareas": round(total, 2),
+        "num_lotes": len(items),
+        "lotes": items,
+    }
+
+
 @router.get("/dashboard", response_model=DashboardResponse)
 def obtener_dashboard(db: Session = Depends(get_db)):
     
@@ -835,6 +851,10 @@ def obtener_dashboard(db: Session = Depends(get_db)):
             fecha_recepcion=str(d.fecha_recepcion),
             fecha_tentativa_salida=str(d.fecha_tentativa_salida),
             estado=d.estado,
+            producto=(
+                getattr(d.producto, "value", None) or str(d.producto or "")
+            ).lower()
+            or None,
         )
         for d in desverdizado_raw
         if (d.cantidad_bins or 0) > 0 and (d.estado or "") != "eliminado"

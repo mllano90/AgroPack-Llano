@@ -4,7 +4,7 @@
 // ============================================
 
 // --- Enums / Literal Unions ---
-export type Producto = 'uva' | 'limon_amarillo';
+export type Producto = 'uva' | 'limon_amarillo' | 'melon';
 
 export type Variedad = 'early_sweet' | 'flame' | 'summer_royal';
 
@@ -43,6 +43,8 @@ export interface DesverdizadoItem {
   fecha_recepcion: string;
   fecha_tentativa_salida: string;
   estado: string;
+  /** limon_amarillo | melon — para filtrar en Reportes */
+  producto?: Producto | string | null;
 }
 
 // --- Clientes ---

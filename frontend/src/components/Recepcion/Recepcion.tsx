@@ -2,7 +2,12 @@ import { useState } from 'react';
 import type { TipoMercado, TipoRecepcion, Variedad, TipoCultivo, Producto } from '../../types';
 import { VariedadSelect, MercadoSelect, TipoCultivoSelect } from '../ui';
 import { useCreateRecepcion } from '../../hooks/useCreateRecepcion';
-import { LOTES_LIMON, PESO_BIN_CAMPO_KG, DIAS_DESVERDIZADO } from '../../lib/constants';
+import {
+  LOTES_LIMON,
+  LOTES_MELON,
+  PESO_BIN_CAMPO_KG,
+  DIAS_DESVERDIZADO,
+} from '../../lib/constants';
 
 interface RecepcionProps {
   token: string;
@@ -16,8 +21,8 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
   const [tipoCultivoRecepcion, setTipoCultivoRecepcion] = useState<TipoCultivo | ''>('');
   const [mercadoRecepcion, setMercadoRecepcion] = useState<TipoMercado>('nacional');
   const [cantidadRecepcion, setCantidadRecepcion] = useState('');
-  
-  // Campos para Limón
+
+  // Lote compartido (limón o melón según producto)
   const [lote, setLote] = useState('');
   const [cantidadBins, setCantidadBins] = useState('');
   const [fechaCorte, setFechaCorte] = useState('');
@@ -25,30 +30,40 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
   const createRecepcionMutation = useCreateRecepcion(token);
 
   const registrarRecepcion = async () => {
-    if (!productoRecepcion) return alert("Selecciona un producto");
+    if (!productoRecepcion) return alert('Selecciona un producto');
 
     let payload: any;
 
     if (productoRecepcion === 'uva') {
-      if (!variedadRecepcion || !cantidadRecepcion) return alert("Faltan datos");
+      if (!variedadRecepcion || !cantidadRecepcion) return alert('Faltan datos');
       const cantidad = parseInt(cantidadRecepcion);
       payload = {
         producto: 'uva',
         variedad: variedadRecepcion as Variedad,
         cantidad_cajas_campo: tipoRecepcion === 'campo' ? cantidad : 0,
         cantidad_cajas_carton: tipoRecepcion === 'carton' ? cantidad : 0,
-        tipo_cultivo_carton: tipoRecepcion === 'carton' ? (tipoCultivoRecepcion as TipoCultivo) : null,
+        tipo_cultivo_carton:
+          tipoRecepcion === 'carton' ? (tipoCultivoRecepcion as TipoCultivo) : null,
         mercado: mercadoRecepcion,
+      };
+    } else if (productoRecepcion === 'melon') {
+      const bins = parseInt(cantidadBins) || 0;
+      if (!lote) return alert('Selecciona área / sección / variedad para Melón');
+      if (bins <= 0) return alert('Indica la cantidad de bins para Melón');
+      payload = {
+        producto: 'melon',
+        lote,
+        cantidad_bins: bins,
+        fecha_corte: fechaCorte || null,
       };
     } else {
       const bins = parseInt(cantidadBins) || 0;
-      if (!lote || bins <= 0) return alert("Faltan lote o cantidad de bins para Limón");
+      if (!lote || bins <= 0) return alert('Faltan lote o cantidad de bins para Limón');
       payload = {
         producto: 'limon_amarillo',
         lote: lote,
         cantidad_bins: bins,
         fecha_corte: fechaCorte || null,
-        // no enviar campos de uva
       };
     }
 
@@ -65,9 +80,13 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
       let message = 'Error desconocido';
       if (err.response?.data) {
         const data = err.response.data;
-        message = data.detail || data.message || (Array.isArray(data) ? JSON.stringify(data) : JSON.stringify(data));
+        message =
+          data.detail ||
+          data.message ||
+          (Array.isArray(data) ? JSON.stringify(data) : JSON.stringify(data));
       } else if (err.request) {
-        message = 'No se pudo conectar con el servidor (posiblemente el backend está reiniciando o caído)';
+        message =
+          'No se pudo conectar con el servidor (posiblemente el backend está reiniciando o caído)';
       } else {
         message = err.message;
       }
@@ -78,46 +97,43 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
   const isSubmitting = createRecepcionMutation.isPending;
 
   return (
-    <div style={{background: 'white', padding: '25px', borderRadius: '10px'}}>
+    <div style={{ background: 'white', padding: '25px', borderRadius: '10px' }}>
       <h2>Recepción de Campo</h2>
 
       {/* Producto */}
-      <select 
-        value={productoRecepcion} 
+      <select
+        value={productoRecepcion}
         onChange={(e) => {
           const val = e.target.value as Producto | '';
           setProductoRecepcion(val);
-          // Limpiar campos al cambiar de producto para empezar en blanco
           setCantidadRecepcion('');
           setLote('');
           setCantidadBins('');
           setFechaCorte('');
           setVariedadRecepcion('');
           setTipoCultivoRecepcion('');
-        }} 
-        style={{width: '100%', padding: '12px', margin: '10px 0'}}
+        }}
+        style={{ width: '100%', padding: '12px', margin: '10px 0' }}
       >
         <option value="">Seleccionar producto</option>
         <option value="uva">Uva</option>
         <option value="limon_amarillo">Limón Amarillo</option>
+        <option value="melon">Melón</option>
       </select>
 
       {/* Campos solo para Uva */}
       {productoRecepcion === 'uva' && (
         <>
-          <select 
-            value={tipoRecepcion} 
-            onChange={(e) => setTipoRecepcion(e.target.value as 'campo' | 'carton')} 
-            style={{width: '100%', padding: '12px', margin: '10px 0'}}
+          <select
+            value={tipoRecepcion}
+            onChange={(e) => setTipoRecepcion(e.target.value as 'campo' | 'carton')}
+            style={{ width: '100%', padding: '12px', margin: '10px 0' }}
           >
             <option value="campo">Caja de Campo</option>
             <option value="carton">Caja de Cartón Lista</option>
           </select>
 
-          <VariedadSelect
-            value={variedadRecepcion}
-            onChange={setVariedadRecepcion}
-          />
+          <VariedadSelect value={variedadRecepcion} onChange={setVariedadRecepcion} />
 
           {tipoRecepcion === 'carton' && (
             <TipoCultivoSelect
@@ -126,18 +142,56 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
             />
           )}
 
-          <MercadoSelect
-            value={mercadoRecepcion}
-            onChange={setMercadoRecepcion}
-          />
+          <MercadoSelect value={mercadoRecepcion} onChange={setMercadoRecepcion} />
 
-          <input 
-            type="number" 
-            placeholder="Cantidad de cajas" 
-            value={cantidadRecepcion} 
-            onChange={(e) => setCantidadRecepcion(e.target.value)} 
-            style={{width: '100%', padding: '12px', margin: '10px 0'}} 
+          <input
+            type="number"
+            placeholder="Cantidad de cajas"
+            value={cantidadRecepcion}
+            onChange={(e) => setCantidadRecepcion(e.target.value)}
+            style={{ width: '100%', padding: '12px', margin: '10px 0' }}
           />
+        </>
+      )}
+
+      {productoRecepcion === 'melon' && (
+        <>
+          <label style={{ display: 'block', fontSize: 13, color: '#475569', marginTop: 4 }}>
+            Área / sección / variedad
+          </label>
+          <select
+            value={lote}
+            onChange={(e) => setLote(e.target.value)}
+            style={{ width: '100%', padding: '12px', margin: '6px 0 10px' }}
+          >
+            <option value="">Seleccionar opción</option>
+            {LOTES_MELON.map((o) => (
+              <option key={o.lote} value={o.lote}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+
+          <input
+            type="number"
+            placeholder="Cantidad de bins"
+            value={cantidadBins}
+            onChange={(e) => setCantidadBins(e.target.value)}
+            style={{ width: '100%', padding: '12px', margin: '10px 0' }}
+          />
+          <label style={{ display: 'block', fontSize: 13, color: '#475569', marginTop: 4 }}>
+            Fecha de corte / recepción
+          </label>
+          <input
+            type="date"
+            value={fechaCorte}
+            onChange={(e) => setFechaCorte(e.target.value)}
+            style={{ width: '100%', padding: '12px', margin: '6px 0 4px' }}
+          />
+          <p style={{ fontSize: 12, color: '#64748b', margin: '0 0 8px' }}>
+            El stock de bins queda ligado al lote seleccionado. El consumo desde Empaque
+            se conectará en un siguiente paso.
+          </p>
         </>
       )}
 
@@ -179,10 +233,10 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
         </>
       )}
 
-      <button 
-        onClick={registrarRecepcion} 
+      <button
+        onClick={registrarRecepcion}
         disabled={isSubmitting}
-        style={{padding: '12px 30px', marginTop: '10px', opacity: isSubmitting ? 0.6 : 1}}
+        style={{ padding: '12px 30px', marginTop: '10px', opacity: isSubmitting ? 0.6 : 1 }}
       >
         Registrar Recepción
       </button>

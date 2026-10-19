@@ -7,7 +7,14 @@ import type {
 } from '../../types';
 import type { CorridaRendimientoApi, ProyeccionInventarioApi } from '../../lib/api';
 import { formatFechaCorta } from '../../lib/dates';
-import { DIAS_DESVERDIZADO, KG_POR_PRESENTACION } from '../../lib/constants';
+import {
+  DIAS_DESVERDIZADO,
+  KG_POR_PRESENTACION,
+  labelCalidadMelon,
+  labelPresentacionMelon,
+} from '../../lib/constants';
+
+export type ProductoInventarioFiltro = 'limon_amarillo' | 'melon';
 
 interface Props {
   data: DashboardData | null;
@@ -18,6 +25,8 @@ interface Props {
   empaquesLimon?: EmpaqueRecord[];
   /** Corridas de reportes (ids_empaques) */
   corridas?: CorridaRendimientoApi[];
+  /** Si viene del padre Reportes, oculta tabs internos y filtra por producto */
+  productoFiltro?: ProductoInventarioFiltro;
 }
 
 type OrigenLinea = {
@@ -308,6 +317,20 @@ function parrillasDesdeUnidades(
   return { parr1ra, label1ra, binsJugo };
 }
 
+function productoDeDesverdizado(d: { producto?: string | null }): string {
+  return String(d.producto || '').toLowerCase();
+}
+
+function esDesverdizadoLimon(d: { producto?: string | null }): boolean {
+  const p = productoDeDesverdizado(d);
+  // Sin producto en respuestas viejas: asumir limón (comportamiento histórico)
+  return !p || p.includes('limon');
+}
+
+function esDesverdizadoMelon(d: { producto?: string | null }): boolean {
+  return productoDeDesverdizado(d) === 'melon';
+}
+
 export default function InventariosReporte({
   data,
   proyeccion = null,
@@ -315,6 +338,7 @@ export default function InventariosReporte({
   onRefresh,
   empaquesLimon = [],
   corridas = [],
+  productoFiltro,
 }: Props) {
   const [productTab, setProductTab] = useState<'uva' | 'limon'>('limon');
   /** groupKey de línea de inventario final expandida */
@@ -340,26 +364,41 @@ export default function InventariosReporte({
   const inventarioCarton: InventarioFinalItem[] = data.inventario_final || [];
   const desverdizado = data.desverdizado || [];
 
-  const isUva = productTab === 'uva';
-  const isLimon = productTab === 'limon';
+  const filtradoPorPadre = Boolean(productoFiltro);
+  const isMelon = productoFiltro === 'melon';
+  const isUva = !filtradoPorPadre && productTab === 'uva';
+  const isLimon =
+    productoFiltro === 'limon_amarillo' || (!filtradoPorPadre && productTab === 'limon');
 
   const uvaFinalItems = inventarioCarton.filter(
     (i) => !i.presentacion && (i.producto === 'uva' || !i.producto)
   );
-  const limonFinalItems = inventarioCarton.filter(
-    (i) => i.producto === 'limon_amarillo' || !!i.presentacion
+  const limonFinalItems = inventarioCarton.filter((i) => {
+    const p = String(i.producto || '').toLowerCase();
+    if (p === 'melon') return false;
+    return p.includes('limon') || (!!i.presentacion && !p.includes('melon') && p !== 'uva');
+  });
+  const melonFinalItems = inventarioCarton.filter(
+    (i) => String(i.producto || '').toLowerCase() === 'melon'
   );
-  const visibleDesverdizado = (desverdizado || [])
-    .filter((d) => d.cantidad_bins_disponibles > 0)
-    .slice()
-    .sort((a, b) => {
+
+  const sortBins = <T extends { fecha_recepcion?: string; lote?: string }>(rows: T[]) =>
+    rows.slice().sort((a, b) => {
       const fa = String(a.fecha_recepcion || '');
       const fb = String(b.fecha_recepcion || '');
       if (fa !== fb) return fa.localeCompare(fb);
       return String(a.lote || '').localeCompare(String(b.lote || ''));
     });
+
+  const visibleDesverdizadoLimon = sortBins(
+    (desverdizado || []).filter((d) => d.cantidad_bins_disponibles > 0 && esDesverdizadoLimon(d))
+  );
+  const visibleBinsMelon = sortBins(
+    (desverdizado || []).filter((d) => d.cantidad_bins_disponibles > 0 && esDesverdizadoMelon(d))
+  );
   const visibleUvaFinal = uvaFinalItems.filter((i) => (i.cantidad_stock || 0) > 0);
   const visibleLimonFinal = limonFinalItems.filter((i) => (i.cantidad_stock || 0) > 0);
+  const visibleMelonFinal = melonFinalItems.filter((i) => (i.cantidad_stock || 0) > 0);
 
   return (
     <div>
@@ -373,7 +412,10 @@ export default function InventariosReporte({
           marginBottom: 8,
         }}
       >
-        <h3 style={{ margin: 0 }}>📦 Inventarios</h3>
+        <h3 style={{ margin: 0 }}>
+          📦 Inventarios
+          {isMelon ? ' — Melón' : isLimon && filtradoPorPadre ? ' — Limón' : ''}
+        </h3>
         {onRefresh && (
           <button type="button" onClick={onRefresh} style={{ padding: '8px 14px' }}>
             Actualizar
@@ -381,37 +423,39 @@ export default function InventariosReporte({
         )}
       </div>
 
-      {/* Tabs — igual que landing */}
-      <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
-        <button
-          type="button"
-          onClick={() => setProductTab('uva')}
-          style={{
-            padding: '8px 16px',
-            background: isUva ? '#15803d' : '#f1f5f9',
-            color: isUva ? 'white' : '#334155',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-          }}
-        >
-          Uva
-        </button>
-        <button
-          type="button"
-          onClick={() => setProductTab('limon')}
-          style={{
-            padding: '8px 16px',
-            background: isLimon ? '#15803d' : '#f1f5f9',
-            color: isLimon ? 'white' : '#334155',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-          }}
-        >
-          Limón Amarillo
-        </button>
-      </div>
+      {/* Tabs internos solo si no hay filtro del padre */}
+      {!filtradoPorPadre && (
+        <div style={{ display: 'flex', gap: '8px', marginBottom: '15px' }}>
+          <button
+            type="button"
+            onClick={() => setProductTab('uva')}
+            style={{
+              padding: '8px 16px',
+              background: isUva ? '#15803d' : '#f1f5f9',
+              color: isUva ? 'white' : '#334155',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            Uva
+          </button>
+          <button
+            type="button"
+            onClick={() => setProductTab('limon')}
+            style={{
+              padding: '8px 16px',
+              background: isLimon ? '#15803d' : '#f1f5f9',
+              color: isLimon ? 'white' : '#334155',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+            }}
+          >
+            Limón Amarillo
+          </button>
+        </div>
+      )}
 
       {/* Resumen rápido */}
       <div style={{ display: 'flex', gap: '20px', marginBottom: '25px', flexWrap: 'wrap' }}>
@@ -431,7 +475,7 @@ export default function InventariosReporte({
           <>
             <div style={{ background: '#e0f2fe', padding: '12px 20px', borderRadius: '8px' }}>
               <strong>Bins en Desverdizado:</strong>{' '}
-              {visibleDesverdizado.reduce(
+              {visibleDesverdizadoLimon.reduce(
                 (sum, d) => sum + (d.cantidad_bins_disponibles || 0),
                 0
               )}{' '}
@@ -443,6 +487,22 @@ export default function InventariosReporte({
               {sumFormatParrillas(visibleLimonFinal, ['rpc_12', 'rpc_18'])} | Cartón:{' '}
               {sumFormatParrillas(visibleLimonFinal, 'caja_40lbs')} | Bins jugo:{' '}
               {sumFormatParrillas(visibleLimonFinal, 'bins_jugo')}
+            </div>
+          </>
+        )}
+        {isMelon && (
+          <>
+            <div style={{ background: '#e0f2fe', padding: '12px 20px', borderRadius: '8px' }}>
+              <strong>Bins de campo:</strong>{' '}
+              {visibleBinsMelon.reduce(
+                (sum, d) => sum + (d.cantidad_bins_disponibles || 0),
+                0
+              )}{' '}
+              bins
+            </div>
+            <div style={{ background: '#f0f9ff', padding: '12px 20px', borderRadius: '8px' }}>
+              <strong>Producto final:</strong>{' '}
+              {visibleMelonFinal.reduce((sum, i) => sum + (i.cantidad_stock || 0), 0)} cajas
             </div>
           </>
         )}
@@ -775,7 +835,7 @@ export default function InventariosReporte({
           )}
 
           <h3 style={{ marginTop: 28 }}>📦 Inventario en Desverdizado (Bins de Limón - 260kg)</h3>
-          {visibleDesverdizado.length > 0 ? (
+          {visibleDesverdizadoLimon.length > 0 ? (
             <div style={{ display: 'grid', gap: '8px', marginBottom: '20px' }}>
               <div
                 style={{
@@ -787,13 +847,13 @@ export default function InventariosReporte({
                 }}
               >
                 Total disponible:{' '}
-                {visibleDesverdizado.reduce(
+                {visibleDesverdizadoLimon.reduce(
                   (s, d) => s + (d.cantidad_bins_disponibles || 0),
                   0
                 )}{' '}
-                bins en {visibleDesverdizado.length} lote(s)
+                bins en {visibleDesverdizadoLimon.length} lote(s)
               </div>
-              {visibleDesverdizado.map((d, idx) => (
+              {visibleDesverdizadoLimon.map((d, idx) => (
                 <div
                   key={idx}
                   style={{
@@ -1006,6 +1066,102 @@ export default function InventariosReporte({
                 </>
               )}
             </>
+          )}
+        </>
+      )}
+
+      {/* === INVENTARIO MELÓN === */}
+      {isMelon && (
+        <>
+          <h3>🍈 Inventario Final — Melón</h3>
+          {visibleMelonFinal.length > 0 ? (
+            <div style={{ display: 'grid', gap: 8, marginBottom: 20 }}>
+              {Object.entries(
+                visibleMelonFinal.reduce<
+                  Record<
+                    string,
+                    { label: string; total: number; presentacion: string; calidad: string }
+                  >
+                >((acc, item) => {
+                  const pres = item.presentacion || 'otro';
+                  const cal = String(item.calidad || '');
+                  const tallaPart = item.talla ? ` #${item.talla}s` : '';
+                  const key = `${pres}|${cal}|${item.talla || ''}`;
+                  if (!acc[key]) {
+                    acc[key] = {
+                      label: `${labelPresentacionMelon(pres)}${tallaPart}${
+                        cal ? ` · ${labelCalidadMelon(cal)}` : ''
+                      }`,
+                      total: 0,
+                      presentacion: pres,
+                      calidad: cal,
+                    };
+                  }
+                  acc[key].total += item.cantidad_stock || 0;
+                  return acc;
+                }, {})
+              ).map(([key, { label, total }]) => (
+                <div
+                  key={key}
+                  style={{
+                    padding: '10px 12px',
+                    borderRadius: 6,
+                    border: '1px solid #bae6fd',
+                    background: '#f0f9ff',
+                    fontSize: 14,
+                  }}
+                >
+                  <strong>{label}</strong>:{' '}
+                  <strong style={{ color: '#0c4a6e' }}>{total}</strong> cajas
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: '#64748b' }}>No hay producto final de melón con stock.</p>
+          )}
+
+          <h3 style={{ marginTop: 28 }}>📦 Bins de campo (listos para empaque)</h3>
+          {visibleBinsMelon.length > 0 ? (
+            <div style={{ display: 'grid', gap: '8px', marginBottom: '20px' }}>
+              <div
+                style={{
+                  padding: '10px 14px',
+                  background: '#e0f2fe',
+                  borderRadius: 8,
+                  fontWeight: 700,
+                  color: '#0c4a6e',
+                }}
+              >
+                Total disponible:{' '}
+                {visibleBinsMelon.reduce((s, d) => s + (d.cantidad_bins_disponibles || 0), 0)} bins
+                en {visibleBinsMelon.length} lote(s)
+              </div>
+              {visibleBinsMelon.map((d, idx) => (
+                <div
+                  key={idx}
+                  style={{
+                    padding: '10px 14px',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '6px',
+                    background: '#f8fafc',
+                  }}
+                >
+                  <div>
+                    <strong>Lote: {d.lote}</strong> —{' '}
+                    <strong style={{ color: '#14532d' }}>
+                      {d.cantidad_bins_disponibles} bins
+                    </strong>{' '}
+                    disponibles
+                  </div>
+                  <div style={{ fontSize: '13px', color: '#475569' }}>
+                    Corte: {formatFechaCorta(d.fecha_recepcion)} | Estado:{' '}
+                    <strong>{d.estado}</strong>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p style={{ color: '#64748b' }}>No hay bins de melón con stock.</p>
           )}
         </>
       )}

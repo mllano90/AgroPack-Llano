@@ -11,4 +11,5 @@ from .inventory import (
     ProductoModel,
     Parrilla,
     InventarioDesverdizado,
+    LoteMelonHectareas,
 )

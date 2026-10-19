@@ -131,6 +131,8 @@ export interface DesverdizadoAdminItem {
   fecha_recepcion?: string | null;
   fecha_tentativa_salida?: string | null;
   estado?: string | null;
+  /** limon_amarillo | melon */
+  producto?: string | null;
 }
 
 /** Lotes en desverdizado (admin / correcciones) */
@@ -672,6 +674,28 @@ export async function getReporteEmbarques(token: string): Promise<EmbarquesRepor
   const res = await api.get<EmbarquesReporteApi>('/api/reports/embarques', {
     headers: { Authorization: `Bearer ${token}` },
     timeout: 60000,
+  });
+  return res.data;
+}
+
+export interface MelonLoteHectareasApi {
+  id: number;
+  area: string;
+  seccion: number;
+  variedad: string;
+  lote: string;
+  hectareas: number;
+}
+
+export interface MelonHectareasApi {
+  total_hectareas: number;
+  num_lotes: number;
+  lotes: MelonLoteHectareasApi[];
+}
+
+export async function getMelonHectareas(token?: string): Promise<MelonHectareasApi> {
+  const res = await api.get<MelonHectareasApi>('/api/reports/melon/hectareas', {
+    headers: token ? { Authorization: `Bearer ${token}` } : undefined,
   });
   return res.data;
 }

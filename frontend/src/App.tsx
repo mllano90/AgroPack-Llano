@@ -5,13 +5,21 @@ import Recepcion from './components/Recepcion/Recepcion';
 import Usuarios from './components/Usuarios/Usuarios';
 import Reportes from './components/Reportes/Reportes';
 import Correcciones from './components/Correcciones/Correcciones';
+import AjustePesosMelon from './components/AjustePesos/AjustePesosMelon';
 
 import { login, getCurrentUser } from './lib/api';
 import { useDashboard } from './hooks/useDashboard';
 import { useClientes } from './hooks/useClientes';
 import type { User } from './types';
 
-type TabId = 'recepcion' | 'empaque' | 'embarques' | 'usuarios' | 'reportes' | 'correcciones';
+type TabId =
+  | 'recepcion'
+  | 'empaque'
+  | 'embarques'
+  | 'usuarios'
+  | 'reportes'
+  | 'correcciones'
+  | 'ajuste_pesos';
 
 const TOKEN_KEY = 'agropack_token';
 const USER_KEY = 'agropack_user';
@@ -36,13 +44,29 @@ function getAllowedTabs(role: string | undefined): TabId[] {
     case 'embarques':
       return ['embarques', 'reportes'];
     case 'admin':
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'reportes', 'correcciones'];
+      return [
+        'recepcion',
+        'empaque',
+        'embarques',
+        'usuarios',
+        'reportes',
+        'correcciones',
+        'ajuste_pesos',
+      ];
     case 'observador':
       return ['reportes'];
     default:
       // Si el rol no se reconoce, dar acceso completo para no dejar la UI en blanco
       console.warn('Rol no reconocido, mostrando tabs de admin:', role);
-      return ['recepcion', 'empaque', 'embarques', 'usuarios', 'reportes', 'correcciones'];
+      return [
+        'recepcion',
+        'empaque',
+        'embarques',
+        'usuarios',
+        'reportes',
+        'correcciones',
+        'ajuste_pesos',
+      ];
   }
 }
 
@@ -181,8 +205,17 @@ function App() {
 
   const allowedTabs = currentUser ? getAllowedTabs(currentUser.rol) : [];
   const visibleTabs = (
-    ['recepcion', 'empaque', 'embarques', 'usuarios', 'reportes', 'correcciones'] as TabId[]
+    [
+      'recepcion',
+      'empaque',
+      'embarques',
+      'usuarios',
+      'reportes',
+      'correcciones',
+      'ajuste_pesos',
+    ] as TabId[]
   ).filter((tab) => allowedTabs.includes(tab));
+  const showAjustePesos = visibleTabs.includes('ajuste_pesos');
 
   // Si la pestaña activa no está permitida, corregir
   useEffect(() => {
@@ -264,27 +297,47 @@ function App() {
 
           <div style={{ margin: '20px 0', display: 'flex', flexWrap: 'wrap', gap: '4px' }}>
             {visibleTabs.includes('recepcion') && (
-              <button type="button" onClick={() => setActiveTab('recepcion')} style={tabButtonStyle('recepcion')}>
+              <button
+                type="button"
+                onClick={() => setActiveTab('recepcion')}
+                style={tabButtonStyle('recepcion')}
+              >
                 Recepción
               </button>
             )}
             {visibleTabs.includes('empaque') && (
-              <button type="button" onClick={() => setActiveTab('empaque')} style={tabButtonStyle('empaque')}>
+              <button
+                type="button"
+                onClick={() => setActiveTab('empaque')}
+                style={tabButtonStyle('empaque')}
+              >
                 Empaque
               </button>
             )}
             {visibleTabs.includes('embarques') && (
-              <button type="button" onClick={() => setActiveTab('embarques')} style={tabButtonStyle('embarques')}>
+              <button
+                type="button"
+                onClick={() => setActiveTab('embarques')}
+                style={tabButtonStyle('embarques')}
+              >
                 Embarques
               </button>
             )}
             {visibleTabs.includes('usuarios') && (
-              <button type="button" onClick={() => setActiveTab('usuarios')} style={tabButtonStyle('usuarios')}>
+              <button
+                type="button"
+                onClick={() => setActiveTab('usuarios')}
+                style={tabButtonStyle('usuarios')}
+              >
                 Usuarios
               </button>
             )}
             {visibleTabs.includes('reportes') && (
-              <button type="button" onClick={() => setActiveTab('reportes')} style={tabButtonStyle('reportes')}>
+              <button
+                type="button"
+                onClick={() => setActiveTab('reportes')}
+                style={tabButtonStyle('reportes')}
+              >
                 Reportes
               </button>
             )}
@@ -295,6 +348,20 @@ function App() {
                 style={tabButtonStyle('correcciones')}
               >
                 Correcciones
+              </button>
+            )}
+            {showAjustePesos && (
+              <button
+                type="button"
+                onClick={() => setActiveTab('ajuste_pesos')}
+                style={{
+                  ...tabButtonStyle('ajuste_pesos'),
+                  background: activeTab === 'ajuste_pesos' ? '#1d4ed8' : '#eff6ff',
+                  color: activeTab === 'ajuste_pesos' ? '#fff' : '#1e40af',
+                  border: activeTab === 'ajuste_pesos' ? 'none' : '1px solid #bfdbfe',
+                }}
+              >
+                Ajuste de pesos
               </button>
             )}
           </div>
@@ -336,6 +403,8 @@ function App() {
           {activeTab === 'correcciones' && visibleTabs.includes('correcciones') && (
             <Correcciones token={token} onCorregido={cargarDashboard} />
           )}
+
+          {activeTab === 'ajuste_pesos' && showAjustePesos && <AjustePesosMelon />}
         </>
       )}
     </div>

@@ -10,9 +10,9 @@ class RecepcionCampoCreate(BaseModel):
     tipo_cultivo_carton: TipoCultivo | None = None
     mercado: TipoMercado = TipoMercado.NACIONAL
     
-    # Campos específicos para Limón
+    # Campos específicos para Limón / Melón (lote compuesto)
     lote: str | None = None
-    cantidad_bins: int = 0   # bins de 260kg
+    cantidad_bins: int = 0   # limón: bins 260kg; melón: bins de campo
     fecha_corte: date | None = None  # misma que recepción
 
 class RecepcionCampoResponse(BaseModel):

@@ -1,4 +1,4 @@
-import { useMemo, useState, type CSSProperties } from 'react';
+import { useEffect, useMemo, useState, type CSSProperties } from 'react';
 import type {
   ClienteEmbarquesResumenApi,
   EmbarqueReporteItemApi,
@@ -6,10 +6,82 @@ import type {
 } from '../../lib/api';
 import { labelPresentacionLimon } from '../../lib/constants';
 
+export type ProductoEmbarqueFiltro = 'limon_amarillo' | 'melon';
+
 interface Props {
   data: EmbarquesReporteApi | null;
   loading?: boolean;
   onRefresh?: () => void;
+  /** Filtra líneas/embarques al producto elegido en Reportes */
+  productoFiltro?: ProductoEmbarqueFiltro;
+}
+
+function productoMatch(producto: string | null | undefined, filtro: ProductoEmbarqueFiltro): boolean {
+  const p = String(producto || '').toLowerCase();
+  if (filtro === 'melon') return p === 'melon';
+  return p.includes('limon');
+}
+
+function filtrarEmbarquePorProducto(
+  e: EmbarqueReporteItemApi,
+  filtro: ProductoEmbarqueFiltro
+): EmbarqueReporteItemApi | null {
+  const detalles = (e.detalles || []).filter((d) => productoMatch(d.producto, filtro));
+  if (detalles.length === 0) return null;
+  const total_cajas = detalles.reduce((s, d) => s + (d.cantidad_cajas || 0), 0);
+  const total_kg_aprox = detalles.reduce((s, d) => s + (d.kg_aprox || 0), 0);
+  return {
+    ...e,
+    detalles,
+    total_cajas,
+    total_kg_aprox,
+    num_lineas: detalles.length,
+  };
+}
+
+function filtrarReportePorProducto(
+  data: EmbarquesReporteApi,
+  filtro: ProductoEmbarqueFiltro
+): EmbarquesReporteApi {
+  const embarques = (data.embarques || [])
+    .map((e) => filtrarEmbarquePorProducto(e, filtro))
+    .filter((e): e is EmbarqueReporteItemApi => e != null);
+
+  const porClienteMap = new Map<number, ClienteEmbarquesResumenApi>();
+  for (const e of embarques) {
+    let c = porClienteMap.get(e.cliente_id);
+    if (!c) {
+      c = {
+        cliente_id: e.cliente_id,
+        cliente_nombre: e.cliente_nombre,
+        num_embarques: 0,
+        total_cajas: 0,
+        total_kg_aprox: 0,
+        ultima_fecha: null,
+        embarques: [],
+      };
+      porClienteMap.set(e.cliente_id, c);
+    }
+    c.num_embarques += 1;
+    c.total_cajas += e.total_cajas || 0;
+    c.total_kg_aprox = (c.total_kg_aprox || 0) + (e.total_kg_aprox || 0);
+    c.embarques.push(e);
+    const fe = e.fecha_salida || '';
+    if (!c.ultima_fecha || fe > c.ultima_fecha) c.ultima_fecha = fe;
+  }
+
+  const por_cliente = [...porClienteMap.values()].sort((a, b) =>
+    a.cliente_nombre.localeCompare(b.cliente_nombre)
+  );
+
+  return {
+    total_embarques: embarques.length,
+    total_cajas: embarques.reduce((s, e) => s + (e.total_cajas || 0), 0),
+    total_kg_aprox: embarques.reduce((s, e) => s + (e.total_kg_aprox || 0), 0),
+    num_clientes: por_cliente.length,
+    por_cliente,
+    embarques,
+  };
 }
 
 const card: CSSProperties = {
@@ -150,23 +222,34 @@ function labelGlobalParrillas(data: EmbarquesReporteApi): string {
   return resumirParrillas1raJugo(dets).label;
 }
 
-export default function EmbarquesReporte({ data, loading, onRefresh }: Props) {
+export default function EmbarquesReporte({ data, loading, onRefresh, productoFiltro }: Props) {
   const [clienteId, setClienteId] = useState<number | 'todos'>('todos');
   const [embarqueSel, setEmbarqueSel] = useState<EmbarqueReporteItemApi | null>(null);
 
-  const clientes = data?.por_cliente || [];
+  useEffect(() => {
+    setClienteId('todos');
+    setEmbarqueSel(null);
+  }, [productoFiltro]);
+
+  const dataVista = useMemo(() => {
+    if (!data) return null;
+    if (!productoFiltro) return data;
+    return filtrarReportePorProducto(data, productoFiltro);
+  }, [data, productoFiltro]);
+
+  const clientes = dataVista?.por_cliente || [];
   const embarquesFiltrados = useMemo(() => {
-    if (!data) return [];
-    if (clienteId === 'todos') return data.embarques || [];
+    if (!dataVista) return [];
+    if (clienteId === 'todos') return dataVista.embarques || [];
     const c = clientes.find((x) => x.cliente_id === clienteId);
     return c?.embarques || [];
-  }, [data, clienteId, clientes]);
+  }, [dataVista, clienteId, clientes]);
 
   if (loading) {
     return <p style={{ color: '#64748b' }}>Cargando reporte de embarques…</p>;
   }
 
-  if (!data) {
+  if (!dataVista) {
     return (
       <div>
         <p style={{ color: '#64748b' }}>No se pudo cargar el reporte de embarques.</p>
@@ -179,14 +262,24 @@ export default function EmbarquesReporte({ data, loading, onRefresh }: Props) {
     );
   }
 
+  const etiquetaProducto =
+    productoFiltro === 'melon'
+      ? 'Melón'
+      : productoFiltro === 'limon_amarillo'
+        ? 'Limón'
+        : null;
+
   return (
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div>
-          <h3 style={{ margin: '0 0 6px' }}>Reporte de embarques</h3>
+          <h3 style={{ margin: '0 0 6px' }}>
+            Reporte de embarques{etiquetaProducto ? ` — ${etiquetaProducto}` : ''}
+          </h3>
           <p style={{ margin: 0, fontSize: 13, color: '#64748b', maxWidth: 720 }}>
             Historial por cliente: cuántos embarques se han enviado, parrillas (RPC 45 · cartón 63 ·
-            jugo 1) y detalle al hacer clic.
+            jugo 1) y detalle al hacer clic
+            {etiquetaProducto ? ` · solo líneas de ${etiquetaProducto.toLowerCase()}` : ''}.
           </p>
         </div>
         {onRefresh && (
@@ -200,22 +293,22 @@ export default function EmbarquesReporte({ data, loading, onRefresh }: Props) {
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 16, marginBottom: 20 }}>
         <div style={{ ...card, background: '#e0e7ff' }}>
           <div style={{ fontSize: 12, color: '#3730a3', fontWeight: 600 }}>Embarques</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{data.total_embarques}</div>
+          <div style={{ fontSize: 28, fontWeight: 800 }}>{dataVista.total_embarques}</div>
         </div>
         <div style={{ ...card, background: '#dcfce7' }}>
           <div style={{ fontSize: 12, color: '#166534', fontWeight: 600 }}>Clientes</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{data.num_clientes}</div>
+          <div style={{ fontSize: 28, fontWeight: 800 }}>{dataVista.num_clientes}</div>
         </div>
         <div style={{ ...card, background: '#e0f2fe', minWidth: 200 }}>
           <div style={{ fontSize: 12, color: '#075985', fontWeight: 600 }}>Parrillas totales</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{enterasGlobal(data)}</div>
+          <div style={{ fontSize: 28, fontWeight: 800 }}>{enterasGlobal(dataVista)}</div>
           <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>
-            {labelGlobalParrillas(data)}
+            {labelGlobalParrillas(dataVista)}
           </div>
         </div>
         <div style={{ ...card, background: '#fef9c3' }}>
           <div style={{ fontSize: 12, color: '#854d0e', fontWeight: 600 }}>Kg aprox.</div>
-          <div style={{ fontSize: 28, fontWeight: 800 }}>{fmtKg(data.total_kg_aprox)}</div>
+          <div style={{ fontSize: 28, fontWeight: 800 }}>{fmtKg(dataVista.total_kg_aprox)}</div>
         </div>
       </div>
 

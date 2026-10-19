@@ -24,6 +24,7 @@ class TipoMercado(str, Enum):
 class Producto(str, Enum):
     UVA = "uva"
     LIMON_AMARILLO = "limon_amarillo"
+    MELON = "melon"
 
 
 class TallaLimon(str, Enum):

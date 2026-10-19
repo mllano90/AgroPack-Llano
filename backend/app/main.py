@@ -22,8 +22,24 @@ from app.routers.correcciones import router as correcciones_router
 
 # Crear tablas y columnas nuevas
 try:
+    # Asegurar que todos los modelos estén registrados en metadata
+    import app.models  # noqa: F401
+    from app.models.inventory import LoteMelonHectareas  # noqa: F401
+
     Base.metadata.create_all(bind=engine)
     ensure_schema()
+    # Seed hectáreas melón (fuente de verdad para ton/ha, cajas/ha)
+    try:
+        from app.core.melon_hectareas import seed_lote_melon_hectareas
+
+        db = SessionLocal()
+        try:
+            n = seed_lote_melon_hectareas(db, overwrite=True)
+            print(f"✅ Hectáreas melón sincronizadas ({n} lotes)")
+        finally:
+            db.close()
+    except Exception as se:
+        print(f"⚠️ Seed hectáreas melón: {se}")
 except Exception as e:
     # No tumbar el proceso: el health reportará el error de BD
     print(f"⚠️ Error al iniciar schema: {e}")

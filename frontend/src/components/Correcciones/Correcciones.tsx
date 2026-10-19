@@ -1,4 +1,4 @@
-import { useState, useEffect, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, type CSSProperties } from 'react';
 import {
   getEmpaquesAdmin,
   anularEmpaque,
@@ -61,13 +61,61 @@ function formatFecha(fecha: string) {
   return formatFechaCorta(fecha);
 }
 
+type ProductoCorreccion = 'limon_amarillo' | 'melon';
+
 function labelProducto(p: string) {
   if (p === 'limon_amarillo') return 'Limón amarillo';
+  if (p === 'melon') return 'Melón';
   if (p === 'uva') return 'Uva';
   return p;
 }
 
+function matchProductoCorreccion(
+  producto: string | null | undefined,
+  filtro: ProductoCorreccion,
+  meta?: Record<string, unknown> | null
+): boolean {
+  const p = String(producto || '').toLowerCase();
+  if (filtro === 'melon') {
+    if (p === 'melon') return true;
+    const productos = meta?.productos;
+    if (Array.isArray(productos) && productos.some((x) => String(x).toLowerCase() === 'melon')) {
+      return true;
+    }
+    const detalles = meta?.detalles;
+    if (
+      Array.isArray(detalles) &&
+      detalles.some((d) => String((d as { producto?: string })?.producto || '').toLowerCase() === 'melon')
+    ) {
+      return true;
+    }
+    return false;
+  }
+  // limón: incluye limon_amarillo; excluye melon y uva
+  if (p === 'melon' || p === 'uva') return false;
+  if (p.includes('limon')) return true;
+  if (!p || p === 'mixto') {
+    const productos = meta?.productos;
+    if (Array.isArray(productos)) {
+      return productos.some((x) => String(x).toLowerCase().includes('limon'));
+    }
+    const detalles = meta?.detalles;
+    if (Array.isArray(detalles)) {
+      return detalles.some((d) =>
+        String((d as { producto?: string })?.producto || '')
+          .toLowerCase()
+          .includes('limon')
+      );
+    }
+    // Sin producto explícito: no mostrar en filtro limón (evita uva/legacy)
+    return false;
+  }
+  return false;
+}
+
 export default function Correcciones({ token, onCorregido }: CorreccionesProps) {
+  const [productoCorreccion, setProductoCorreccion] =
+    useState<ProductoCorreccion>('limon_amarillo');
   const [empaques, setEmpaques] = useState<EmpaqueRecord[]>([]);
   const [desverdizado, setDesverdizado] = useState<DesverdizadoAdminItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -153,7 +201,53 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     load();
   }, [token, filtroModulo]);
 
-  const selected = empaques.find((e) => e.id === selectedId) || null;
+  useEffect(() => {
+    setSelectedId(null);
+    setEmbSelId(null);
+    setEditDesv(null);
+    setEditRec(null);
+    setSelKeys(new Set());
+  }, [productoCorreccion]);
+
+  const esMelon = productoCorreccion === 'melon';
+  const esLimon = productoCorreccion === 'limon_amarillo';
+
+  const historialFiltrado = useMemo(
+    () =>
+      historial.filter((m) =>
+        matchProductoCorreccion(m.producto, productoCorreccion, m.meta)
+      ),
+    [historial, productoCorreccion]
+  );
+
+  const empaquesFiltrados = useMemo(
+    () =>
+      empaques.filter((e) =>
+        matchProductoCorreccion(String(e.producto || ''), productoCorreccion)
+      ),
+    [empaques, productoCorreccion]
+  );
+
+  const desverdizadoFiltrado = useMemo(() => {
+    return desverdizado.filter((d) => {
+      const p = String(d.producto || '').toLowerCase();
+      if (productoCorreccion === 'melon') return p === 'melon';
+      // limón: sin producto (legacy) o limón
+      return !p || p.includes('limon');
+    });
+  }, [desverdizado, productoCorreccion]);
+
+  const embarquesFiltrados = useMemo(
+    () =>
+      embarquesList.filter((e) =>
+        (e.detalles || []).some((d) =>
+          matchProductoCorreccion(d.producto, productoCorreccion)
+        )
+      ),
+    [embarquesList, productoCorreccion]
+  );
+
+  const selected = empaquesFiltrados.find((e) => e.id === selectedId) || null;
   const anulado = Boolean(selected?.detalle_corrida?.anulado);
 
   /** Consumos de desverdizado del empaque (nunca usar [] vacío como “no hay”). */
@@ -635,7 +729,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     });
   };
 
-  const eliminables = historial.filter((m) => m.puede_eliminar);
+  const eliminables = historialFiltrado.filter((m) => m.puede_eliminar);
   const allEliminablesSelected =
     eliminables.length > 0 && eliminables.every((m) => selKeys.has(histKey(m)));
 
@@ -648,7 +742,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   };
 
   const handleEliminarSeleccionados = async () => {
-    const items = historial.filter((m) => m.puede_eliminar && selKeys.has(histKey(m)));
+    const items = historialFiltrado.filter(
+      (m) => m.puede_eliminar && selKeys.has(histKey(m))
+    );
     if (items.length === 0) {
       alert('Selecciona al menos un movimiento eliminable.');
       return;
@@ -877,13 +973,29 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     return map[m] || '#f1f5f9';
   };
 
+  const productoBtn = (id: ProductoCorreccion): CSSProperties => ({
+    padding: '10px 20px',
+    border: 'none',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontWeight: productoCorreccion === id ? 700 : 500,
+    background:
+      productoCorreccion === id
+        ? id === 'melon'
+          ? '#0284c7'
+          : '#15803d'
+        : '#f1f5f9',
+    color: productoCorreccion === id ? 'white' : '#334155',
+    fontSize: 15,
+  });
+
   const secBtn = (id: typeof vistaSeccion): CSSProperties => ({
     padding: '8px 14px',
     border: 'none',
     borderRadius: 6,
     cursor: 'pointer',
     fontWeight: vistaSeccion === id ? 700 : 400,
-    background: vistaSeccion === id ? '#15803d' : '#f1f5f9',
+    background: vistaSeccion === id ? '#0f172a' : '#f1f5f9',
     color: vistaSeccion === id ? 'white' : '#334155',
   });
 
@@ -891,9 +1003,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     <div>
       <h2 style={{ marginBottom: 8 }}>Correcciones (solo admin)</h2>
       <p style={{ color: '#64748b', marginTop: 0, maxWidth: 820 }}>
-        <strong>Recepción limón</strong> es donde se capturan lote, bins y fecha de corte; eso alimenta
-        el inventario de desverdizado (no es un registro aparte). Edita o elimina desde Recepción.
-        Empaque y Embarque se corrigen en sus filtros.
+        Primero elige el <strong>producto</strong>. Luego corrige historial, empaques, embarques,
+        bins e inventarios <strong>solo de ese producto</strong>.
+        {esLimon
+          ? ' En limón, la recepción alimenta el desverdizado (no es un registro aparte).'
+          : ' En melón, la recepción alimenta los bins de campo listos para empaque.'}
       </p>
 
       {error && (
@@ -916,7 +1030,56 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         </pre>
       )}
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+      {/* 1) Producto */}
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          marginBottom: 10,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        }}
+      >
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: '#64748b',
+            textTransform: 'uppercase',
+            letterSpacing: 0.4,
+          }}
+        >
+          Producto
+        </span>
+        <button
+          type="button"
+          style={productoBtn('limon_amarillo')}
+          onClick={() => setProductoCorreccion('limon_amarillo')}
+        >
+          Limón
+        </button>
+        <button
+          type="button"
+          style={productoBtn('melon')}
+          onClick={() => setProductoCorreccion('melon')}
+        >
+          Melón
+        </button>
+      </div>
+
+      {/* 2) Secciones */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: '#64748b',
+            textTransform: 'uppercase',
+            letterSpacing: 0.4,
+          }}
+        >
+          Sección
+        </span>
         <button type="button" style={secBtn('historial')} onClick={() => setVistaSeccion('historial')}>
           Historial de movimientos
         </button>
@@ -935,7 +1098,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           style={secBtn('desverdizado')}
           onClick={() => setVistaSeccion('desverdizado')}
         >
-          Desverdizado
+          {esMelon ? 'Bins de campo' : 'Desverdizado'}
         </button>
         <button
           type="button"
@@ -1090,7 +1253,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           )}
 
           {/* Barra de selección múltiple */}
-          {!loading && historial.length > 0 && (
+          {!loading && historialFiltrado.length > 0 && (
             <div
               style={{
                 display: 'flex',
@@ -1152,8 +1315,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
           {loading ? (
             <p>Cargando historial…</p>
-          ) : historial.length === 0 ? (
-            <p style={{ color: '#64748b' }}>No hay movimientos para este filtro.</p>
+          ) : historialFiltrado.length === 0 ? (
+            <p style={{ color: '#64748b' }}>
+              No hay movimientos de {esMelon ? 'melón' : 'limón'} para este filtro.
+            </p>
           ) : (
             <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 980 }}>
@@ -1178,7 +1343,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   </tr>
                 </thead>
                 <tbody>
-                  {historial.map((m) => {
+                  {historialFiltrado.map((m) => {
                     const k = histKey(m);
                     const checked = selKeys.has(k);
                     return (
@@ -1339,7 +1504,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
               (misma presentación y talla). Usa esto si se cargó un manifiesto por error. No crea
               empaques ni recepciones.
             </p>
-            {embarquesList.length === 0 ? (
+            {embarquesFiltrados.length === 0 ? (
               <p style={{ color: '#64748b' }}>No hay embarques registrados.</p>
             ) : (
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 24 }}>
@@ -1355,7 +1520,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       </tr>
                     </thead>
                     <tbody>
-                      {embarquesList
+                      {embarquesFiltrados
                         .slice()
                         .sort((a, b) => b.id - a.id)
                         .map((e) => {
@@ -1396,7 +1561,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   }}
                 >
                   {(() => {
-                    const e = embarquesList.find((x) => x.id === embSelId);
+                    const e = embarquesFiltrados.find((x) => x.id === embSelId);
                     if (!e) {
                       return (
                         <p style={{ color: '#64748b', margin: 0 }}>
@@ -1512,14 +1677,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   </tr>
                 </thead>
                 <tbody>
-                  {empaques.length === 0 && (
+                  {empaquesFiltrados.length === 0 && (
                     <tr>
                       <td colSpan={5} style={{ padding: 16, color: '#64748b' }}>
                         No hay empaques registrados.
                       </td>
                     </tr>
                   )}
-                  {empaques.map((e) => {
+                  {empaquesFiltrados.map((e) => {
                     const isSel = e.id === selectedId;
                     const isAnul = Boolean(e.detalle_corrida?.anulado);
                     const lotes =
@@ -1707,7 +1872,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       </div>
                     ))}
                     <datalist id={`lotes-desv-${selected.id}`}>
-                      {desverdizado.map((d) => (
+                      {desverdizadoFiltrado.map((d) => (
                         <option key={d.id} value={d.lote}>
                           {d.cantidad_bins_disponibles} bins
                         </option>
@@ -1973,6 +2138,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       {vistaSeccion === 'inventarios' && (
         <InventariosAdmin
           token={token}
+          productoFiltro={productoCorreccion}
           onChanged={() => {
             onCorregido?.();
           }}
@@ -1990,10 +2156,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             background: '#fffafa',
           }}
         >
-          <h3 style={{ marginTop: 0, color: '#991b1b' }}>Desverdizado: editar o eliminar</h3>
+          <h3 style={{ marginTop: 0, color: '#991b1b' }}>
+            {esMelon
+              ? 'Bins de campo (melón): editar o eliminar'
+              : 'Desverdizado (limón): editar o eliminar'}
+          </h3>
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-            Corrige lote, bins, fecha de corte o estado. Eliminar quita el stock de desverdizado
-            (no borra el historial de recepción).
+            Corrige lote, bins, fecha de corte o estado. Eliminar quita el stock
+            {esMelon ? ' de bins de campo' : ' de desverdizado'} (no borra el historial de recepción).
           </p>
 
           {editDesv && (
@@ -2119,8 +2289,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             </div>
           )}
 
-          {desverdizado.length === 0 ? (
-            <p style={{ color: '#64748b' }}>No hay lotes con bins en desverdizado.</p>
+          {desverdizadoFiltrado.length === 0 ? (
+            <p style={{ color: '#64748b' }}>No hay lotes con bins para este producto.</p>
           ) : (
             <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
@@ -2136,7 +2306,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   </tr>
                 </thead>
                 <tbody>
-                  {desverdizado.map((d) => (
+                  {desverdizadoFiltrado.map((d) => (
                     <tr
                       key={d.id}
                       style={{

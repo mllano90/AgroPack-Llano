@@ -227,3 +227,20 @@ class InventarioDesverdizado(Base):
     # Alta normal desde Recepción siempre setea este FK.
     recepcion_id = Column(Integer, ForeignKey("recepcion_campo.id"), nullable=True)
     recepcion = relationship("RecepcionCampo", back_populates="desverdizados", foreign_keys=[recepcion_id])
+
+
+class LoteMelonHectareas(Base):
+    """Hectáreas plantadas por lote melón (área × sección × variedad)."""
+
+    __tablename__ = "lote_melon_hectareas"
+    __table_args__ = (
+        UniqueConstraint("area", "seccion", "variedad", name="uq_lote_melon_area_seccion_variedad"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    area = Column(String, nullable=False, index=True)  # rancho | bajio | lomas
+    seccion = Column(Integer, nullable=False)
+    variedad = Column(String, nullable=False)  # krypto | diputado | ...
+    lote = Column(String, nullable=False, index=True)  # "Rancho S5 Diputado"
+    hectareas = Column(Float, nullable=False, default=0.0)
+    fecha_actualizacion = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

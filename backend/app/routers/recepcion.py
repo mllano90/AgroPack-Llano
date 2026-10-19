@@ -48,6 +48,11 @@ def crear_recepcion(
         fecha_corte = date.fromisoformat(fecha_corte)
     fecha_corte = fecha_corte or date.today()
     
+    es_limon = recepcion.producto == Producto.LIMON_AMARILLO
+    es_melon = recepcion.producto == Producto.MELON
+    # Limón / melón: fecha de corte guía el registro; uva usa hoy
+    fecha_registro = fecha_corte if (es_limon or es_melon) else date.today()
+
     nueva_recepcion = RecepcionCampo(
         producto=recepcion.producto,
         variedad=recepcion.variedad,
@@ -55,11 +60,11 @@ def crear_recepcion(
         cantidad_cajas_carton=recepcion.cantidad_cajas_carton,
         tipo_cultivo_carton=recepcion.tipo_cultivo_carton,
         mercado=recepcion.mercado,
-        # Limón: persistir para historial / cruce con desverdizado
+        # Limón / melón: persistir lote y bins
         lote=recepcion.lote,
         cantidad_bins=recepcion.cantidad_bins or 0,
-        fecha_corte=fecha_corte if recepcion.producto == Producto.LIMON_AMARILLO else None,
-        fecha=fecha_corte if recepcion.producto == Producto.LIMON_AMARILLO else date.today(),
+        fecha_corte=fecha_corte if (es_limon or es_melon) else None,
+        fecha=fecha_registro,
         usuario_id=current_user.id if hasattr(current_user, 'id') else None,
     )
     db.add(nueva_recepcion)
@@ -114,7 +119,7 @@ def crear_recepcion(
     # ======================================================
     # LÓGICA PARA LIMÓN
     # ======================================================
-    if recepcion.producto == Producto.LIMON_AMARILLO:
+    if es_limon:
         if recepcion.cantidad_bins <= 0 or not recepcion.lote:
             raise HTTPException(status_code=400, detail="Para Limón se requiere cantidad_bins > 0 y lote")
         
@@ -134,10 +139,39 @@ def crear_recepcion(
             usuario_id=current_user.id if hasattr(current_user, 'id') else None
         )
         db.add(inv_desv)
-    
+
+    # ======================================================
+    # LÓGICA PARA MELÓN (bins por área/sección/variedad; listos para empaque)
+    # ======================================================
+    if es_melon:
+        lote_m = (recepcion.lote or "").strip()
+        if recepcion.cantidad_bins <= 0 or not lote_m:
+            raise HTTPException(
+                status_code=400,
+                detail="Para Melón se requiere cantidad_bins > 0 y lote (área + sección + variedad)",
+            )
+        nueva_recepcion.lote = lote_m
+        # Stock por sección: mismo inventario_desverdizado, producto=melon,
+        # estado listo_empaque (sin cámara / sin días de espera).
+        inv_melon = InventarioDesverdizado(
+            producto=Producto.MELON,
+            cantidad_bins=recepcion.cantidad_bins,
+            lote=lote_m,
+            fecha_recepcion=fecha_corte,
+            fecha_tentativa_salida=fecha_corte,
+            estado="listo_empaque",
+            recepcion_id=nueva_recepcion.id,
+            usuario_id=current_user.id if hasattr(current_user, "id") else None,
+        )
+        db.add(inv_melon)
+
     db.commit()
     db.refresh(nueva_recepcion)
     return nueva_recepcion
+
+
+def _producto_val(p) -> str:
+    return str(getattr(p, "value", p) or "").lower()
 
 
 @router.get("/", response_model=list[RecepcionCampoResponse])
@@ -146,7 +180,7 @@ def listar_recepciones(db: Session = Depends(get_db)):
 
 @router.get("/desverdizado", response_model=list[dict])
 def listar_desverdizado(db: Session = Depends(get_db)):
-    """Lista inventario en desverdizado. Orden: fecha de corte ASC, luego id."""
+    """Lista inventario limón en desverdizado. Orden: fecha de corte ASC, luego id."""
     items = (
         db.query(InventarioDesverdizado)
         .filter(
@@ -159,8 +193,14 @@ def listar_desverdizado(db: Session = Depends(get_db)):
         )
         .all()
     )
-    # Excluir eliminados por si quedó estado raro
-    items = [d for d in items if (d.estado or "") != "eliminado" and (d.cantidad_bins or 0) > 0]
+    # Solo limón (melón tiene endpoint propio /bins-melon)
+    items = [
+        d
+        for d in items
+        if (d.estado or "") != "eliminado"
+        and (d.cantidad_bins or 0) > 0
+        and _producto_val(d.producto) in ("limon_amarillo", "limón_amarillo", "")
+    ]
     return [
         {
             "id": d.id,
@@ -169,6 +209,98 @@ def listar_desverdizado(db: Session = Depends(get_db)):
             "fecha_recepcion": str(d.fecha_recepcion),
             "fecha_tentativa_salida": str(d.fecha_tentativa_salida),
             "estado": d.estado,
+            "producto": _producto_val(d.producto) or "limon_amarillo",
+        }
+        for d in items
+    ]
+
+
+@router.get("/bins-melon", response_model=list[dict])
+def listar_bins_melon(db: Session = Depends(get_db)):
+    """
+    Bins de melón disponibles por sección/lote (área + sección + variedad).
+    Cada recepción queda como fila aparte (mismo lote en distintas fechas = filas distintas).
+    También hace backfill de recepciones melón antiguas sin fila de inventario.
+    """
+    # Backfill: recepciones melon sin inventario ligado
+    recs = (
+        db.query(RecepcionCampo)
+        .filter(RecepcionCampo.producto == Producto.MELON)
+        .all()
+    )
+    created = False
+    for r in recs:
+        bins = int(r.cantidad_bins or 0)
+        lote = (r.lote or "").strip()
+        if bins <= 0 or not lote:
+            continue
+        ya = (
+            db.query(InventarioDesverdizado)
+            .filter(InventarioDesverdizado.recepcion_id == r.id)
+            .first()
+        )
+        if ya:
+            continue
+        # Evitar duplicar si hay fila sin FK pero mismo lote+fecha+producto
+        fr = r.fecha_corte or r.fecha
+        same = (
+            db.query(InventarioDesverdizado)
+            .filter(
+                InventarioDesverdizado.producto == Producto.MELON,
+                InventarioDesverdizado.lote == lote,
+                InventarioDesverdizado.fecha_recepcion == fr,
+            )
+            .first()
+        )
+        if same:
+            if not same.recepcion_id:
+                same.recepcion_id = r.id
+                created = True
+            continue
+        db.add(
+            InventarioDesverdizado(
+                producto=Producto.MELON,
+                cantidad_bins=bins,
+                lote=lote,
+                fecha_recepcion=fr,
+                fecha_tentativa_salida=fr,
+                estado="listo_empaque",
+                recepcion_id=r.id,
+                usuario_id=r.usuario_id,
+            )
+        )
+        created = True
+    if created:
+        db.commit()
+
+    items = (
+        db.query(InventarioDesverdizado)
+        .filter(
+            InventarioDesverdizado.producto == Producto.MELON,
+            InventarioDesverdizado.cantidad_bins > 0,
+        )
+        .order_by(
+            InventarioDesverdizado.lote.asc(),
+            InventarioDesverdizado.fecha_recepcion.asc(),
+            InventarioDesverdizado.id.asc(),
+        )
+        .all()
+    )
+    items = [
+        d
+        for d in items
+        if (d.estado or "").lower() not in ("eliminado", "empaquetado")
+        and (d.cantidad_bins or 0) > 0
+    ]
+    return [
+        {
+            "id": d.id,
+            "lote": d.lote,
+            "cantidad_bins_disponibles": d.cantidad_bins,
+            "fecha_recepcion": str(d.fecha_recepcion) if d.fecha_recepcion else None,
+            "estado": d.estado,
+            "producto": "melon",
+            "recepcion_id": d.recepcion_id,
         }
         for d in items
     ]
@@ -218,6 +350,7 @@ def listar_desverdizado_admin(
             "fecha_recepcion": str(d.fecha_recepcion) if d.fecha_recepcion else None,
             "fecha_tentativa_salida": str(d.fecha_tentativa_salida) if d.fecha_tentativa_salida else None,
             "estado": d.estado,
+            "producto": _producto_val(d.producto) or "limon_amarillo",
         }
         for d in items
     ]

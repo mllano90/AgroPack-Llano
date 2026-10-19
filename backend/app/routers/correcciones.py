@@ -41,6 +41,10 @@ def _es_limon(prod) -> bool:
     return p == "limon_amarillo" or "limon" in p
 
 
+def _es_melon(prod) -> bool:
+    return _pval(prod).lower() == "melon"
+
+
 def _users_map(db: Session) -> dict[int, dict]:
     """id → {username, nombre_completo, label}."""
     from app.models.user import User
@@ -501,7 +505,7 @@ def historial_movimientos(
                 .all()
             )
 
-            if es_limon:
+            if es_limon or _es_melon(r.producto):
                 lote = getattr(r, "lote", None) or (desvs[0].lote if desvs else None)
                 bins_rec = int(getattr(r, "cantidad_bins", None) or 0)
                 if bins_rec <= 0 and desvs:
@@ -510,14 +514,15 @@ def historial_movimientos(
                 bins_ahora = sum(int(d.cantidad_bins or 0) for d in desvs) if desvs else 0
                 desv_ids = [d.id for d in desvs]
                 n_rec = nums_crono.get(r.id) or r.id
+                etiqueta_stock = "en cámara" if es_limon else "en piso"
                 resumen = (
                     f"Lote {lote or '—'} · {bins_rec} bins · "
-                    f"corte {fecha_corte} · en cámara {bins_ahora} bins"
+                    f"corte {fecha_corte} · {etiqueta_stock} {bins_ahora} bins"
                 )
                 detalle = (
                     f"Fecha corte: {fecha_corte} · "
                     f"Bins registrados: {bins_rec} · "
-                    f"Bins en desverdizado ahora: {bins_ahora} · "
+                    f"Bins disponibles ahora: {bins_ahora} · "
                     f"Inv.desv. ID: {', '.join(map(str, desv_ids)) if desv_ids else '—'} · "
                     f"ID interno: {r.id} · "
                     f"Usuario: {ufields['usuario_label']}"
@@ -533,7 +538,7 @@ def historial_movimientos(
                         "resumen": resumen,
                         "detalle": detalle,
                         "producto": prod,
-                        "puede_editar": True,
+                        "puede_editar": bool(es_limon),
                         "puede_eliminar": True,
                         **ufields,
                         "meta": {
@@ -597,10 +602,13 @@ def historial_movimientos(
                     if ufields.get("usuario_id")
                     else f"anuló: {anulado_por}",
                 }
-            if prod == "limon_amarillo" or "limon" in prod.lower():
+            es_limon_emp = prod == "limon_amarillo" or "limon" in prod.lower()
+            es_melon_emp = prod == "melon"
+            if es_limon_emp or es_melon_emp:
                 lotes = det.get("lotes_resumen") or e.lote_desverdizado or "—"
                 bins = e.bins_desverdizado_usados or det.get("bins_campo") or 0
-                resumen = f"Empaque limón · {bins} bins · {lotes}"
+                etiqueta = "limón" if es_limon_emp else "melón"
+                resumen = f"Empaque {etiqueta} · {bins} bins · {lotes}"
                 prod_lines = det.get("produccion") or []
                 detalle = (
                     f"{len(prod_lines)} líneas prod. · "
@@ -626,13 +634,9 @@ def historial_movimientos(
                     "resumen": resumen,
                     "detalle": detalle,
                     "producto": prod,
-                    "puede_editar": not anulado and (
-                        prod == "limon_amarillo" or "limon" in prod.lower()
-                    ),
-                    # OK limón → anular; anulado → borrar permanente del historial
-                    "puede_eliminar": (
-                        prod == "limon_amarillo" or "limon" in prod.lower() or anulado
-                    ),
+                    "puede_editar": not anulado and es_limon_emp,
+                    # OK limón/melón → anular; anulado → borrar permanente del historial
+                    "puede_eliminar": es_limon_emp or es_melon_emp or anulado,
                     **ufields,
                     "meta": {
                         "anulado": anulado,
@@ -667,6 +671,18 @@ def historial_movimientos(
                     )
                 else:
                     lineas.append(f"{_pval(d.variedad)}×{d.cantidad_cajas}")
+            prods_emb = sorted(
+                {
+                    _pval(d.producto).lower()
+                    for d in dets
+                    if _pval(d.producto)
+                }
+            )
+            producto_emb = (
+                prods_emb[0]
+                if len(prods_emb) == 1
+                else ("mixto" if prods_emb else None)
+            )
             items.append(
                 {
                     "modulo": "embarque",
@@ -678,7 +694,7 @@ def historial_movimientos(
                     "detalle": "; ".join(lineas)
                     + (f" · {emb.notas}" if emb.notas else "")
                     + f" · Usuario: {ufields['usuario_label']}",
-                    "producto": None,
+                    "producto": producto_emb,
                     "puede_editar": False,
                     "puede_eliminar": emb.estado != "anulado",
                     **ufields,
@@ -688,6 +704,7 @@ def historial_movimientos(
                         "estado": emb.estado,
                         "notas": emb.notas,
                         "usuario_id": ufields["usuario_id"],
+                        "productos": prods_emb,
                         "detalles": [
                             {
                                 "producto": _pval(d.producto),
@@ -1232,10 +1249,98 @@ def eliminar_inventario_campo_admin(
 
 
 # ---------------------------------------------------------------------------
-# Reset operacional (admin) — limpia inventarios y movimientos, conserva users
+# Wipe melón (admin) — solo producto MELON; limón/uva intactos
 # ---------------------------------------------------------------------------
 
 from app.models.inventory import Parrilla, Cliente  # noqa: E402
+
+
+class WipeMelonRequest(BaseModel):
+    """
+    Borra SOLO datos de melón (recepciones, bins, empaques, inventario final,
+    detalles de embarque melon). Conserva limón/uva, users y clientes.
+
+    confirm debe ser exactamente: WIPE_MELON
+    """
+
+    confirm: str = Field(..., description='Debe ser "WIPE_MELON"')
+
+
+@router.post("/wipe-melon")
+def wipe_melon(
+    body: WipeMelonRequest,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Deja inventarios/empaques/bins de melón en ceros.
+    No toca limón ni uva. Solo admin.
+    """
+    if (body.confirm or "").strip() != "WIPE_MELON":
+        raise HTTPException(
+            status_code=400,
+            detail='Para confirmar envía {"confirm": "WIPE_MELON"}',
+        )
+
+    counts: dict[str, int] = {}
+
+    def _del_melon(model, name: str) -> None:
+        n = (
+            db.query(model)
+            .filter(model.producto == Producto.MELON)
+            .delete(synchronize_session=False)
+        )
+        counts[name] = int(n or 0)
+
+    _del_melon(Empaque, "empaque_melon")
+    _del_melon(InventarioFinal, "inventario_final_melon")
+    _del_melon(InventarioDesverdizado, "inventario_desverdizado_melon")
+    _del_melon(RecepcionCampo, "recepcion_campo_melon")
+
+    # Detalles de embarque con producto melon
+    det_ids: list[int] = []
+    emb_touched: set[int] = set()
+    for d in db.query(EmbarqueDetalle).all():
+        if _es_melon(d.producto):
+            det_ids.append(int(d.id))
+            if d.embarque_id is not None:
+                emb_touched.add(int(d.embarque_id))
+    if det_ids:
+        n = (
+            db.query(EmbarqueDetalle)
+            .filter(EmbarqueDetalle.id.in_(det_ids))
+            .delete(synchronize_session=False)
+        )
+        counts["embarque_detalle_melon"] = int(n or 0)
+    else:
+        counts["embarque_detalle_melon"] = 0
+
+    n_emb = 0
+    for eid in emb_touched:
+        left = (
+            db.query(EmbarqueDetalle)
+            .filter(EmbarqueDetalle.embarque_id == eid)
+            .count()
+        )
+        if left == 0:
+            db.query(Embarque).filter(Embarque.id == eid).delete(
+                synchronize_session=False
+            )
+            n_emb += 1
+    counts["embarque_solo_melon"] = n_emb
+
+    db.commit()
+    return {
+        "message": "Melón en ceros. Limón/uva, users y clientes conservados.",
+        "eliminados": counts,
+        "ejecutado_por": getattr(current_user, "username", None),
+        "conservado": ["limon", "uva", "users", "clientes"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Reset operacional (admin) — limpia inventarios y movimientos, conserva users
+# ---------------------------------------------------------------------------
 
 
 class ResetOperacionalRequest(BaseModel):

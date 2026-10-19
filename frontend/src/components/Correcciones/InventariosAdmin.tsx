@@ -12,22 +12,33 @@ import {
   type InvCampoAdminItem,
 } from '../../lib/api';
 import {
+  FILAS_CAJA_MELON,
   PRESENTACIONES_LIMON,
   TALLAS_LIMON,
   VARIEDADES,
+  labelCalidadMelon,
   labelPresentacionLimon,
+  labelPresentacionMelon,
   tallasParaPresentacion,
+  tallasParaPresentacionMelon,
 } from '../../lib/constants';
+
+export type ProductoInventarioAdmin = 'limon_amarillo' | 'melon';
 
 interface Props {
   token: string;
   onChanged?: () => void;
+  /** Si viene de Correcciones, filtra y oculta tabs de otros productos */
+  productoFiltro?: ProductoInventarioAdmin;
 }
 
-type SubTab = 'final_limon' | 'final_uva' | 'campo';
+type SubTab = 'final_limon' | 'final_melon' | 'final_uva' | 'campo';
 
-export default function InventariosAdmin({ token, onChanged }: Props) {
-  const [sub, setSub] = useState<SubTab>('final_limon');
+export default function InventariosAdmin({ token, onChanged, productoFiltro }: Props) {
+  const filtradoPorPadre = Boolean(productoFiltro);
+  const [sub, setSub] = useState<SubTab>(
+    productoFiltro === 'melon' ? 'final_melon' : 'final_limon'
+  );
   const [finales, setFinales] = useState<InvFinalAdminItem[]>([]);
   const [campo, setCampo] = useState<InvCampoAdminItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -48,6 +59,13 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
   const [nCant, setNCant] = useState('');
   const [nMercado, setNMercado] = useState('nacional');
 
+  // alta melón
+  const [mPres, setMPres] = useState('caja_normal_b');
+  const [mTalla, setMTalla] = useState('12');
+  const [mCalidad, setMCalidad] = useState('llano');
+  const [mCant, setMCant] = useState('');
+  const [mMercado, setMMercado] = useState('nacional');
+
   // alta uva final
   const [uVar, setUVar] = useState('early_sweet');
   const [uCult, setUCult] = useState('convencional');
@@ -58,6 +76,12 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
   const [cVar, setCVar] = useState('early_sweet');
   const [cMerc, setCMerc] = useState('nacional');
   const [cCant, setCCant] = useState('');
+
+  useEffect(() => {
+    if (productoFiltro === 'melon') setSub('final_melon');
+    else if (productoFiltro === 'limon_amarillo') setSub('final_limon');
+    setEditId(null);
+  }, [productoFiltro]);
 
   const load = async () => {
     setLoading(true);
@@ -80,11 +104,16 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
     load();
   }, [token]);
 
-  const limonRows = finales.filter(
-    (r) => r.producto === 'limon_amarillo' || !!r.presentacion
+  const limonRows = finales.filter((r) => {
+    const p = String(r.producto || '').toLowerCase();
+    if (p === 'melon' || p === 'uva') return false;
+    return p.includes('limon') || (!!r.presentacion && !p);
+  });
+  const melonRows = finales.filter(
+    (r) => String(r.producto || '').toLowerCase() === 'melon'
   );
   const uvaRows = finales.filter(
-    (r) => r.producto === 'uva' || (!r.presentacion && r.producto !== 'limon_amarillo')
+    (r) => r.producto === 'uva' || (!r.presentacion && r.producto !== 'limon_amarillo' && r.producto !== 'melon')
   );
 
   const afterChange = async (msg: string) => {
@@ -159,6 +188,37 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
       await afterChange(
         `Agregado: ${labelPresentacionLimon(res.presentacion || nPres)}` +
           (res.talla ? ` #${res.talla}` : '') +
+          ` × ${res.cantidad_stock}`
+      );
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'No se pudo agregar');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addMelon = async () => {
+    const cant = parseInt(mCant, 10);
+    if (isNaN(cant) || cant < 0) return alert('Cantidad inválida');
+    if (!mPres) return alert('Elige presentación');
+    const tallas = tallasParaPresentacionMelon(mPres);
+    if (tallas.length > 0 && !mTalla) return alert('Elige talla');
+    setBusy(true);
+    setError('');
+    try {
+      const res = await crearInventarioFinalAdmin(token, {
+        producto: 'melon',
+        mercado: mMercado,
+        cantidad_stock: cant,
+        presentacion: mPres,
+        talla: mTalla || null,
+        calidad: mCalidad || null,
+      });
+      setMCant('');
+      await afterChange(
+        `Agregado melón: ${labelPresentacionMelon(res.presentacion || mPres)}` +
+          (res.talla ? ` #${res.talla}s` : '') +
+          (mCalidad ? ` · ${labelCalidadMelon(mCalidad)}` : '') +
           ` × ${res.cantidad_stock}`
       );
     } catch (err: any) {
@@ -258,6 +318,7 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
   });
 
   const tallasAlta = tallasParaPresentacion(nPres);
+  const tallasAltaMelon = tallasParaPresentacionMelon(mPres);
 
   return (
     <div
@@ -269,10 +330,23 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
         background: '#fafafa',
       }}
     >
-      <h3 style={{ marginTop: 0 }}>Inventarios — corrección manual</h3>
+      <h3 style={{ marginTop: 0 }}>
+        Inventarios — corrección manual
+        {productoFiltro === 'melon'
+          ? ' (melón)'
+          : productoFiltro === 'limon_amarillo'
+            ? ' (limón)'
+            : ''}
+      </h3>
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 720 }}>
-        Ajusta stock final (limón / uva) o de campo. Los cambios son inmediatos en Reportes → Inventarios y
-        Embarques. Usa con cuidado: no crea historial de empaque/embarque.
+        Ajusta stock final
+        {filtradoPorPadre
+          ? productoFiltro === 'melon'
+            ? ' de melón'
+            : ' de limón'
+          : ' (limón / melón / uva) o de campo'}
+        . Los cambios son inmediatos en Reportes → Inventarios y Embarques. Usa con cuidado: no
+        crea historial de empaque/embarque.
       </p>
 
       {error && (
@@ -287,15 +361,33 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
       )}
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
-        <button type="button" style={tabBtn('final_limon')} onClick={() => { setSub('final_limon'); setEditId(null); }}>
-          Final limón
-        </button>
-        <button type="button" style={tabBtn('final_uva')} onClick={() => { setSub('final_uva'); setEditId(null); }}>
-          Final uva
-        </button>
-        <button type="button" style={tabBtn('campo')} onClick={() => { setSub('campo'); setEditId(null); }}>
-          Campo uva
-        </button>
+        {(!filtradoPorPadre || productoFiltro === 'limon_amarillo') && (
+          <button type="button" style={tabBtn('final_limon')} onClick={() => { setSub('final_limon'); setEditId(null); }}>
+            Final limón
+          </button>
+        )}
+        {(!filtradoPorPadre || productoFiltro === 'melon') && (
+          <button
+            type="button"
+            style={tabBtn('final_melon')}
+            onClick={() => {
+              setSub('final_melon');
+              setEditId(null);
+            }}
+          >
+            Final melón
+          </button>
+        )}
+        {!filtradoPorPadre && (
+          <>
+            <button type="button" style={tabBtn('final_uva')} onClick={() => { setSub('final_uva'); setEditId(null); }}>
+              Final uva
+            </button>
+            <button type="button" style={tabBtn('campo')} onClick={() => { setSub('campo'); setEditId(null); }}>
+              Campo uva
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={load}
@@ -484,6 +576,192 @@ export default function InventariosAdmin({ token, onChanged }: Props) {
                               Editar
                             </button>
                             <button type="button" disabled={busy} onClick={() => removeFinal(r.id)} style={btnRed}>
+                              Borrar
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </>
+          )}
+
+          {/* ===== FINAL MELÓN ===== */}
+          {sub === 'final_melon' && (
+            <>
+              <div
+                style={{
+                  display: 'flex',
+                  flexWrap: 'wrap',
+                  gap: 10,
+                  marginBottom: 16,
+                  padding: 14,
+                  background: '#fff',
+                  border: '1px solid #bae6fd',
+                  borderRadius: 8,
+                  alignItems: 'flex-end',
+                }}
+              >
+                <strong style={{ width: '100%', fontSize: 13 }}>Agregar stock melón</strong>
+                <label style={lab}>
+                  Presentación
+                  <select
+                    value={mPres}
+                    onChange={(e) => {
+                      setMPres(e.target.value);
+                      const ts = tallasParaPresentacionMelon(e.target.value);
+                      setMTalla(ts[0] || '');
+                    }}
+                    style={inp}
+                  >
+                    {FILAS_CAJA_MELON.map((f) => (
+                      <option key={f.presentacion} value={f.presentacion}>
+                        {labelPresentacionMelon(f.presentacion)}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                {tallasAltaMelon.length > 0 && (
+                  <label style={lab}>
+                    Talla
+                    <select value={mTalla} onChange={(e) => setMTalla(e.target.value)} style={inp}>
+                      {tallasAltaMelon.map((t) => (
+                        <option key={t} value={t}>
+                          #{t}s
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
+                <label style={lab}>
+                  Calidad
+                  <select
+                    value={mCalidad}
+                    onChange={(e) => setMCalidad(e.target.value)}
+                    style={inp}
+                  >
+                    <option value="llano">Primera LLANO</option>
+                    <option value="wallys">Segunda Wallys</option>
+                  </select>
+                </label>
+                <label style={lab}>
+                  Mercado
+                  <select
+                    value={mMercado}
+                    onChange={(e) => setMMercado(e.target.value)}
+                    style={inp}
+                  >
+                    <option value="nacional">nacional</option>
+                    <option value="exportacion">exportacion</option>
+                  </select>
+                </label>
+                <label style={lab}>
+                  Cantidad
+                  <input
+                    type="number"
+                    min={0}
+                    value={mCant}
+                    onChange={(e) => setMCant(e.target.value)}
+                    style={{ ...inp, width: 100 }}
+                  />
+                </label>
+                <button type="button" disabled={busy} onClick={addMelon} style={btnPrimary}>
+                  Agregar
+                </button>
+              </div>
+
+              <table style={table}>
+                <thead>
+                  <tr style={{ background: '#f0f9ff' }}>
+                    <th style={th}>ID</th>
+                    <th style={th}>Presentación</th>
+                    <th style={th}>Talla</th>
+                    <th style={th}>Calidad</th>
+                    <th style={th}>Mercado</th>
+                    <th style={th}>Stock</th>
+                    <th style={th}>Acciones</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {melonRows.length === 0 && (
+                    <tr>
+                      <td colSpan={7} style={td}>
+                        Sin stock de melón.
+                      </td>
+                    </tr>
+                  )}
+                  {melonRows.map((r) => (
+                    <tr key={r.id}>
+                      <td style={td}>#{r.id}</td>
+                      <td style={td}>{labelPresentacionMelon(r.presentacion || '')}</td>
+                      <td style={td}>{r.talla ? `#${r.talla}s` : '—'}</td>
+                      <td style={td}>
+                        {r.calidad ? labelCalidadMelon(r.calidad) : '—'}
+                      </td>
+                      <td style={td}>
+                        {editId === r.id ? (
+                          <select
+                            value={editMercado}
+                            onChange={(e) => setEditMercado(e.target.value)}
+                            style={inp}
+                          >
+                            <option value="nacional">nacional</option>
+                            <option value="exportacion">exportacion</option>
+                          </select>
+                        ) : (
+                          r.mercado
+                        )}
+                      </td>
+                      <td style={td}>
+                        {editId === r.id ? (
+                          <input
+                            type="number"
+                            min={0}
+                            value={editCant}
+                            onChange={(e) => setEditCant(e.target.value)}
+                            style={{ ...inp, width: 90 }}
+                          />
+                        ) : (
+                          <strong>{r.cantidad_stock}</strong>
+                        )}
+                      </td>
+                      <td style={td}>
+                        {editId === r.id ? (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={saveEditFinal}
+                              style={btnPrimary}
+                            >
+                              Guardar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditId(null)}
+                              style={btnGhost}
+                            >
+                              Cancelar
+                            </button>
+                          </div>
+                        ) : (
+                          <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => startEditFinal(r)}
+                              style={btnBlue}
+                            >
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => removeFinal(r.id)}
+                              style={btnRed}
+                            >
                               Borrar
                             </button>
                           </div>

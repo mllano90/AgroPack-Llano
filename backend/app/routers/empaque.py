@@ -84,22 +84,24 @@ def _sync_legacy_empaque_fields(
         emp.calidad = _calidad_pres(first_pres)
 
 
-def _match_desverdizado_por_lote(db: Session, lote: str) -> list:
+def _match_desverdizado_por_lote(
+    db: Session, lote: str, producto: Producto | None = None
+) -> list:
     """Filas de desverdizado del lote (match exacto o sin distinguir espacios/mayúsculas)."""
     lote_n = _norm_lote(lote)
     if not lote_n:
         return []
-    rows = (
-        db.query(InventarioDesverdizado)
-        .filter(InventarioDesverdizado.producto == Producto.LIMON_AMARILLO)
-        .order_by(
-            InventarioDesverdizado.fecha_recepcion.asc(),
-            InventarioDesverdizado.id.asc(),
-        )
-        .all()
-    )
-    # No exigir producto enum si el lote coincide (datos viejos)
-    if not rows:
+    q = db.query(InventarioDesverdizado)
+    if producto is not None:
+        q = q.filter(InventarioDesverdizado.producto == producto)
+    else:
+        q = q.filter(InventarioDesverdizado.producto == Producto.LIMON_AMARILLO)
+    rows = q.order_by(
+        InventarioDesverdizado.fecha_recepcion.asc(),
+        InventarioDesverdizado.id.asc(),
+    ).all()
+    # Legacy limón: si no hay filas con enum, buscar sin filtrar producto
+    if not rows and producto in (None, Producto.LIMON_AMARILLO):
         rows = (
             db.query(InventarioDesverdizado)
             .order_by(
@@ -108,6 +110,12 @@ def _match_desverdizado_por_lote(db: Session, lote: str) -> list:
             )
             .all()
         )
+        # Excluir melón en el fallback limón
+        rows = [
+            r
+            for r in rows
+            if str(getattr(r.producto, "value", r.producto) or "").lower() != "melon"
+        ]
     exact = [r for r in rows if _norm_lote(r.lote) == lote_n]
     if exact:
         return exact
@@ -130,10 +138,14 @@ def _parse_fecha_opt(val) -> "date | None":
 
 
 def _consumir_bins_lote(
-    db: Session, lote: str, bins: int, fecha_recepcion=None
+    db: Session,
+    lote: str,
+    bins: int,
+    fecha_recepcion=None,
+    producto: Producto | None = None,
 ) -> list[dict]:
     """
-    Descuenta bins de un lote en desverdizado.
+    Descuenta bins de un lote en desverdizado / stock campo melón.
     Match flexible de lote (strip / case).
 
     - Con fecha_recepcion: solo de filas de esa fecha de corte.
@@ -148,7 +160,7 @@ def _consumir_bins_lote(
         raise HTTPException(status_code=400, detail="lote y bins > 0 son requeridos")
 
     fecha_obj = _parse_fecha_opt(fecha_recepcion)
-    candidatos = _match_desverdizado_por_lote(db, lote_n)
+    candidatos = _match_desverdizado_por_lote(db, lote_n, producto=producto)
     desvs = [d for d in candidatos if int(d.cantidad_bins or 0) > 0]
     if fecha_obj is not None:
         desvs = [
@@ -159,6 +171,7 @@ def _consumir_bins_lote(
     # FIFO: ya vienen ordenados por fecha_recepcion ASC en _match
     restante = bins
     disp = sum(int(d.cantidad_bins or 0) for d in desvs)
+    origen = "campo (melón)" if producto == Producto.MELON else "desverdizado"
     if disp < bins:
         extra = (
             f" en fecha de corte {fecha_obj}" if fecha_obj is not None else ""
@@ -166,7 +179,7 @@ def _consumir_bins_lote(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"No hay suficientes bins en desverdizado para lote '{lote_n}'{extra}. "
+                f"No hay suficientes bins en {origen} para lote '{lote_n}'{extra}. "
                 f"Disponible: {disp}, solicitado: {bins}"
             ),
         )
@@ -200,9 +213,15 @@ def _consumir_bins_lote(
     return desglose
 
 
-def _agregar_consumos_desverdizado(db: Session, consumos: list | None) -> list[dict]:
+def _agregar_consumos_desverdizado(
+    db: Session,
+    consumos: list | None,
+    producto: Producto | None = None,
+    *,
+    requerido: bool = True,
+) -> list[dict]:
     """
-    Normaliza y aplica consumos de desverdizado (crea empaque / editar).
+    Normaliza y aplica consumos de desverdizado / bins melón (crea empaque / editar).
 
     Agrupa por (lote, fecha_recepcion):
     - Si la UI manda fecha de corte, se descuenta solo de esa fecha.
@@ -229,13 +248,17 @@ def _agregar_consumos_desverdizado(db: Session, consumos: list | None) -> list[d
             fr_s = None
         acc[(lo, fr_s)] += bi
     if not acc:
-        raise HTTPException(
-            status_code=400,
-            detail="Indica al menos un consumo de desverdizado (lote + bins > 0)",
+        if not requerido:
+            return []
+        msg = (
+            "Indica al menos un consumo de bins de melón (sección/lote + bins > 0)"
+            if producto == Producto.MELON
+            else "Indica al menos un consumo de desverdizado (lote + bins > 0)"
         )
+        raise HTTPException(status_code=400, detail=msg)
     normalizados: list[dict] = []
     for (lo, fr_s), bi in acc.items():
-        partes = _consumir_bins_lote(db, lo, bi, fr_s)
+        partes = _consumir_bins_lote(db, lo, bi, fr_s, producto=producto)
         if partes:
             normalizados.extend(partes)
         else:
@@ -358,10 +381,14 @@ def _inferir_fechas_consumos_legacy(db: Session, consumos: list[dict]) -> list[d
 
 
 def _devolver_bins_lote(
-    db: Session, lote: str, bins: int, fecha_recepcion=None
+    db: Session,
+    lote: str,
+    bins: int,
+    fecha_recepcion=None,
+    producto: Producto | None = None,
 ) -> None:
     """
-    Devuelve bins a desverdizado al anular/editar empaque.
+    Devuelve bins a desverdizado / stock melón al anular/editar empaque.
 
     Si se conoce fecha_recepcion (corte), devuelve a esa fila o crea una con esa fecha
     (evita mezclar p.ej. corte 03-ago con 05-ago del mismo lote).
@@ -381,7 +408,19 @@ def _devolver_bins_lote(
         return
 
     fecha_obj = _parse_fecha_opt(fecha_recepcion)
-    candidatos = _match_desverdizado_por_lote(db, lote_n)
+
+    prod = producto
+    if prod is None:
+        cand_l = _match_desverdizado_por_lote(db, lote_n, producto=Producto.LIMON_AMARILLO)
+        cand_m = _match_desverdizado_por_lote(db, lote_n, producto=Producto.MELON)
+        if cand_m and not cand_l:
+            prod = Producto.MELON
+            candidatos = cand_m
+        else:
+            prod = Producto.LIMON_AMARILLO
+            candidatos = cand_l or cand_m
+    else:
+        candidatos = _match_desverdizado_por_lote(db, lote_n, producto=prod)
 
     def _add_to_row(des, n: int) -> None:
         des.lote = _norm_lote(des.lote) or lote_n
@@ -392,12 +431,17 @@ def _devolver_bins_lote(
             des.estado = "listo_empaque"
 
     def _crear_fila(fecha_rec: date, n: int, recepcion_id=None) -> None:
+        tent = (
+            fecha_rec
+            if prod == Producto.MELON
+            else fecha_rec + timedelta(days=DIAS_DESVERDIZADO)
+        )
         nuevo = InventarioDesverdizado(
-            producto=Producto.LIMON_AMARILLO,
+            producto=prod,
             cantidad_bins=int(n),
             lote=lote_n,
             fecha_recepcion=fecha_rec,
-            fecha_tentativa_salida=fecha_rec + timedelta(days=DIAS_DESVERDIZADO),
+            fecha_tentativa_salida=tent,
             estado="listo_empaque",
             recepcion_id=recepcion_id,
         )
@@ -408,7 +452,7 @@ def _devolver_bins_lote(
             r
             for r in (
                 db.query(RecepcionCampo)
-                .filter(RecepcionCampo.producto == Producto.LIMON_AMARILLO)
+                .filter(RecepcionCampo.producto == prod)
                 .order_by(RecepcionCampo.id.desc())
                 .all()
             )
@@ -667,6 +711,7 @@ def _restar_una_linea_final(
         return 0, None
 
     label = _sku_label(pres, talla_val, lote_val, fecha_val)
+    calidad_ln = str(linea.get("calidad") or "").strip() or None
     rows = _rows_para_ajuste(
         db,
         pres,
@@ -676,6 +721,13 @@ def _restar_una_linea_final(
         fecha_val,
         al_restar=True,
     )
+    if calidad_ln:
+        rows = [
+            r
+            for r in rows
+            if str(_extra_dict(r).get("calidad") or "").strip().lower()
+            == calidad_ln.lower()
+        ]
     if len(rows) > 1:
         keep = _consolidar_filas_inventario(db, rows, mercado)
         rows = [keep] if keep is not None else rows
@@ -684,6 +736,13 @@ def _restar_una_linea_final(
         rows = _rows_para_ajuste(
             db, pres, talla_val, mercado, lote_val, fecha_val, al_restar=True
         )
+        if calidad_ln:
+            rows = [
+                r
+                for r in rows
+                if str(_extra_dict(r).get("calidad") or "").strip().lower()
+                == calidad_ln.lower()
+            ]
     total = sum(int(r.cantidad_stock or 0) for r in rows if r is not None)
     if total <= 0:
         msg = f"Stock insuficiente de {label} (hay 0, se intentan restar {cant})"
@@ -764,7 +823,12 @@ def _ajustar_inventario_final(
                 detail="RPC a granel requiere fecha de empaque (día de la corrida)",
             )
 
+        calidad_ln = str(linea.get("calidad") or "").strip() or None
+
         if signo < 0:
+            # Melón: no mezclar LLANO vs Wallys al restar
+            if calidad_ln:
+                linea = {**linea, "calidad": calidad_ln}
             restado, problema = _restar_una_linea_final(
                 db, mercado, linea, best_effort=best_effort
             )
@@ -775,6 +839,7 @@ def _ajustar_inventario_final(
                         "talla": talla_val,
                         "lote": lote_val,
                         "fecha_empaque": fecha_val,
+                        "calidad": calidad_ln,
                         "cantidad": restado,
                         "solicitado": cant,
                     }
@@ -794,6 +859,21 @@ def _ajustar_inventario_final(
             fecha_val,
             al_restar=False,
         )
+        if calidad_ln:
+            rows = [
+                r
+                for r in rows
+                if str(_extra_dict(r).get("calidad") or "").strip().lower()
+                == calidad_ln.lower()
+            ]
+        # Filtrar mismo producto (melón vs limón) si aplica
+        if producto:
+            pval = str(getattr(producto, "value", producto))
+            rows = [
+                r
+                for r in rows
+                if str(getattr(r.producto, "value", r.producto)) == pval
+            ]
         if rows:
             if len(rows) > 1:
                 keep = _consolidar_filas_inventario(db, rows, mercado)
@@ -808,12 +888,13 @@ def _ajustar_inventario_final(
                         "talla": talla_val,
                         "lote": lote_val,
                         "fecha_empaque": fecha_val,
+                        "calidad": calidad_ln,
                         "cantidad": cant,
                     }
                 )
                 continue
 
-        calidad = _calidad_pres(pres)
+        calidad = calidad_ln or _calidad_pres(pres)
         extra = {"presentacion": pres, "calidad": calidad}
         if talla_val:
             extra["talla"] = talla_val
@@ -822,6 +903,8 @@ def _ajustar_inventario_final(
         if fecha_val and pres == "rpc_granel":
             extra["fecha_empaque"] = fecha_val
         elif fecha_val and lote_val:
+            extra["fecha_empaque"] = fecha_val
+        elif fecha_val and producto == Producto.MELON:
             extra["fecha_empaque"] = fecha_val
         db.add(
             InventarioFinal(
@@ -1062,7 +1145,51 @@ def crear_empaque(
         _ajustar_inventario_final(
             db, empaque.producto, empaque.mercado, lineas, signo=+1
         )
-    
+
+    if empaque.producto == Producto.MELON:
+        # Melón: bins de campo por sección (obligatorio) + producción LLANO/Wallys
+        # A diferencia del limón: un solo lote por empaque (sin mezclar secciones).
+        consumos_raw = empaque.consumos_desverdizado or []
+        if empaque.bins_desverdizado_usados > 0 and not consumos_raw:
+            consumos_raw = [
+                {
+                    "lote": empaque.lote_desverdizado,
+                    "bins": empaque.bins_desverdizado_usados,
+                }
+            ]
+        lotes_m = {
+            _norm_lote(c.get("lote"))
+            for c in (consumos_raw or [])
+            if isinstance(c, dict) and _norm_lote(c.get("lote"))
+        }
+        if len(lotes_m) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "En melón no se mezclan lotes en un mismo empaque. "
+                    "Registra cada lote por separado (usa «Registrar otro lote»)."
+                ),
+            )
+        consumos_aplicados = _agregar_consumos_desverdizado(
+            db, consumos_raw, producto=Producto.MELON, requerido=True
+        )
+
+        lineas_melon = list(empaque.produccion or [])
+        if not lineas_melon:
+            raise HTTPException(
+                status_code=400,
+                detail="Indica al menos una línea de producción de melón",
+            )
+        for ln in lineas_melon:
+            if not ln.get("fecha_empaque"):
+                ln["fecha_empaque"] = str(fecha_emp)
+        lineas_melon = _etiquetar_produccion_con_lote(
+            lineas_melon, consumos_aplicados, fecha_empaque=str(fecha_emp)
+        )
+        _ajustar_inventario_final(
+            db, empaque.producto, empaque.mercado, lineas_melon, signo=+1
+        )
+
     # 3. Crear el registro de empaque (auditoría)
     detalle_corrida = None
     bins_usados = empaque.bins_desverdizado_usados or 0
@@ -1097,6 +1224,25 @@ def crear_empaque(
             "produccion": lineas_guardadas,
             "bins_campo": bins_usados,
             "lotes_resumen": lotes,
+        }
+
+    if empaque.producto == Producto.MELON:
+        consumos = consumos_aplicados or empaque.consumos_desverdizado or []
+        lineas_guardadas = list(empaque.produccion or [])
+        for ln in lineas_guardadas:
+            if not ln.get("fecha_empaque"):
+                ln["fecha_empaque"] = str(fecha_emp)
+        lineas_guardadas = _etiquetar_produccion_con_lote(
+            lineas_guardadas, consumos, fecha_empaque=str(fecha_emp)
+        )
+        bins_usados = sum(int(c.get("bins") or 0) for c in consumos)
+        lotes = _resumen_consumos(consumos) or empaque.lote_desverdizado
+        detalle_corrida = {
+            "consumos": consumos,
+            "produccion": lineas_guardadas,
+            "bins_campo": bins_usados,
+            "lotes_resumen": lotes,
+            "origen": "campo",
         }
 
     nuevo_empaque = Empaque(

@@ -25,12 +25,15 @@ import type { DashboardData, EmpaqueRecord } from '../../types';
 import EmbarquesReporte from './EmbarquesReporte';
 import InventariosReporte from './InventariosReporte';
 import MapaCuadrosLimon from './MapaCuadrosLimon';
+import MelonReportes from './MelonReportes';
 
 type Corrida = CorridaRendimientoApi;
 type Lote = LoteRendimientoApi;
-/** Secciones principales del módulo Reportes */
+/** Producto activo en Reportes (elige primero Limón o Melón) */
+type ProductoReporte = 'limon_amarillo' | 'melon';
+/** Secciones dentro del producto elegido */
 type SeccionReporte = 'produccion' | 'inventarios' | 'embarques';
-/** Sub-vistas de producción */
+/** Sub-vistas de producción limón */
 type VistaReporte = 'lote' | 'corrida';
 
 interface ReportesProps {
@@ -1196,6 +1199,7 @@ export default function Reportes({ token }: ReportesProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
+  const [productoReporte, setProductoReporte] = useState<ProductoReporte>('limon_amarillo');
   const [seccion, setSeccion] = useState<SeccionReporte>('produccion');
   // Por corrida: procesos fusionados (campo + conversión del granel)
   const [vista, setVista] = useState<VistaReporte>('lote');
@@ -1206,6 +1210,8 @@ export default function Reportes({ token }: ReportesProps) {
   const [reporteEmbarques, setReporteEmbarques] = useState<EmbarquesReporteApi | null>(null);
   /** Empaques limón (para recalcular gráfica al filtrar corridas) */
   const [empaquesLimon, setEmpaquesLimon] = useState<EmpaqueRecord[]>([]);
+  /** Empaques melón (reportes de producción melón) */
+  const [empaquesMelon, setEmpaquesMelon] = useState<EmpaqueRecord[]>([]);
   /** Fuente de la gráfica de pastel: acumulado total (default) o corridas elegidas */
   const [graficaModo, setGraficaModo] = useState<'acumulado' | 'seleccion'>('acumulado');
   const [corridasGraficaIds, setCorridasGraficaIds] = useState<Set<number>>(new Set());
@@ -1243,7 +1249,11 @@ export default function Reportes({ token }: ReportesProps) {
       const limonAll = empaquesAll.filter((e) =>
         String(e.producto || '').toLowerCase().includes('limon')
       );
+      const melonAll = empaquesAll.filter(
+        (e) => String(e.producto || '').toLowerCase() === 'melon'
+      );
       setEmpaquesLimon(limonAll);
+      setEmpaquesMelon(melonAll);
 
       try {
         const apiData = await getRendimientosLimon(token);
@@ -1464,8 +1474,26 @@ export default function Reportes({ token }: ReportesProps) {
   const modoSeleccion = graficaModo === 'seleccion';
   const sinSeleccion = modoSeleccion && corridasSeleccionadas.length === 0;
 
+  const esMelon = productoReporte === 'melon';
+  const esLimon = productoReporte === 'limon_amarillo';
+
+  const productoBtn = (id: ProductoReporte): CSSProperties => ({
+    padding: '10px 20px',
+    border: 'none',
+    borderRadius: 8,
+    cursor: 'pointer',
+    fontWeight: productoReporte === id ? 700 : 500,
+    background:
+      productoReporte === id
+        ? id === 'melon'
+          ? '#0284c7'
+          : '#15803d'
+        : '#f1f5f9',
+    color: productoReporte === id ? 'white' : '#334155',
+    fontSize: 15,
+  });
   const seccionBtn = (id: SeccionReporte): CSSProperties => ({
-    padding: '10px 18px',
+    padding: '8px 16px',
     border: 'none',
     borderRadius: 8,
     cursor: 'pointer',
@@ -1505,19 +1533,32 @@ export default function Reportes({ token }: ReportesProps) {
         </button>
       </div>
 
-      {/* Pestañas principales: Producción | Inventarios | Embarques */}
-      <div style={{ display: 'flex', gap: 8, marginTop: 16, marginBottom: 8, flexWrap: 'wrap' }}>
+      {/* 1) Producto: Limón | Melón */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 16, marginBottom: 4, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          Producto
+        </span>
+        <button type="button" style={productoBtn('limon_amarillo')} onClick={() => setProductoReporte('limon_amarillo')}>
+          Limón
+        </button>
+        <button type="button" style={productoBtn('melon')} onClick={() => setProductoReporte('melon')}>
+          Melón
+        </button>
+      </div>
+
+      {/* 2) Secciones del producto elegido */}
+      <div style={{ display: 'flex', gap: 8, marginTop: 10, marginBottom: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>
+          Sección
+        </span>
         <button type="button" style={seccionBtn('produccion')} onClick={() => setSeccion('produccion')}>
-          Producción / resultados
+          Producción
         </button>
         <button type="button" style={seccionBtn('inventarios')} onClick={() => setSeccion('inventarios')}>
           Inventarios
         </button>
         <button type="button" style={seccionBtn('embarques')} onClick={() => setSeccion('embarques')}>
           Embarques
-          {reporteEmbarques && reporteEmbarques.total_embarques > 0
-            ? ` (${reporteEmbarques.total_embarques})`
-            : ''}
         </button>
       </div>
 
@@ -1525,21 +1566,30 @@ export default function Reportes({ token }: ReportesProps) {
         <div style={{ marginTop: 12 }}>
           <InventariosReporte
             data={dashboard}
-            proyeccion={proyeccion}
+            proyeccion={esLimon ? proyeccion : null}
             onRefresh={load}
             empaquesLimon={empaquesLimon}
             corridas={corridas}
+            productoFiltro={productoReporte}
           />
         </div>
       )}
 
       {seccion === 'embarques' && (
         <div style={{ marginTop: 12 }}>
-          <EmbarquesReporte data={reporteEmbarques} onRefresh={load} />
+          <EmbarquesReporte
+            data={reporteEmbarques}
+            onRefresh={load}
+            productoFiltro={productoReporte}
+          />
         </div>
       )}
 
-      {seccion === 'produccion' && (
+      {seccion === 'produccion' && esMelon && (
+        <MelonReportes empaques={empaquesMelon} token={token} />
+      )}
+
+      {seccion === 'produccion' && esLimon && (
       <>
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
         Rancho = <strong>{hectareas} ha</strong> · Por lote = <strong>{hectareasPorLote} ha</strong> (kg/ha

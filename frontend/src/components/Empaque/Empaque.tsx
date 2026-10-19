@@ -20,6 +20,11 @@ import {
   KG_POR_PRESENTACION,
 } from '../../lib/constants';
 import { formatFechaCorta, todayInputDate } from '../../lib/dates';
+import MelonEmpaqueForm, {
+  type LineaMelon,
+  type BinMelonDisponible,
+  type ConsumoMelon,
+} from './MelonEmpaqueForm';
 
 interface EmpaqueProps {
   token: string;
@@ -96,8 +101,98 @@ export default function Empaque({
   };
   const [lineasProduccion, setLineasProduccion] = useState<LineaProduccion[]>([]);
   const [convirtiendo, setConvirtiendo] = useState(false);
+  /** Melón: líneas Primera LLANO / Segunda Wallys + bins por sección */
+  const [lineasMelon, setLineasMelon] = useState<LineaMelon[]>([]);
+  const [binsMelonList, setBinsMelonList] = useState<BinMelonDisponible[]>([]);
+  const [consumosMelon, setConsumosMelon] = useState<ConsumoMelon[]>([]);
+  /**
+   * Lotes ya ligados (bins + parrillas) esperando el «Registrar Empaque» final.
+   * «Registrar otro lote» acumula aquí y pide el siguiente lote.
+   */
+  const [lotesMelonLigados, setLotesMelonLigados] = useState<
+    Array<{ lote: string; consumos: ConsumoMelon[]; lineas: LineaMelon[] }>
+  >([]);
 
   const createEmpaqueMutation = useCreateEmpaque(token);
+
+  const binsMelonReservados = lotesMelonLigados.flatMap((l) => l.consumos);
+
+  const buildPayloadMelonLote = (
+    consumos: ConsumoMelon[],
+    lineas: LineaMelon[]
+  ) => {
+    const lotesDistintos = [
+      ...new Set(consumos.map((c) => String(c.lote || '').trim()).filter(Boolean)),
+    ];
+    if (lotesDistintos.length > 1) {
+      throw new Error(
+        'En melón no se mezclan lotes. Deja un solo lote y usa «Registrar otro lote» para el siguiente.'
+      );
+    }
+    return {
+      producto: 'melon' as const,
+      mercado: mercadoEmpaque,
+      fecha: fechaEmpaque,
+      porcentaje_merma: 0,
+      notas_merma: '',
+      numero_empacador: 'EMP-01',
+      produccion: lineas.map((l) => {
+        const cpp = l.cajas_por_parrilla || 56;
+        return {
+          presentacion: l.presentacion,
+          talla: l.talla,
+          cantidad: l.cantidad * cpp,
+          calidad: l.calidad,
+          fecha_empaque: fechaEmpaque,
+          cantidad_parrillas: l.cantidad,
+          cajas_por_parrilla: cpp,
+        };
+      }),
+      consumos_desverdizado: consumos.map((c) => ({
+        lote: c.lote,
+        bins: c.bins,
+        fecha_recepcion: c.fecha_recepcion || undefined,
+      })),
+      bins_desverdizado_usados: consumos.reduce((s, c) => s + c.bins, 0),
+    };
+  };
+
+  const validarCapturaMelonActual = (): string | null => {
+    if (consumosMelon.length === 0) {
+      return 'Selecciona bins de un lote / sección de melón';
+    }
+    const lotesDistintos = [
+      ...new Set(consumosMelon.map((c) => String(c.lote || '').trim()).filter(Boolean)),
+    ];
+    if (lotesDistintos.length > 1) {
+      return 'En melón no se mezclan lotes en la captura actual';
+    }
+    if (lineasMelon.length === 0) {
+      return 'Agrega al menos una talla de melón (LLANO o Wallys) en parrillas';
+    }
+    return null;
+  };
+
+  /** Liga bins + parrillas del lote actual y deja listo el siguiente (sin enviar aún). */
+  const registrarOtroLoteMelon = () => {
+    const err = validarCapturaMelonActual();
+    if (err) return alert(err);
+    const lote = String(consumosMelon[0]?.lote || '').trim();
+    setLotesMelonLigados((prev) => [
+      ...prev,
+      {
+        lote,
+        consumos: consumosMelon.map((c) => ({ ...c })),
+        lineas: lineasMelon.map((l) => ({ ...l })),
+      },
+    ]);
+    setConsumosMelon([]);
+    setLineasMelon([]);
+    alert(
+      `Lote «${lote}» ligado (${consumosMelon.reduce((s, c) => s + c.bins, 0)} bins, ${lineasMelon.length} línea(s) de producción).\n\n` +
+        `Ahora introduce bins disponibles de otro lote y su producción. Al terminar todos, pulsa «Registrar Empaque».`
+    );
+  };
 
   const lotesEnConsumo = consumosDesverdizado
     .map((c) => String(c.lote || '').trim())
@@ -189,9 +284,44 @@ export default function Empaque({
       .catch(() => setDesverdizadoList([]));
   };
 
+  const cargarBinsMelon = () => {
+    if (!token) return;
+    const base = getApiBaseUrl().replace(/\/$/, '');
+    fetch(`${base}/api/recepcion/bins-melon`, {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => {
+        const list: BinMelonDisponible[] = Array.isArray(data)
+          ? data
+              .filter((d: any) => (d.cantidad_bins_disponibles || 0) > 0)
+              .map((d: any) => ({
+                id: d.id,
+                lote: String(d.lote || ''),
+                cantidad_bins_disponibles: Number(d.cantidad_bins_disponibles || 0),
+                fecha_recepcion: d.fecha_recepcion || null,
+                estado: d.estado,
+              }))
+              .sort((a, b) => {
+                const la = a.lote.localeCompare(b.lote);
+                if (la !== 0) return la;
+                return String(a.fecha_recepcion || '').localeCompare(
+                  String(b.fecha_recepcion || '')
+                );
+              })
+          : [];
+        setBinsMelonList(list);
+      })
+      .catch(() => setBinsMelonList([]));
+  };
+
   useEffect(() => {
     if (productoEmpaque === 'limon_amarillo' && token) {
       cargarDesverdizado();
+    }
+    if (productoEmpaque === 'melon' && token) {
+      cargarBinsMelon();
     }
   }, [productoEmpaque, token]);
 
@@ -327,6 +457,48 @@ export default function Empaque({
             100
           ).toFixed(2)
         );
+      } else if (productoEmpaque === 'melon') {
+        // Empaque final: envía lotes ligados + captura actual (si está completa)
+        const hayActual =
+          consumosMelon.length > 0 || lineasMelon.length > 0;
+        if (hayActual) {
+          const err = validarCapturaMelonActual();
+          if (err) return alert(err);
+        }
+        const aEnviar = [
+          ...lotesMelonLigados,
+          ...(hayActual
+            ? [
+                {
+                  lote: String(consumosMelon[0]?.lote || '').trim(),
+                  consumos: consumosMelon,
+                  lineas: lineasMelon,
+                },
+              ]
+            : []),
+        ];
+        if (aEnviar.length === 0) {
+          return alert(
+            'Liga al menos un lote (bins + producción). Usa «Registrar otro lote» o completa el lote actual y pulsa «Registrar Empaque».'
+          );
+        }
+
+        for (const item of aEnviar) {
+          const pl = buildPayloadMelonLote(item.consumos, item.lineas);
+          await createEmpaqueMutation.mutateAsync(pl);
+        }
+
+        const nombres = aEnviar.map((x) => x.lote).join(', ');
+        alert(
+          `✅ Empaque melón registrado (${aEnviar.length} lote${aEnviar.length > 1 ? 's' : ''}): ${nombres}`
+        );
+        setLineasMelon([]);
+        setConsumosMelon([]);
+        setLotesMelonLigados([]);
+        setFechaEmpaque(todayInputDate());
+        onEmpaqueRegistered();
+        cargarBinsMelon();
+        return;
       } else {
         // Limón: puede registrar AMBOS en un solo botón
         // 1) Bins desverdizado → producción (granel WIP / final / jugo)
@@ -520,6 +692,9 @@ export default function Empaque({
         setSelectedGranelKey('');
         setSelectedGranelCant('');
         setLineasProduccion([]);
+        setLineasMelon([]);
+        setConsumosMelon([]);
+        setLotesMelonLigados([]);
         setProdPresentacion('');
         resetLimonProduccionForm();
         onEmpaqueRegistered();
@@ -528,6 +703,7 @@ export default function Empaque({
       }
 
       await createEmpaqueMutation.mutateAsync(payload);
+
       alert('✅ Empaque registrado');
       setCajasCampoUsadas('');
       setCajasCartonProducidas('');
@@ -542,6 +718,9 @@ export default function Empaque({
       setSelectedGranelKey('');
       setSelectedGranelCant('');
       setLineasProduccion([]);
+      setLineasMelon([]);
+      setConsumosMelon([]);
+      setLotesMelonLigados([]);
       setProdPresentacion('');
       resetLimonProduccionForm();
       onEmpaqueRegistered();
@@ -583,6 +762,10 @@ export default function Empaque({
           setSelectedDesv(null);
           setSelectedBinsToUse('');
           setLineasProduccion([]);
+          setLineasMelon([]);
+          setConsumosMelon([]);
+          setLotesMelonLigados([]);
+          setBinsMelonList([]);
           setProdPresentacion('');
           setFechaEmpaque(todayInputDate());
           resetLimonProduccionForm();
@@ -592,6 +775,7 @@ export default function Empaque({
         <option value="">Seleccionar producto</option>
         <option value="uva">Uva</option>
         <option value="limon_amarillo">Limón Amarillo</option>
+        <option value="melon">Melón</option>
       </select>
 
       {productoEmpaque && (
@@ -1340,18 +1524,94 @@ export default function Empaque({
         </>
       )}
 
-      <button
-        type="button"
-        onClick={registrarEmpaque}
-        disabled={isSubmitting || !productoEmpaque}
-        style={{
-          padding: '12px 30px',
-          marginTop: '15px',
-          opacity: isSubmitting || !productoEmpaque ? 0.6 : 1,
-        }}
-      >
-        {isSubmitting ? 'Registrando...' : 'Registrar Empaque'}
-      </button>
+      {productoEmpaque === 'melon' && (
+        <MelonEmpaqueForm
+          fechaEmpaque={fechaEmpaque}
+          lineas={lineasMelon}
+          onChangeLineas={setLineasMelon}
+          binsDisponibles={binsMelonList}
+          consumos={consumosMelon}
+          onChangeConsumos={setConsumosMelon}
+          onRefreshBins={cargarBinsMelon}
+          binsReservados={binsMelonReservados}
+          lotesLigados={lotesMelonLigados}
+          onQuitarLoteLigado={(idx) =>
+            setLotesMelonLigados((prev) => prev.filter((_, i) => i !== idx))
+          }
+        />
+      )}
+
+      {productoEmpaque === 'melon' ? (
+        <>
+          <div
+            style={{
+              display: 'flex',
+              width: '100%',
+              marginTop: 18,
+              alignItems: 'center',
+              gap: 12,
+            }}
+          >
+            <div style={{ flex: 1 }} />
+            <button
+              type="button"
+              onClick={registrarOtroLoteMelon}
+              disabled={isSubmitting}
+              title="Liga bins + parrillas de este lote y pide el siguiente"
+              style={{
+                padding: '12px 22px',
+                background: '#16a34a',
+                color: '#fff',
+                border: 'none',
+                borderRadius: 8,
+                fontWeight: 700,
+                cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                opacity: isSubmitting ? 0.6 : 1,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              Registrar otro lote
+            </button>
+            <div style={{ flex: 1, display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => registrarEmpaque()}
+                disabled={isSubmitting}
+                style={{
+                  padding: '12px 28px',
+                  background: '#2563eb',
+                  color: '#fff',
+                  border: 'none',
+                  borderRadius: 8,
+                  fontWeight: 700,
+                  cursor: isSubmitting ? 'not-allowed' : 'pointer',
+                  opacity: isSubmitting ? 0.6 : 1,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {isSubmitting ? 'Registrando...' : 'Registrar Empaque'}
+              </button>
+            </div>
+          </div>
+          <p style={{ fontSize: 12, color: '#64748b', margin: '8px 0 0', textAlign: 'center' }}>
+            Verde: liga el lote actual (bins + parrillas) y captura el siguiente. Azul: al terminar,
+            registra todos los lotes ligados (+ el actual si está completo).
+          </p>
+        </>
+      ) : (
+        <button
+          type="button"
+          onClick={() => registrarEmpaque()}
+          disabled={isSubmitting || !productoEmpaque}
+          style={{
+            padding: '12px 30px',
+            marginTop: '15px',
+            opacity: isSubmitting || !productoEmpaque ? 0.6 : 1,
+          }}
+        >
+          {isSubmitting ? 'Registrando...' : 'Registrar Empaque'}
+        </button>
+      )}
     </div>
   );
 }
