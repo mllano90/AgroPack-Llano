@@ -344,7 +344,7 @@ def sincronizar_recepcion_desverdizado(db: Session) -> dict:
 
 
 class RecepcionLimonUpdate(BaseModel):
-    """Editar captura de recepción limón (y sincroniza inventario desverdizado)."""
+    """Editar captura de recepción limón o melón (sincroniza inventario bins/desverdizado)."""
     lote: str | None = None
     cantidad_bins: int | None = Field(default=None, ge=0)
     fecha_corte: str | None = None  # YYYY-MM-DD
@@ -380,14 +380,22 @@ def editar_recepcion_limon(
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
-    Edita lote, bins y fecha de una recepción de limón y actualiza
-    el inventario de desverdizado ligado (es el mismo registro de negocio).
+    Edita lote, bins y fecha de una recepción de limón o melón y actualiza
+    el inventario de bins/desverdizado ligado (mismo registro de negocio).
     """
     r = db.query(RecepcionCampo).filter(RecepcionCampo.id == recepcion_id).first()
     if not r:
         raise HTTPException(status_code=404, detail="Recepción no encontrada")
-    if not _es_limon(r.producto):
-        raise HTTPException(status_code=400, detail="Solo se edita recepción de limón aquí")
+    es_limon = _es_limon(r.producto)
+    es_melon = _es_melon(r.producto)
+    if not es_limon and not es_melon:
+        raise HTTPException(
+            status_code=400,
+            detail="Solo se edita recepción de limón o melón aquí",
+        )
+
+    prod_enum = Producto.MELON if es_melon else Producto.LIMON_AMARILLO
+    estado_activo = "listo_empaque" if es_melon else "en_desverdizado"
 
     desvs = (
         db.query(InventarioDesverdizado)
@@ -395,15 +403,16 @@ def editar_recepcion_limon(
         .all()
     )
     if not desvs:
-        # Crear desverdizado si no existe
+        # Crear inventario bins si no existe
         fr = getattr(r, "fecha_corte", None) or r.fecha or date.today()
+        tent = fr if es_melon else fr + timedelta(days=DIAS_DESVERDIZADO)
         d = InventarioDesverdizado(
-            producto=Producto.LIMON_AMARILLO,
+            producto=prod_enum,
             cantidad_bins=int(getattr(r, "cantidad_bins", None) or 0),
             lote=getattr(r, "lote", None) or "SIN_LOTE",
             fecha_recepcion=fr,
-            fecha_tentativa_salida=fr + timedelta(days=DIAS_DESVERDIZADO),
-            estado="en_desverdizado",
+            fecha_tentativa_salida=tent,
+            estado=estado_activo,
             recepcion_id=r.id,
         )
         db.add(d)
@@ -426,7 +435,7 @@ def editar_recepcion_limon(
             if desvs[0].cantidad_bins == 0:
                 desvs[0].estado = "empaquetado"
             elif desvs[0].estado in ("empaquetado", "eliminado"):
-                desvs[0].estado = "en_desverdizado"
+                desvs[0].estado = estado_activo
         else:
             # Varios: poner todo en el primero y cero en el resto (raro)
             desvs[0].cantidad_bins = int(body.cantidad_bins)
@@ -442,7 +451,9 @@ def editar_recepcion_limon(
             for d in desvs:
                 d.fecha_recepcion = fr
                 if body.recalcular_tentativa:
-                    d.fecha_tentativa_salida = fr + timedelta(days=DIAS_DESVERDIZADO)
+                    d.fecha_tentativa_salida = (
+                        fr if es_melon else fr + timedelta(days=DIAS_DESVERDIZADO)
+                    )
 
     db.commit()
     db.refresh(r)
@@ -453,8 +464,9 @@ def editar_recepcion_limon(
     )
     nums = _numeros_recepcion_cronologicos(db)
     n_rec = nums.get(r.id) or r.id
+    etiqueta = "piso" if es_melon else "cámara"
     return {
-        "message": f"Recepción #{n_rec} actualizada (desverdizado sincronizado)",
+        "message": f"Recepción #{n_rec} actualizada (bins sincronizados)",
         "id": r.id,
         "numero_recepcion": n_rec,
         "lote": r.lote,
@@ -462,6 +474,8 @@ def editar_recepcion_limon(
         "fecha_corte": str(r.fecha_corte) if r.fecha_corte else None,
         "desverdizado_ids": [d.id for d in desvs],
         "bins_en_camara": sum(int(d.cantidad_bins or 0) for d in desvs),
+        "producto": _pval(r.producto),
+        "stock_label": etiqueta,
     }
 
 
@@ -538,7 +552,7 @@ def historial_movimientos(
                         "resumen": resumen,
                         "detalle": detalle,
                         "producto": prod,
-                        "puede_editar": bool(es_limon),
+                        "puede_editar": bool(es_limon or _es_melon(r.producto)),
                         "puede_eliminar": True,
                         **ufields,
                         "meta": {
@@ -634,8 +648,8 @@ def historial_movimientos(
                     "resumen": resumen,
                     "detalle": detalle,
                     "producto": prod,
-                    "puede_editar": not anulado and es_limon_emp,
-                    # OK limón/melón → anular; anulado → borrar permanente del historial
+                    "puede_editar": not anulado and (es_limon_emp or es_melon_emp),
+                    # OK limón/melón → editar/anular; anulado → borrar permanente del historial
                     "puede_eliminar": es_limon_emp or es_melon_emp or anulado,
                     **ufields,
                     "meta": {

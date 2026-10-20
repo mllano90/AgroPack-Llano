@@ -746,13 +746,22 @@ export async function agregarConsumoEmpaque(
   return res.data;
 }
 
-/** Edición completa de empaque limón (consumos + producción + datos) */
+/** Edición completa de empaque limón o melón (consumos + producción + datos) */
 export async function editarEmpaqueCompleto(
   token: string,
   empaqueId: number,
   data: {
-    consumos?: Array<{ lote: string; bins: number }>;
-    produccion?: Array<{ presentacion: string; talla?: string | null; cantidad: number }>;
+    consumos?: Array<{ lote: string; bins: number; fecha_recepcion?: string }>;
+    produccion?: Array<{
+      presentacion: string;
+      talla?: string | null;
+      cantidad: number;
+      calidad?: string;
+      lote?: string;
+      fecha_empaque?: string;
+      cantidad_parrillas?: number;
+      cajas_por_parrilla?: number;
+    }>;
     fecha?: string | null;
     numero_empacador?: string | null;
     mercado?: string | null;

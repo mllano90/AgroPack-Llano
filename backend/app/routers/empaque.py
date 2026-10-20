@@ -975,42 +975,55 @@ def _validar_restar_produccion(db: Session, mercado, produccion: list) -> list[s
 
 def _netear_produccion(old_prod: list, new_prod: list) -> list[dict]:
     """
-    Deltas netos por (presentacion, talla, lote, fecha_empaque).
+    Deltas netos por (presentacion, talla, lote, fecha_empaque, calidad).
+    Incluye calidad para no mezclar LLANO vs Wallys en melón.
     """
     from collections import defaultdict
 
-    acc: dict[tuple[str, str | None, str | None, str | None], int] = defaultdict(int)
+    acc: dict[
+        tuple[str, str | None, str | None, str | None, str | None], int
+    ] = defaultdict(int)
+
+    def _cal(p: dict) -> str | None:
+        c = str(p.get("calidad") or "").strip().lower() or None
+        return c
+
     for p in old_prod or []:
+        if not isinstance(p, dict):
+            continue
         pres = (p.get("presentacion") or "").strip()
         if not pres:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
         lote = _norm_lote_extra(p.get("lote"))
         fecha = _norm_fecha_emp(p.get("fecha_empaque") or p.get("fecha"))
-        acc[(pres, talla, lote, fecha)] -= int(p.get("cantidad") or 0)
+        acc[(pres, talla, lote, fecha, _cal(p))] -= int(p.get("cantidad") or 0)
     for p in new_prod or []:
+        if not isinstance(p, dict):
+            continue
         pres = (p.get("presentacion") or "").strip()
         if not pres:
             continue
         talla = _talla_for_pres(pres, p.get("talla"))
         lote = _norm_lote_extra(p.get("lote"))
         fecha = _norm_fecha_emp(p.get("fecha_empaque") or p.get("fecha"))
-        acc[(pres, talla, lote, fecha)] += int(p.get("cantidad") or 0)
+        acc[(pres, talla, lote, fecha, _cal(p))] += int(p.get("cantidad") or 0)
 
     out: list[dict] = []
-    for (pres, talla, lote, fecha), delta in acc.items():
+    for (pres, talla, lote, fecha, cal), delta in acc.items():
         if delta == 0:
             continue
-        out.append(
-            {
-                "presentacion": pres,
-                "talla": talla,
-                "lote": lote,
-                "fecha_empaque": fecha,
-                "cantidad": abs(delta),
-                "_signo": 1 if delta > 0 else -1,
-            }
-        )
+        row = {
+            "presentacion": pres,
+            "talla": talla,
+            "lote": lote,
+            "fecha_empaque": fecha,
+            "cantidad": abs(delta),
+            "_signo": 1 if delta > 0 else -1,
+        }
+        if cal:
+            row["calidad"] = cal
+        out.append(row)
     return out
 
 
@@ -1349,6 +1362,8 @@ def _norm_consumos(raw: list | None) -> list[dict]:
 def _norm_produccion(raw: list | None) -> list[dict]:
     out = []
     for p in raw or []:
+        if not isinstance(p, dict):
+            continue
         pres = str(p.get("presentacion") or "").strip()
         cant = int(p.get("cantidad") or 0)
         if not pres or cant <= 0:
@@ -1361,6 +1376,20 @@ def _norm_produccion(raw: list | None) -> list[dict]:
             row["lote"] = lote
         if fecha:
             row["fecha_empaque"] = fecha
+        # Melón: calidad LLANO/Wallys y meta de parrillas
+        cal = str(p.get("calidad") or "").strip().lower() or None
+        if cal:
+            row["calidad"] = cal
+        if p.get("cantidad_parrillas") is not None:
+            try:
+                row["cantidad_parrillas"] = float(p.get("cantidad_parrillas") or 0)
+            except (TypeError, ValueError):
+                pass
+        if p.get("cajas_por_parrilla") is not None:
+            try:
+                row["cajas_por_parrilla"] = int(p.get("cajas_por_parrilla") or 0)
+            except (TypeError, ValueError):
+                pass
         out.append(row)
     return out
 
@@ -1431,7 +1460,7 @@ def editar_empaque_completo(
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
-    Edición completa de empaque limón:
+    Edición completa de empaque limón o melón (admin):
     - Reemplaza consumos (lotes/bins): devuelve los viejos y descuenta los nuevos.
     - Reemplaza producción: resta del inventario final lo anterior y suma lo nuevo.
     - Opcional: fecha, empacador, mercado.
@@ -1439,9 +1468,13 @@ def editar_empaque_completo(
     emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Empaque no encontrado")
-    if emp.producto != Producto.LIMON_AMARILLO:
-        raise HTTPException(status_code=400, detail="Edición completa solo para limón por ahora")
+    if emp.producto not in (Producto.LIMON_AMARILLO, Producto.MELON):
+        raise HTTPException(
+            status_code=400,
+            detail="Edición completa solo para limón o melón",
+        )
 
+    es_melon = emp.producto == Producto.MELON
     detalle = _detalle_as_dict(emp.detalle_corrida)
     if detalle.get("anulado"):
         raise HTTPException(status_code=400, detail="El empaque está anulado; no se puede editar")
@@ -1456,11 +1489,14 @@ def editar_empaque_completo(
     old_consumos = _inferir_fechas_consumos_legacy(db, old_consumos)
     old_produccion = _norm_produccion(detalle.get("produccion"))
     if not old_produccion and emp.presentacion and emp.cantidad_producida:
-        old_produccion = [{
+        old_row = {
             "presentacion": emp.presentacion,
             "talla": emp.talla,
             "cantidad": emp.cantidad_producida,
-        }]
+        }
+        if emp.calidad:
+            old_row["calidad"] = str(emp.calidad)
+        old_produccion = [old_row]
 
     es_conversion = detalle.get("tipo") == "conversion_rpc_granel"
 
@@ -1477,21 +1513,36 @@ def editar_empaque_completo(
         if body.produccion is not None
         else old_produccion
     )
-    # Asegurar lote + fecha_empaque en granel según consumos
+
+    if es_melon:
+        lotes_m = {
+            _norm_lote(c.get("lote"))
+            for c in (new_consumos or [])
+            if isinstance(c, dict) and _norm_lote(c.get("lote"))
+        }
+        if len(lotes_m) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "En melón no se mezclan lotes en un mismo empaque. "
+                    "Deja un solo lote por registro."
+                ),
+            )
+
+    # Asegurar lote + fecha_empaque en granel según consumos (limón)
     if body.produccion is not None:
         fecha_edit = None
         if body.fecha:
             fecha_edit = _parse_fecha_empaque(body.fecha)
         fecha_edit = fecha_edit or emp.fecha
-        # Recuperar lote de líneas granel previas si el cliente no envió lote
-        # (p. ej. UI antigua al agregar solo bins de jugo).
-        new_produccion = _recuperar_lotes_granel_desde_old(
-            old_produccion, new_produccion
-        )
-        # Para etiquetar granel: consumos del proceso o lotes ya en producción vieja
+        if not es_melon:
+            # Recuperar lote de líneas granel previas si el cliente no envió lote
+            new_produccion = _recuperar_lotes_granel_desde_old(
+                old_produccion, new_produccion
+            )
+        # Etiquetar lote/fecha en líneas que lo necesiten
         cons_para_etiqueta = new_consumos or old_consumos
         if not cons_para_etiqueta:
-            # fallback: lotes presentes en producción anterior (granel WIP)
             cons_para_etiqueta = [
                 {"lote": _norm_lote_extra(p.get("lote")), "bins": 1}
                 for p in old_produccion
@@ -1513,6 +1564,13 @@ def editar_empaque_completo(
             }]
     if body.produccion is not None and not new_produccion:
         raise HTTPException(status_code=400, detail="Debe haber al menos una línea de producción")
+    if es_melon and body.produccion is not None:
+        for ln in new_produccion:
+            if not str(ln.get("calidad") or "").strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cada línea de melón debe indicar calidad (llano o wallys)",
+                )
 
     def _clave_consumo(c: dict) -> tuple:
         return (
@@ -1525,15 +1583,23 @@ def editar_empaque_completo(
         _clave_consumo(c) for c in new_consumos
     )
 
-    # 1–2) Solo mover desverdizado si los lotes/bins de campo cambiaron.
-    #     Si solo se agrega jugo/cartón/granel a la producción, no se tocan bins.
+    # 1–2) Solo mover bins/desverdizado si los lotes/bins de campo cambiaron.
     if consumos_cambiaron:
         for c in old_consumos:
             _devolver_bins_lote(
-                db, c["lote"], c["bins"], c.get("fecha_recepcion")
+                db,
+                c["lote"],
+                c["bins"],
+                c.get("fecha_recepcion"),
+                producto=emp.producto,
             )
         if new_consumos:
-            new_consumos = _agregar_consumos_desverdizado(db, new_consumos)
+            new_consumos = _agregar_consumos_desverdizado(
+                db,
+                new_consumos,
+                producto=emp.producto,
+                requerido=bool(es_melon),
+            )
         else:
             new_consumos = []
     else:
@@ -1543,17 +1609,20 @@ def editar_empaque_completo(
     # 3) Ajuste NETO de producción (no restar todo y sumar: evita fallos de stock intermedio)
     mercado_dest = body.mercado if body.mercado is not None else emp.mercado
     for net in _netear_produccion(old_produccion, new_produccion):
+        linea_net = {
+            "presentacion": net["presentacion"],
+            "talla": net["talla"],
+            "lote": net.get("lote"),
+            "fecha_empaque": net.get("fecha_empaque"),
+            "cantidad": net["cantidad"],
+        }
+        if net.get("calidad"):
+            linea_net["calidad"] = net["calidad"]
         _ajustar_inventario_final(
             db,
             emp.producto,
             mercado_dest,
-            [{
-                "presentacion": net["presentacion"],
-                "talla": net["talla"],
-                "lote": net.get("lote"),
-                "fecha_empaque": net.get("fecha_empaque"),
-                "cantidad": net["cantidad"],
-            }],
+            [linea_net],
             signo=int(net["_signo"]),
         )
 
@@ -1715,8 +1784,11 @@ def anular_empaque(
     emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
     if not emp:
         raise HTTPException(status_code=404, detail="Empaque no encontrado")
-    if emp.producto != Producto.LIMON_AMARILLO:
-        raise HTTPException(status_code=400, detail="Anular automático solo para limón por ahora")
+    if emp.producto not in (Producto.LIMON_AMARILLO, Producto.MELON):
+        raise HTTPException(
+            status_code=400,
+            detail="Anular automático solo para limón o melón",
+        )
 
     detalle = _detalle_as_dict(emp.detalle_corrida)
     if detalle.get("anulado"):
@@ -1728,11 +1800,14 @@ def anular_empaque(
     consumos = _inferir_fechas_consumos_legacy(db, consumos)
     produccion = _norm_produccion(detalle.get("produccion"))
     if not produccion and emp.presentacion and emp.cantidad_producida:
-        produccion = [{
+        row = {
             "presentacion": emp.presentacion,
             "talla": emp.talla,
             "cantidad": emp.cantidad_producida,
-        }]
+        }
+        if emp.calidad:
+            row["calidad"] = str(emp.calidad)
+        produccion = [row]
 
     # Pre-check inventario final ANTES de devolver bins (evita estado a medias)
     problemas_final: list[str] = []
@@ -1752,7 +1827,7 @@ def anular_empaque(
             ),
         )
 
-    # 1) PRIMERO devolver bins a desverdizado (campo) — por lote y fecha de corte
+    # 1) PRIMERO devolver bins a desverdizado / piso melón — por lote y fecha de corte
     bins_devueltos = 0
     detalle_bins_devueltos: list[dict] = []
     for c in consumos:
@@ -1760,7 +1835,7 @@ def anular_empaque(
         lo = _norm_lote(c.get("lote"))
         if b > 0 and lo:
             fr = c.get("fecha_recepcion")
-            _devolver_bins_lote(db, lo, b, fr)
+            _devolver_bins_lote(db, lo, b, fr, producto=emp.producto)
             bins_devueltos += b
             item = {"lote": lo, "bins": b}
             if fr:

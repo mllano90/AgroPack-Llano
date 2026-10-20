@@ -84,11 +84,12 @@ class EliminarEmpaqueResponse(BaseModel):
 
 class EmpaqueEditRequest(BaseModel):
     """
-    Edición completa de empaque limón (admin).
+    Edición completa de empaque limón o melón (admin).
     Reemplaza consumos y producción ajustando inventarios.
+    Melón: produccion puede incluir calidad (llano/wallys), cantidad_parrillas.
     """
     consumos: list[dict] | None = None  # [{"lote": "...", "bins": N}, ...]
-    produccion: list[dict] | None = None  # [{"presentacion", "talla", "cantidad"}, ...]
+    produccion: list[dict] | None = None  # [{"presentacion", "talla", "cantidad", "calidad?"}, ...]
     fecha: str | None = None  # YYYY-MM-DD
     numero_empacador: str | None = None
     mercado: TipoMercado | None = None

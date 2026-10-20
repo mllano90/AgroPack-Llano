@@ -18,9 +18,13 @@ import {
 } from '../../lib/api';
 import {
   DIAS_DESVERDIZADO,
+  FILAS_CAJA_MELON,
   PRESENTACIONES_LIMON,
   TALLAS_LIMON,
+  cajasPorParrillaMelon,
+  labelCalidadMelon,
   labelPresentacionLimon,
+  tallasParaPresentacionMelon,
 } from '../../lib/constants';
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
 import type { EmpaqueRecord } from '../../types';
@@ -42,7 +46,7 @@ type EmbarqueAdminRow = {
   }>;
 };
 
-type ConsumoEdit = { lote: string; bins: string };
+type ConsumoEdit = { lote: string; bins: string; fecha_recepcion?: string };
 type ProdEdit = {
   presentacion: string;
   talla: string;
@@ -50,6 +54,10 @@ type ProdEdit = {
   /** Lote de origen (obligatorio en rpc_granel con multi-lote) */
   lote: string;
   fecha_empaque: string;
+  /** Melón: llano | wallys */
+  calidad?: string;
+  cantidad_parrillas?: string;
+  cajas_por_parrilla?: string;
 };
 
 interface CorreccionesProps {
@@ -283,10 +291,17 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setEditMercado((e.mercado as 'nacional' | 'exportacion') || 'nacional');
     const cons = consumosDesdeEmpaque(e);
     setEditConsumos(
-      cons.map((c) => ({ lote: String(c.lote || ''), bins: String(c.bins ?? '') }))
+      cons.map((c) => ({
+        lote: String(c.lote || ''),
+        bins: String(c.bins ?? ''),
+        fecha_recepcion: c.fecha_recepcion
+          ? toInputDate(String(c.fecha_recepcion))
+          : '',
+      }))
     );
     const prod = e.detalle_corrida?.produccion || [];
     const fechaEmpDefault = toInputDate(e.fecha);
+    const esMelonEmp = String(e.producto || '').toLowerCase() === 'melon';
     setEditProduccion(
       prod.map((p: any) => ({
         presentacion: String(p.presentacion || ''),
@@ -297,6 +312,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         fecha_empaque: p.fecha_empaque
           ? toInputDate(String(p.fecha_empaque))
           : fechaEmpDefault,
+        calidad: p.calidad != null ? String(p.calidad) : esMelonEmp ? 'llano' : '',
+        cantidad_parrillas:
+          p.cantidad_parrillas != null ? String(p.cantidad_parrillas) : '',
+        cajas_por_parrilla:
+          p.cajas_por_parrilla != null ? String(p.cajas_por_parrilla) : '',
       }))
     );
     setOkMsg('');
@@ -305,8 +325,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   const handleGuardarEmpaque = async () => {
     if (!selectedId || !selected) return;
-    if (selected.producto !== 'limon_amarillo') {
-      return alert('Edición completa solo para limón por ahora');
+    const prodSel = String(selected.producto || '').toLowerCase();
+    const esMelonEmp = prodSel === 'melon';
+    const esLimonEmp = prodSel === 'limon_amarillo' || prodSel.includes('limon');
+    if (!esMelonEmp && !esLimonEmp) {
+      return alert('Edición completa solo para limón o melón');
     }
     if (anulado) return alert('El empaque está anulado');
 
@@ -314,19 +337,38 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       selected.detalle_corrida?.tipo === 'conversion_rpc_granel';
 
     // Consumos del formulario; si vienen vacíos, heredar los del proceso original
-    // (p. ej. solo agregas bins jugo / cartón sin tocar lotes de campo).
     let consumos = editConsumos
-      .map((c) => ({ lote: c.lote.trim(), bins: parseInt(c.bins, 10) || 0 }))
+      .map((c) => {
+        const row: { lote: string; bins: number; fecha_recepcion?: string } = {
+          lote: c.lote.trim(),
+          bins: parseInt(c.bins, 10) || 0,
+        };
+        const fr = (c.fecha_recepcion || '').trim();
+        if (fr) row.fecha_recepcion = fr;
+        return row;
+      })
       .filter((c) => c.lote && c.bins > 0);
     if (consumos.length === 0) {
-      consumos = consumosDesdeEmpaque(selected).map((c) => ({
-        lote: c.lote,
-        bins: c.bins,
-      }));
+      consumos = consumosDesdeEmpaque(selected).map((c) => {
+        const row: { lote: string; bins: number; fecha_recepcion?: string } = {
+          lote: c.lote,
+          bins: c.bins,
+        };
+        if (c.fecha_recepcion) row.fecha_recepcion = String(c.fecha_recepcion).slice(0, 10);
+        return row;
+      });
+    }
+
+    if (esMelonEmp) {
+      const lotesM = new Set(consumos.map((c) => c.lote.trim()).filter(Boolean));
+      if (lotesM.size > 1) {
+        return alert(
+          'En melón no se mezclan lotes en un mismo empaque.\nDeja un solo lote por registro.'
+        );
+      }
     }
 
     const lotesConsumo = new Set(consumos.map((c) => c.lote));
-    // Lotes de origen también desde granel ya capturado (conversión o prod)
     for (const p of editProduccion) {
       if ((p.lote || '').trim()) lotesConsumo.add(p.lote.trim());
     }
@@ -336,61 +378,79 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       .map((p) => {
         const presentacion = p.presentacion.trim();
         let lote = (p.lote || '').trim();
-        // Un solo consumo → heredar lote si no viene (jugo/cartón no necesitan lote extra)
-        if (!lote && loteUnico && presentacion === 'rpc_granel') lote = loteUnico;
+        if (!lote && loteUnico && (presentacion === 'rpc_granel' || esMelonEmp)) {
+          lote = loteUnico;
+        }
         const row: {
           presentacion: string;
           talla: string | null;
           cantidad: number;
           lote?: string;
           fecha_empaque?: string;
+          calidad?: string;
+          cantidad_parrillas?: number;
+          cajas_por_parrilla?: number;
         } = {
           presentacion,
           talla: presentacion === 'bins_jugo' ? null : p.talla.trim() || null,
           cantidad: parseInt(p.cantidad, 10) || 0,
         };
-        // bins_jugo y finales no exigen lote; granel sí
         if (lote && presentacion === 'rpc_granel') row.lote = lote;
         else if (lote && presentacion !== 'bins_jugo') row.lote = lote;
         const fe = (p.fecha_empaque || editFecha || '').trim();
         if (fe) row.fecha_empaque = fe;
+        if (esMelonEmp) {
+          const cal = (p.calidad || 'llano').trim().toLowerCase();
+          row.calidad = cal === 'wallys' ? 'wallys' : 'llano';
+          const cpp =
+            parseInt(p.cajas_por_parrilla || '', 10) ||
+            cajasPorParrillaMelon(presentacion) ||
+            56;
+          row.cajas_por_parrilla = cpp;
+          const parr = parseFloat(p.cantidad_parrillas || '');
+          if (Number.isFinite(parr) && parr > 0) {
+            row.cantidad_parrillas = parr;
+          } else if (cpp > 0 && row.cantidad > 0) {
+            row.cantidad_parrillas = Math.round((row.cantidad / cpp) * 100) / 100;
+          }
+        }
         return row;
       })
       .filter((p) => p.presentacion && p.cantidad > 0);
 
-    // Conversión granel→final: no hay consumos de desverdizado (es normal).
-    // Empaque desde campo: si no hay consumos ni en form ni en original, sí es error.
     if (consumos.length === 0 && !esConversion) {
       return alert(
-        'Este empaque no tiene lotes de desverdizado registrados.\n' +
-          'No se pueden inferir bins de origen. Revisa el historial del proceso.'
+        esMelonEmp
+          ? 'Este empaque no tiene bins de campo registrados.\nIndica al menos un lote/sección con bins.'
+          : 'Este empaque no tiene lotes de desverdizado registrados.\n' +
+              'No se pueden inferir bins de origen. Revisa el historial del proceso.'
       );
     }
     if (produccion.length === 0) return alert('Debe haber al menos una línea de producción');
 
-    // Validar granel multi-lote en cliente (mismo mensaje que el API)
-    const granelSinLote = produccion.filter(
-      (p) => p.presentacion === 'rpc_granel' && !p.lote
-    );
-    if (granelSinLote.length > 0 && lotesConsumo.size > 1) {
-      return alert(
-        'Hay varios lotes en el empaque.\n\n' +
-          'Cada línea de RPC a granel debe indicar el lote de origen.\n' +
-          'No se perdió el dato: elige el lote en cada fila de granel y vuelve a guardar.\n\n' +
-          '(Agregar bins de jugo no requiere desvincular el granel ni nuevos lotes de campo.)'
+    if (!esMelonEmp) {
+      const granelSinLote = produccion.filter(
+        (p) => p.presentacion === 'rpc_granel' && !p.lote
       );
-    }
-    for (const p of produccion) {
-      if (p.presentacion === 'rpc_granel' && p.lote && lotesConsumo.size > 0) {
-        // case-insensitive
-        const ok = [...lotesConsumo].some(
-          (l) => l.toLowerCase() === String(p.lote).toLowerCase()
+      if (granelSinLote.length > 0 && lotesConsumo.size > 1) {
+        return alert(
+          'Hay varios lotes en el empaque.\n\n' +
+            'Cada línea de RPC a granel debe indicar el lote de origen.\n' +
+            'No se perdió el dato: elige el lote en cada fila de granel y vuelve a guardar.\n\n' +
+            '(Agregar bins de jugo no requiere desvincular el granel ni nuevos lotes de campo.)'
         );
-        if (!ok) {
-          return alert(
-            `El lote "${p.lote}" de RPC a granel no está en los lotes del proceso.\n` +
-              `Lotes válidos: ${[...lotesConsumo].join(', ')}`
+      }
+      for (const p of produccion) {
+        if (p.presentacion === 'rpc_granel' && p.lote && lotesConsumo.size > 0) {
+          const ok = [...lotesConsumo].some(
+            (l) => l.toLowerCase() === String(p.lote).toLowerCase()
           );
+          if (!ok) {
+            return alert(
+              `El lote "${p.lote}" de RPC a granel no está en los lotes del proceso.\n` +
+                `Lotes válidos: ${[...lotesConsumo].join(', ')}`
+            );
+          }
         }
       }
     }
@@ -398,8 +458,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     if (
       !confirm(
         `¿Guardar cambios del empaque #${selectedId}?\n\n` +
-          `Se ajustará el inventario final (producción).\n` +
-          `Los bins de campo del proceso se conservan; jugo y demás salidas se asumen del mismo proceso.`
+          `Se ajustará el inventario final (producción) y los bins de campo si cambiaron.`
       )
     ) {
       return;
@@ -409,8 +468,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setError('');
     setOkMsg('');
     try {
-      // Si es conversión sin consumos de campo, no mandar consumos vacíos
-      // (el API conserva los del registro / no exige lote de desverdizado).
       const payload: Parameters<typeof editarEmpaqueCompleto>[2] = {
         produccion,
         fecha: editFecha || null,
@@ -423,7 +480,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       const updated = await editarEmpaqueCompleto(token, selectedId, payload);
       setOkMsg(`Empaque #${selectedId} actualizado`);
       await load();
-      // recargar draft desde lista actualizada
       const again = (await getEmpaquesAdmin(token)).find((x) => x.id === selectedId);
       if (again) loadEmpaqueDraft(again);
       else if (updated) loadEmpaqueDraft(updated as EmpaqueRecord);
@@ -437,8 +493,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   const handleAnular = async () => {
     if (!selectedId || !selected) return;
-    if (selected.producto !== 'limon_amarillo') {
-      return alert('Por ahora solo se pueden anular empaques de limón.');
+    const prodSel = String(selected.producto || '').toLowerCase();
+    const esMelonEmp = prodSel === 'melon';
+    const esLimonEmp = prodSel === 'limon_amarillo' || prodSel.includes('limon');
+    if (!esMelonEmp && !esLimonEmp) {
+      return alert('Solo se pueden anular empaques de limón o melón.');
     }
     if (anulado) return alert('Este empaque ya está anulado.');
 
@@ -1182,7 +1241,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                 borderRadius: 10,
               }}
             >
-              <h4 style={{ marginTop: 0 }}>Editar recepción #{editRec.id} (lote / bins / fecha)</h4>
+              <h4 style={{ marginTop: 0 }}>
+                Editar recepción #{editRec.id} — {labelProducto(String(editRec.producto || ''))}{' '}
+                (lote / bins / fecha)
+              </h4>
               <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
                 Esto actualiza también el inventario de desverdizado ligado (misma captura).
               </p>
@@ -1770,7 +1832,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   </div>
                 )}
 
-                {selected.producto === 'limon_amarillo' && !anulado && (
+                {(String(selected.producto || '').toLowerCase() === 'limon_amarillo' ||
+                  String(selected.producto || '').toLowerCase() === 'melon') &&
+                  !anulado && (
                   <>
                     <div
                       style={{
@@ -1812,9 +1876,15 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       </label>
                     </div>
 
-                    <h4 style={{ marginBottom: 8, marginTop: 18 }}>Consumos (lotes / bins)</h4>
+                    <h4 style={{ marginBottom: 8, marginTop: 18 }}>
+                      {String(selected.producto).toLowerCase() === 'melon'
+                        ? 'Consumos (bins de campo)'
+                        : 'Consumos (lotes / bins)'}
+                    </h4>
                     <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-                      Edita, quita o agrega lotes. Al guardar se ajusta el desverdizado.
+                      {String(selected.producto).toLowerCase() === 'melon'
+                        ? 'Un solo lote por empaque. Al guardar se ajustan bins de piso e inventario.'
+                        : 'Edita, quita o agrega lotes. Al guardar se ajusta el desverdizado.'}
                     </p>
                     {editConsumos.map((c, i) => (
                       <div
@@ -1854,6 +1924,24 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                             style={{ ...editInput, width: 80 }}
                           />
                         </label>
+                        {String(selected.producto).toLowerCase() === 'melon' && (
+                          <label style={editLabel}>
+                            Fecha corte
+                            <input
+                              type="date"
+                              value={c.fecha_recepcion || ''}
+                              onChange={(e) => {
+                                const next = [...editConsumos];
+                                next[i] = {
+                                  ...next[i],
+                                  fecha_recepcion: e.target.value,
+                                };
+                                setEditConsumos(next);
+                              }}
+                              style={editInput}
+                            />
+                          </label>
+                        )}
                         <button
                           type="button"
                           onClick={() => setEditConsumos(editConsumos.filter((_, j) => j !== i))}
@@ -1880,7 +1968,12 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                     </datalist>
                     <button
                       type="button"
-                      onClick={() => setEditConsumos([...editConsumos, { lote: '', bins: '' }])}
+                      onClick={() =>
+                        setEditConsumos([
+                          ...editConsumos,
+                          { lote: '', bins: '', fecha_recepcion: '' },
+                        ])
+                      }
                       style={{
                         padding: '8px 14px',
                         marginBottom: 16,
@@ -1895,6 +1988,179 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       + Agregar lote
                     </button>
 
+                    {String(selected.producto).toLowerCase() === 'melon' ? (
+                      <>
+                        <h4 style={{ marginBottom: 8 }}>
+                          Producción melón (caja × talla × calidad / cajas)
+                        </h4>
+                        <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, marginBottom: 8 }}>
+                          Cantidad en <strong>cajas</strong> (como en inventario). Calidad LLANO o
+                          Wallys. Al guardar se ajusta el inventario final.
+                        </p>
+                        {editProduccion.map((p, i) => {
+                          const tallas = tallasParaPresentacionMelon(p.presentacion);
+                          return (
+                            <div
+                              key={i}
+                              style={{
+                                display: 'flex',
+                                flexWrap: 'wrap',
+                                gap: 8,
+                                marginBottom: 8,
+                                alignItems: 'flex-end',
+                              }}
+                            >
+                              <label style={editLabel}>
+                                Calidad
+                                <select
+                                  value={p.calidad || 'llano'}
+                                  onChange={(e) => {
+                                    const next = [...editProduccion];
+                                    next[i] = { ...next[i], calidad: e.target.value };
+                                    setEditProduccion(next);
+                                  }}
+                                  style={editInput}
+                                >
+                                  <option value="llano">{labelCalidadMelon('llano')}</option>
+                                  <option value="wallys">{labelCalidadMelon('wallys')}</option>
+                                </select>
+                              </label>
+                              <label style={editLabel}>
+                                Caja
+                                <select
+                                  value={p.presentacion}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    const ts = tallasParaPresentacionMelon(val);
+                                    const next = [...editProduccion];
+                                    next[i] = {
+                                      ...next[i],
+                                      presentacion: val,
+                                      talla: ts[0] || next[i].talla,
+                                      cajas_por_parrilla: String(
+                                        cajasPorParrillaMelon(val) || 56
+                                      ),
+                                    };
+                                    setEditProduccion(next);
+                                  }}
+                                  style={{ ...editInput, minWidth: 140 }}
+                                >
+                                  <option value="">—</option>
+                                  {FILAS_CAJA_MELON.map((f) => (
+                                    <option key={f.presentacion} value={f.presentacion}>
+                                      {f.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label style={editLabel}>
+                                Talla
+                                <select
+                                  value={p.talla}
+                                  onChange={(e) => {
+                                    const next = [...editProduccion];
+                                    next[i] = { ...next[i], talla: e.target.value };
+                                    setEditProduccion(next);
+                                  }}
+                                  style={editInput}
+                                >
+                                  <option value="">—</option>
+                                  {(tallas.length ? tallas : ['6', '9', '12', '15']).map((t) => (
+                                    <option key={t} value={t}>
+                                      #{t}s
+                                    </option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label style={editLabel}>
+                                Cajas
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={p.cantidad}
+                                  onChange={(e) => {
+                                    const next = [...editProduccion];
+                                    const cant = e.target.value;
+                                    const cpp =
+                                      parseInt(p.cajas_por_parrilla || '', 10) ||
+                                      cajasPorParrillaMelon(p.presentacion) ||
+                                      56;
+                                    const n = parseInt(cant, 10) || 0;
+                                    next[i] = {
+                                      ...next[i],
+                                      cantidad: cant,
+                                      cantidad_parrillas:
+                                        cpp > 0 && n > 0
+                                          ? String(Math.round((n / cpp) * 100) / 100)
+                                          : next[i].cantidad_parrillas,
+                                      cajas_por_parrilla: String(cpp),
+                                    };
+                                    setEditProduccion(next);
+                                  }}
+                                  style={{ ...editInput, width: 90 }}
+                                />
+                              </label>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setEditProduccion(editProduccion.filter((_, j) => j !== i))
+                                }
+                                style={{
+                                  padding: '8px 12px',
+                                  background: '#fee2e2',
+                                  color: '#b91c1c',
+                                  border: '1px solid #fecaca',
+                                  borderRadius: 6,
+                                  cursor: 'pointer',
+                                  fontWeight: 600,
+                                }}
+                              >
+                                Quitar
+                              </button>
+                            </div>
+                          );
+                        })}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const lotesUniq = [
+                              ...new Set(
+                                editConsumos.map((c) => c.lote.trim()).filter(Boolean)
+                              ),
+                            ];
+                            const fila = FILAS_CAJA_MELON[0];
+                            setEditProduccion([
+                              ...editProduccion,
+                              {
+                                presentacion: fila.presentacion,
+                                talla: fila.tallas[0] || '9',
+                                cantidad: '',
+                                lote: lotesUniq.length === 1 ? lotesUniq[0] : '',
+                                fecha_empaque: editFecha || '',
+                                calidad: 'llano',
+                                cajas_por_parrilla: String(
+                                  cajasPorParrillaMelon(fila.presentacion)
+                                ),
+                                cantidad_parrillas: '',
+                              },
+                            ]);
+                          }}
+                          style={{
+                            padding: '8px 14px',
+                            marginBottom: 16,
+                            background: '#e0f2fe',
+                            color: '#0c4a6e',
+                            border: '1px solid #bae6fd',
+                            borderRadius: 6,
+                            cursor: 'pointer',
+                            fontWeight: 600,
+                          }}
+                        >
+                          + Agregar producción
+                        </button>
+                      </>
+                    ) : (
+                      <>
                     <h4 style={{ marginBottom: 8 }}>
                       Producción (presentación / talla / cantidad / lote)
                     </h4>
@@ -1941,7 +2207,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                                 ...next[i],
                                 presentacion: val,
                                 talla: val === 'bins_jugo' ? '' : next[i].talla,
-                                // al pasar a granel con un solo lote, rellenar
                                 lote:
                                   next[i].lote ||
                                   (lotesUniq.length === 1 ? lotesUniq[0] : next[i].lote),
@@ -2021,7 +2286,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                                   {l}
                                 </option>
                               ))}
-                              {/* conservar lote guardado aunque no esté en consumos actuales */}
                               {p.lote && !lotesUniq.includes(p.lote) && (
                                 <option value={p.lote}>{p.lote} (guardado)</option>
                               )}
@@ -2080,6 +2344,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                     >
                       + Agregar producción
                     </button>
+                      </>
+                    )}
 
                     <div style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 8 }}>
                       <button
@@ -2116,15 +2382,16 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       </button>
                     </div>
                     <p style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>
-                      Guardar ajusta desverdizado e inventario final. Anular revierte todo el
-                      registro.
+                      Guardar ajusta bins e inventario final. Anular revierte todo el registro.
                     </p>
                   </>
                 )}
 
-                {selected.producto !== 'limon_amarillo' && (
+                {String(selected.producto || '').toLowerCase() !== 'limon_amarillo' &&
+                  String(selected.producto || '').toLowerCase() !== 'melon' &&
+                  !anulado && (
                   <p style={{ color: '#64748b', marginTop: 16, fontSize: 14 }}>
-                    Edición completa por ahora solo para limón amarillo.
+                    Edición completa disponible para limón amarillo y melón.
                   </p>
                 )}
               </>
