@@ -215,20 +215,79 @@ def listar_desverdizado(db: Session = Depends(get_db)):
     ]
 
 
+def _melon_bins_consumidos_por_corte(db: Session) -> dict[tuple[str, str], int]:
+    """
+    Suma bins de melón ya usados en empaques activos, agrupados por (lote, fecha_corte).
+    Evita que el backfill de /bins-melon resucite stock ya empacado.
+    """
+    from app.utils.limon_inv import parse_detalle_corrida
+
+    acc: dict[tuple[str, str], int] = {}
+    empaques = (
+        db.query(Empaque)
+        .filter(Empaque.producto == Producto.MELON)
+        .order_by(Empaque.id.asc())
+        .all()
+    )
+    for e in empaques:
+        detalle = parse_detalle_corrida(e.detalle_corrida)
+        if detalle.get("anulado"):
+            continue
+        consumos = detalle.get("consumos") or []
+        if not consumos and int(e.bins_desverdizado_usados or 0) > 0:
+            consumos = [
+                {
+                    "lote": e.lote_desverdizado,
+                    "bins": int(e.bins_desverdizado_usados or 0),
+                }
+            ]
+        for c in consumos:
+            if not isinstance(c, dict):
+                continue
+            lote = (c.get("lote") or "").strip()
+            try:
+                bins = int(c.get("bins") or 0)
+            except (TypeError, ValueError):
+                bins = 0
+            if not lote or bins <= 0:
+                continue
+            fr = c.get("fecha_recepcion")
+            fr_s = str(fr).strip()[:10] if fr else ""
+            if not fr_s:
+                # Sin fecha: no atribuir a un corte concreto (FIFO legacy);
+                # el backfill solo descuenta cortes con fecha explícita.
+                continue
+            key = (lote.casefold(), fr_s)
+            acc[key] = acc.get(key, 0) + bins
+    return acc
+
+
 @router.get("/bins-melon", response_model=list[dict])
 def listar_bins_melon(db: Session = Depends(get_db)):
     """
     Bins de melón disponibles por sección/lote (área + sección + variedad).
     Cada recepción queda como fila aparte (mismo lote en distintas fechas = filas distintas).
     También hace backfill de recepciones melón antiguas sin fila de inventario.
+
+    Importante: el backfill NUNCA recrea bins ya consumidos en empaque. Si la fila de
+    inventario se perdió tras empacar, se recrea solo el remanente (o un marcador en 0).
     """
     # Backfill: recepciones melon sin inventario ligado
     recs = (
         db.query(RecepcionCampo)
         .filter(RecepcionCampo.producto == Producto.MELON)
+        .order_by(RecepcionCampo.id.asc())
         .all()
     )
+    consumidos = _melon_bins_consumidos_por_corte(db)
+    # Remanente de consumo por corte aún no atribuido a filas de inventario existentes
+    # (permite varias recepciones el mismo día sin sobrescribirse).
+    consumo_restante = dict(consumidos)
     created = False
+
+    # Primero: restar de inventarios ya ligados lo que ya está reflejado en stock/empaquetado
+    # (no hace falta; el consumo se aplica solo al crear filas huérfanas).
+
     for r in recs:
         bins = int(r.cantidad_bins or 0)
         lote = (r.lote or "").strip()
@@ -241,35 +300,100 @@ def listar_bins_melon(db: Session = Depends(get_db)):
         )
         if ya:
             continue
-        # Evitar duplicar si hay fila sin FK pero mismo lote+fecha+producto
         fr = r.fecha_corte or r.fecha
-        same = (
+        fr_s = str(fr)[:10] if fr else ""
+        same_rows = (
             db.query(InventarioDesverdizado)
             .filter(
                 InventarioDesverdizado.producto == Producto.MELON,
                 InventarioDesverdizado.lote == lote,
                 InventarioDesverdizado.fecha_recepcion == fr,
             )
-            .first()
+            .order_by(InventarioDesverdizado.id.asc())
+            .all()
         )
-        if same:
-            if not same.recepcion_id:
-                same.recepcion_id = r.id
-                created = True
+        if same_rows:
+            # Ya hay tracking de este corte: solo enlazar FK si falta
+            for row in same_rows:
+                if not row.recepcion_id:
+                    row.recepcion_id = r.id
+                    created = True
+                    break
             continue
+
+        # No hay fila de inventario para este corte: recrear solo el remanente real.
+        key = (lote.casefold(), fr_s)
+        ya_consumido = int(consumo_restante.get(key, 0) or 0)
+        usar_consumo = min(bins, ya_consumido)
+        if key in consumo_restante:
+            consumo_restante[key] = max(0, ya_consumido - usar_consumo)
+        remaining = max(0, bins - usar_consumo)
+        estado = "listo_empaque" if remaining > 0 else "empaquetado"
         db.add(
             InventarioDesverdizado(
                 producto=Producto.MELON,
-                cantidad_bins=bins,
+                cantidad_bins=remaining,
                 lote=lote,
                 fecha_recepcion=fr,
                 fecha_tentativa_salida=fr,
-                estado="listo_empaque",
+                estado=estado,
                 recepcion_id=r.id,
                 usuario_id=r.usuario_id,
             )
         )
         created = True
+
+    # Reconciliar cortes con stock > (recepción − ya empacado). Corrige filas
+    # resucitadas por el backfill antiguo que ignoraba consumos de empaque.
+    from collections import defaultdict
+
+    rec_por_corte: dict[tuple[str, str], int] = defaultdict(int)
+    for r in recs:
+        lote = (r.lote or "").strip()
+        bins = int(r.cantidad_bins or 0)
+        fr = r.fecha_corte or r.fecha
+        fr_s = str(fr)[:10] if fr else ""
+        if lote and bins > 0 and fr_s:
+            rec_por_corte[(lote.casefold(), fr_s)] += bins
+
+    inv_melon = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.producto == Producto.MELON)
+        .order_by(
+            InventarioDesverdizado.fecha_recepcion.asc(),
+            InventarioDesverdizado.id.asc(),
+        )
+        .all()
+    )
+    inv_por_corte: dict[tuple[str, str], list] = defaultdict(list)
+    for d in inv_melon:
+        if (d.estado or "").lower() == "eliminado":
+            continue
+        lote = (d.lote or "").strip()
+        fr_s = str(d.fecha_recepcion)[:10] if d.fecha_recepcion else ""
+        if lote and fr_s:
+            inv_por_corte[(lote.casefold(), fr_s)].append(d)
+
+    for key, rows in inv_por_corte.items():
+        should = max(0, int(rec_por_corte.get(key, 0)) - int(consumidos.get(key, 0)))
+        have = sum(int(d.cantidad_bins or 0) for d in rows)
+        if have <= should:
+            continue
+        excess = have - should
+        # Reducir desde la fila más reciente (suele ser la resucitada)
+        for d in sorted(rows, key=lambda x: int(x.id or 0), reverse=True):
+            if excess <= 0:
+                break
+            hay = int(d.cantidad_bins or 0)
+            if hay <= 0:
+                continue
+            quitar = min(hay, excess)
+            d.cantidad_bins = hay - quitar
+            excess -= quitar
+            if d.cantidad_bins == 0:
+                d.estado = "empaquetado"
+            created = True
+
     if created:
         db.commit()
 

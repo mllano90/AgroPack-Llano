@@ -403,16 +403,54 @@ def editar_recepcion_limon(
         .all()
     )
     if not desvs:
-        # Crear inventario bins si no existe
+        # Crear inventario bins si no existe. En melón, no resucitar lo ya empacado.
         fr = getattr(r, "fecha_corte", None) or r.fecha or date.today()
         tent = fr if es_melon else fr + timedelta(days=DIAS_DESVERDIZADO)
+        bins_crear = int(getattr(r, "cantidad_bins", None) or 0)
+        lote_crear = getattr(r, "lote", None) or "SIN_LOTE"
+        estado_crear = estado_activo
+        if es_melon and bins_crear > 0:
+            from app.routers.recepcion import _melon_bins_consumidos_por_corte
+
+            fr_s = str(fr)[:10]
+            key = ((lote_crear or "").strip().casefold(), fr_s)
+            ya_emp = int(_melon_bins_consumidos_por_corte(db).get(key, 0) or 0)
+            # Stock ya presente en otras filas del mismo corte
+            otros = (
+                db.query(InventarioDesverdizado)
+                .filter(
+                    InventarioDesverdizado.producto == Producto.MELON,
+                    InventarioDesverdizado.lote == lote_crear,
+                    InventarioDesverdizado.fecha_recepcion == fr,
+                )
+                .all()
+            )
+            stock_otros = sum(int(x.cantidad_bins or 0) for x in otros)
+            # Remanente del corte completo menos lo ya en piso
+            rec_mismo = (
+                db.query(RecepcionCampo)
+                .filter(
+                    RecepcionCampo.producto == Producto.MELON,
+                    RecepcionCampo.lote == lote_crear,
+                )
+                .all()
+            )
+            rec_total = sum(
+                int(x.cantidad_bins or 0)
+                for x in rec_mismo
+                if (x.fecha_corte or x.fecha) == fr
+            )
+            should = max(0, rec_total - ya_emp)
+            bins_crear = max(0, should - stock_otros)
+            if bins_crear == 0:
+                estado_crear = "empaquetado"
         d = InventarioDesverdizado(
             producto=prod_enum,
-            cantidad_bins=int(getattr(r, "cantidad_bins", None) or 0),
-            lote=getattr(r, "lote", None) or "SIN_LOTE",
+            cantidad_bins=bins_crear,
+            lote=lote_crear,
             fecha_recepcion=fr,
             fecha_tentativa_salida=tent,
-            estado=estado_activo,
+            estado=estado_crear,
             recepcion_id=r.id,
         )
         db.add(d)
@@ -429,16 +467,33 @@ def editar_recepcion_limon(
 
     if body.cantidad_bins is not None:
         r.cantidad_bins = int(body.cantidad_bins)
+        bins_stock = int(body.cantidad_bins)
+        if es_melon:
+            # Stock de piso = captura editada − lo ya empacado de ese lote@corte
+            from app.routers.recepcion import _melon_bins_consumidos_por_corte
+
+            fr_ref = getattr(r, "fecha_corte", None) or r.fecha
+            fr_s = str(fr_ref)[:10] if fr_ref else ""
+            lote_ref = (r.lote or "").strip()
+            ya_emp = int(
+                _melon_bins_consumidos_por_corte(db).get(
+                    (lote_ref.casefold(), fr_s), 0
+                )
+                or 0
+            )
+            bins_stock = max(0, bins_stock - ya_emp)
         # Si hay un solo desv ligado, es la captura; actualizar stock
         if len(desvs) == 1:
-            desvs[0].cantidad_bins = int(body.cantidad_bins)
+            desvs[0].cantidad_bins = bins_stock
             if desvs[0].cantidad_bins == 0:
                 desvs[0].estado = "empaquetado"
             elif desvs[0].estado in ("empaquetado", "eliminado"):
                 desvs[0].estado = estado_activo
         else:
             # Varios: poner todo en el primero y cero en el resto (raro)
-            desvs[0].cantidad_bins = int(body.cantidad_bins)
+            desvs[0].cantidad_bins = bins_stock
+            if bins_stock == 0:
+                desvs[0].estado = "empaquetado"
             for d in desvs[1:]:
                 d.cantidad_bins = 0
                 d.estado = "empaquetado"
