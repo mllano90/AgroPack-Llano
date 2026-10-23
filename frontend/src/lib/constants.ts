@@ -31,7 +31,7 @@ export const HECTAREAS_RANCHO = 64;
 export const HECTAREAS_POR_LOTE = 8;
 
 /** Ha totales melón (suma catálogo). Preferir API /reports/melon/hectareas. */
-export const HECTAREAS_MELON = 217.7;
+export const HECTAREAS_MELON = 218.1;
 
 /** Fallback si un lote no tiene ha en catálogo. */
 export const HECTAREAS_POR_LOTE_MELON = 8;
@@ -361,7 +361,7 @@ export const RECEPCION_MELON_OPCIONES: Array<{
   hectareas: number;
 }> = [
   // Rancho
-  { area: 'rancho', seccion: 4, variedad: 'krypto', hectareas: 35.6 },
+  { area: 'rancho', seccion: 4, variedad: 'krypto', hectareas: 36 },
   { area: 'rancho', seccion: 5, variedad: 'diputado', hectareas: 15 },
   { area: 'rancho', seccion: 6, variedad: 'diputado', hectareas: 30 },
   { area: 'rancho', seccion: 7, variedad: 'diputado', hectareas: 30 },

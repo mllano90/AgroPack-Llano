@@ -25,7 +25,7 @@ _VARIEDAD_LABEL = {
 
 # Datos oficiales de hectáreas plantadas
 SEED_LOTES_MELON: list[dict] = [
-    {"area": "rancho", "seccion": 4, "variedad": "krypto", "hectareas": 35.6},
+    {"area": "rancho", "seccion": 4, "variedad": "krypto", "hectareas": 36.0},
     {"area": "rancho", "seccion": 5, "variedad": "diputado", "hectareas": 15.0},
     {"area": "rancho", "seccion": 6, "variedad": "diputado", "hectareas": 30.0},
     {"area": "rancho", "seccion": 7, "variedad": "diputado", "hectareas": 30.0},
