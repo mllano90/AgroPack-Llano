@@ -724,9 +724,16 @@ export async function getEmbarques(token: string): Promise<
 }
 
 /** Lista empaques recientes (solo admin) */
-export async function getEmpaquesAdmin(token: string): Promise<EmpaqueRecord[]> {
+export async function getEmpaquesAdmin(
+  token: string,
+  opts?: { producto?: 'melon' | 'limon_amarillo' | string; limit?: number }
+): Promise<EmpaqueRecord[]> {
   const res = await api.get<EmpaqueRecord[]>('/api/empaque/admin/recientes', {
     headers: { Authorization: `Bearer ${token}` },
+    params: {
+      limit: opts?.limit ?? 300,
+      ...(opts?.producto ? { producto: opts.producto } : {}),
+    },
   });
   return res.data;
 }

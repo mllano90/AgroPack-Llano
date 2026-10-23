@@ -246,18 +246,100 @@ def _fill_recepcion_from_desv(r: RecepcionCampo, d: InventarioDesverdizado) -> N
         r.fecha = d.fecha_recepcion
 
 
+def reparar_vinculos_melon_inventario(db: Session) -> dict:
+    """
+    Corrige InventarioDesverdizado melón cuyo recepcion_id apunta a una recepción
+    de limón (efecto colateral del sync limón antiguo) y re-enlaza por lote+fecha
+    a la recepción melón correcta.
+    """
+    melon_recs = [
+        r
+        for r in db.query(RecepcionCampo).order_by(RecepcionCampo.id.asc()).all()
+        if _es_melon(r.producto)
+    ]
+    melon_inv = [
+        d
+        for d in db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.estado != "eliminado")
+        .order_by(InventarioDesverdizado.id.asc())
+        .all()
+        if _es_melon(d.producto)
+    ]
+    cleared = 0
+    for d in melon_inv:
+        if not d.recepcion_id:
+            continue
+        r = db.query(RecepcionCampo).filter(RecepcionCampo.id == d.recepcion_id).first()
+        if r is None or _es_limon(r.producto) or not _es_melon(r.producto):
+            d.recepcion_id = None
+            cleared += 1
+
+    used_rec: set[int] = {
+        int(d.recepcion_id) for d in melon_inv if d.recepcion_id is not None
+    }
+    linked = 0
+    for d in melon_inv:
+        if d.recepcion_id:
+            continue
+        lote = (d.lote or "").strip()
+        fr = d.fecha_recepcion
+        if not lote or not fr:
+            continue
+        cands = [
+            r
+            for r in melon_recs
+            if (r.lote or "").strip() == lote and (r.fecha_corte or r.fecha) == fr
+        ]
+        if not cands:
+            continue
+        free = [r for r in cands if r.id not in used_rec]
+        pool = free or cands
+        # Preferir misma cantidad de bins de captura cuando hay varias el mismo día
+        match = next(
+            (
+                r
+                for r in pool
+                if int(getattr(r, "cantidad_bins", None) or 0)
+                == int(d.cantidad_bins or 0)
+            ),
+            pool[0],
+        )
+        d.recepcion_id = match.id
+        used_rec.add(match.id)
+        linked += 1
+
+    if cleared or linked:
+        db.commit()
+    return {
+        "melon_inv": len(melon_inv),
+        "melon_recs": len(melon_recs),
+        "vinculos_limpiados": cleared,
+        "vinculos_reparados": linked,
+    }
+
+
 def sincronizar_recepcion_desverdizado(db: Session) -> dict:
     """
     Enlaza y rellena recepciones limón con su inventario de desverdizado.
     - Si hay recepcion_id, sincroniza campos de la recepción.
     - Si no, empareja por orden (id) y/o misma fecha de corte.
+
+    Solo toca desverdizado de limón. Nunca reasigna filas melón (eso rompía
+    Correcciones melón: edición de recepción/empaque sin inventario ligado).
     """
-    desvs = (
+    desvs_all = (
         db.query(InventarioDesverdizado)
         .filter(InventarioDesverdizado.estado != "eliminado")
         .order_by(InventarioDesverdizado.id.asc())
         .all()
     )
+    # Solo limón (o legacy sin producto). Nunca melón.
+    desvs = [
+        d
+        for d in desvs_all
+        if not _es_melon(d.producto)
+        and (_es_limon(d.producto) or not _pval(d.producto))
+    ]
     recs = [
         r
         for r in db.query(RecepcionCampo).order_by(RecepcionCampo.id.asc()).all()
@@ -402,6 +484,44 @@ def editar_recepcion_limon(
         .filter(InventarioDesverdizado.recepcion_id == recepcion_id)
         .all()
     )
+    # Melón: si el sync limón robó el FK, recuperar fila por lote+fecha
+    if not desvs and es_melon:
+        try:
+            reparar_vinculos_melon_inventario(db)
+        except Exception:
+            db.rollback()
+        desvs = (
+            db.query(InventarioDesverdizado)
+            .filter(InventarioDesverdizado.recepcion_id == recepcion_id)
+            .all()
+        )
+        if not desvs:
+            fr_lookup = getattr(r, "fecha_corte", None) or r.fecha
+            lote_lookup = (getattr(r, "lote", None) or "").strip()
+            if lote_lookup and fr_lookup:
+                cands = (
+                    db.query(InventarioDesverdizado)
+                    .filter(
+                        InventarioDesverdizado.producto == Producto.MELON,
+                        InventarioDesverdizado.lote == lote_lookup,
+                        InventarioDesverdizado.fecha_recepcion == fr_lookup,
+                        InventarioDesverdizado.estado != "eliminado",
+                    )
+                    .order_by(InventarioDesverdizado.id.asc())
+                    .all()
+                )
+                for c in cands:
+                    if c.recepcion_id and c.recepcion_id != recepcion_id:
+                        other = (
+                            db.query(RecepcionCampo)
+                            .filter(RecepcionCampo.id == c.recepcion_id)
+                            .first()
+                        )
+                        if other and _es_melon(other.producto):
+                            continue
+                    c.recepcion_id = recepcion_id
+                    desvs.append(c)
+                    break
     if not desvs:
         # Crear inventario bins si no existe. En melón, no resucitar lo ya empacado.
         fr = getattr(r, "fecha_corte", None) or r.fecha or date.today()
@@ -550,9 +670,13 @@ def historial_movimientos(
     en 'todos' (evita confusión).
     """
     mod = (modulo or "todos").lower().strip()
-    # Siempre reenlazar y rellenar datos limón
+    # Siempre reenlazar limón (sin tocar melón) y reparar vínculos melón rotos
     try:
         sincronizar_recepcion_desverdizado(db)
+    except Exception:
+        db.rollback()
+    try:
+        reparar_vinculos_melon_inventario(db)
     except Exception:
         db.rollback()
 

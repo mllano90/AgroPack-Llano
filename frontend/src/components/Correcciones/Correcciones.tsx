@@ -170,19 +170,51 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const histKey = (m: Pick<HistorialMovimiento, 'modulo' | 'id'>) =>
     `${m.modulo}:${m.id}`;
 
+  const formatApiDetail = (detail: unknown, fallback: string): string => {
+    if (typeof detail === 'string') return detail;
+    if (Array.isArray(detail)) {
+      return detail
+        .map((x) => {
+          if (typeof x === 'string') return x;
+          if (x && typeof x === 'object' && 'msg' in x) {
+            return String((x as { msg?: string }).msg || JSON.stringify(x));
+          }
+          return JSON.stringify(x);
+        })
+        .join('\n');
+    }
+    if (detail && typeof detail === 'object') {
+      try {
+        return JSON.stringify(detail);
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  };
+
   const load = async () => {
     setLoading(true);
     setError('');
     try {
-      const [list, desv, hist, embs] = await Promise.all([
-        getEmpaquesAdmin(token),
+      // Pedir limón + melón por separado para no perder empaques melón tras muchos de limón
+      const [listLimon, listMelon, desv, hist, embs] = await Promise.all([
+        getEmpaquesAdmin(token, { producto: 'limon_amarillo', limit: 300 }).catch(
+          () => [] as EmpaqueRecord[]
+        ),
+        getEmpaquesAdmin(token, { producto: 'melon', limit: 300 }).catch(
+          () => [] as EmpaqueRecord[]
+        ),
         getDesverdizadoAdmin(token).catch(() => [] as DesverdizadoAdminItem[]),
-        getHistorialMovimientos(token, filtroModulo, 200).catch(() => ({
+        getHistorialMovimientos(token, filtroModulo, 300).catch(() => ({
           total: 0,
           items: [] as HistorialMovimiento[],
         })),
         getEmbarques(token).catch(() => [] as EmbarqueAdminRow[]),
       ]);
+      const byId = new Map<number, EmpaqueRecord>();
+      for (const e of [...listLimon, ...listMelon]) byId.set(e.id, e);
+      const list = [...byId.values()].sort((a, b) => b.id - a.id);
       setEmpaques(list);
       setDesverdizado(Array.isArray(desv) ? desv : []);
       setHistorial(hist.items || []);
@@ -193,11 +225,12 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     } catch (err: any) {
       const detail = err?.response?.data?.detail;
       setError(
-        typeof detail === 'string'
-          ? detail
-          : err?.response?.status === 403
+        formatApiDetail(
+          detail,
+          err?.response?.status === 403
             ? 'Solo administradores pueden ver correcciones.'
             : 'Error cargando datos'
+        )
       );
     } finally {
       setLoading(false);
@@ -207,7 +240,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   useEffect(() => {
     setSelKeys(new Set());
     load();
-  }, [token, filtroModulo]);
+  }, [token, filtroModulo, productoCorreccion]);
 
   useEffect(() => {
     setSelectedId(null);
@@ -480,12 +513,20 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       const updated = await editarEmpaqueCompleto(token, selectedId, payload);
       setOkMsg(`Empaque #${selectedId} actualizado`);
       await load();
-      const again = (await getEmpaquesAdmin(token)).find((x) => x.id === selectedId);
+      const prodKey =
+        String(selected.producto || '').toLowerCase() === 'melon'
+          ? 'melon'
+          : 'limon_amarillo';
+      const again = (
+        await getEmpaquesAdmin(token, { producto: prodKey, limit: 300 })
+      ).find((x) => x.id === selectedId);
       if (again) loadEmpaqueDraft(again);
       else if (updated) loadEmpaqueDraft(updated as EmpaqueRecord);
       onCorregido?.();
     } catch (err: any) {
-      setError(err?.response?.data?.detail || 'No se pudo guardar el empaque');
+      setError(
+        formatApiDetail(err?.response?.data?.detail, 'No se pudo guardar el empaque')
+      );
     } finally {
       setBusy(false);
     }

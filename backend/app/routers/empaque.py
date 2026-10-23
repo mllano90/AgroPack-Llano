@@ -1322,14 +1322,19 @@ def listar_empaques(db: Session = Depends(get_db)):
 def listar_empaques_admin(
     db: Session = Depends(get_db),
     current_user=Depends(require_roles([Rol.ADMIN])),
+    limit: int = 300,
+    producto: str | None = None,
 ):
     """Lista empaques recientes (solo admin) para correcciones."""
-    return (
-        db.query(Empaque)
-        .order_by(Empaque.id.desc())
-        .limit(50)
-        .all()
-    )
+    q = db.query(Empaque)
+    if producto:
+        p = producto.strip().lower()
+        if p in ("melon", "melón"):
+            q = q.filter(Empaque.producto == Producto.MELON)
+        elif "limon" in p:
+            q = q.filter(Empaque.producto == Producto.LIMON_AMARILLO)
+    lim = max(1, min(int(limit or 300), 1000))
+    return q.order_by(Empaque.id.desc()).limit(lim).all()
 
 
 def _parse_fecha_empaque(s: str | None):
