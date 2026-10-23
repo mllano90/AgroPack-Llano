@@ -17,6 +17,10 @@ _VARIEDAD_LABEL = {
     "ultra_jelly": "Ultra Jelly",
     "heidi": "Heidi",
     "pruebas": "Pruebas",
+    # Lomas: variedades independientes (sufijo lms)
+    "krypto_lms": "Krypto Lms",
+    "diputado_lms": "Diputado Lms",
+    "pruebas_lms": "Pruebas Lms",
 }
 
 # Datos oficiales de hectáreas plantadas
@@ -25,15 +29,15 @@ SEED_LOTES_MELON: list[dict] = [
     {"area": "rancho", "seccion": 5, "variedad": "diputado", "hectareas": 15.0},
     {"area": "rancho", "seccion": 6, "variedad": "diputado", "hectareas": 30.0},
     {"area": "rancho", "seccion": 7, "variedad": "diputado", "hectareas": 30.0},
-    {"area": "rancho", "seccion": 8, "variedad": "diputado", "hectareas": 53.6},
-    {"area": "bajio", "seccion": 5, "variedad": "diputado", "hectareas": 3.7},
+    {"area": "rancho", "seccion": 8, "variedad": "diputado", "hectareas": 54.0},
+    {"area": "bajio", "seccion": 5, "variedad": "diputado", "hectareas": 4.0},
     {"area": "bajio", "seccion": 5, "variedad": "heidi", "hectareas": 16.0},
     {"area": "bajio", "seccion": 5, "variedad": "ultra_jelly", "hectareas": 1.0},
     {"area": "bajio", "seccion": 6, "variedad": "ultra_jelly", "hectareas": 6.0},
-    {"area": "bajio", "seccion": 7, "variedad": "ultra_jelly", "hectareas": 14.5},
-    {"area": "lomas", "seccion": 2, "variedad": "krypto", "hectareas": 1.8},
-    {"area": "lomas", "seccion": 2, "variedad": "diputado", "hectareas": 8.0},
-    {"area": "lomas", "seccion": 2, "variedad": "pruebas", "hectareas": 1.3},
+    {"area": "bajio", "seccion": 7, "variedad": "ultra_jelly", "hectareas": 15.0},
+    {"area": "lomas", "seccion": 2, "variedad": "krypto_lms", "hectareas": 1.8},
+    {"area": "lomas", "seccion": 2, "variedad": "diputado_lms", "hectareas": 8.0},
+    {"area": "lomas", "seccion": 2, "variedad": "pruebas_lms", "hectareas": 1.3},
 ]
 
 
@@ -46,15 +50,18 @@ def lote_melon_compuesto(area: str, seccion: int, variedad: str) -> str:
 def seed_lote_melon_hectareas(db: Session, *, overwrite: bool = True) -> int:
     """
     Inserta/actualiza hectáreas oficiales.
-    overwrite=True: siempre sincroniza hectareas/lote con el seed (fuente de verdad).
+    overwrite=True: siempre sincroniza hectareas/lote con el seed (fuente de verdad)
+    y elimina filas del catálogo que ya no están en el seed.
     """
     n = 0
+    seed_keys: set[tuple[str, int, str]] = set()
     for row in SEED_LOTES_MELON:
         area = row["area"]
         seccion = int(row["seccion"])
         variedad = row["variedad"]
         ha = float(row["hectareas"])
         lote = lote_melon_compuesto(area, seccion, variedad)
+        seed_keys.add((area, seccion, variedad))
         existing = (
             db.query(LoteMelonHectareas)
             .filter(
@@ -80,6 +87,14 @@ def seed_lote_melon_hectareas(db: Session, *, overwrite: bool = True) -> int:
                 )
             )
             n += 1
+
+    if overwrite:
+        for old in db.query(LoteMelonHectareas).all():
+            key = (old.area, int(old.seccion or 0), old.variedad or "")
+            if key not in seed_keys:
+                db.delete(old)
+                n += 1
+
     db.commit()
     return n
 

@@ -31,7 +31,7 @@ export const HECTAREAS_RANCHO = 64;
 export const HECTAREAS_POR_LOTE = 8;
 
 /** Ha totales melón (suma catálogo). Preferir API /reports/melon/hectareas. */
-export const HECTAREAS_MELON = 216.5;
+export const HECTAREAS_MELON = 217.7;
 
 /** Fallback si un lote no tiene ha en catálogo. */
 export const HECTAREAS_POR_LOTE_MELON = 8;
@@ -330,7 +330,11 @@ export type VariedadMelonCampo =
   | 'diputado'
   | 'ultra_jelly'
   | 'heidi'
-  | 'pruebas';
+  | 'pruebas'
+  /** Variedades de Lomas: independientes en menús/filtros (sufijo lms). */
+  | 'krypto_lms'
+  | 'diputado_lms'
+  | 'pruebas_lms';
 
 export const AREAS_MELON: Array<{ value: AreaMelon; label: string }> = [
   { value: 'rancho', label: 'Rancho' },
@@ -344,6 +348,9 @@ export const VARIEDAD_MELON_LABEL: Record<VariedadMelonCampo, string> = {
   ultra_jelly: 'Ultra Jelly',
   heidi: 'Heidi',
   pruebas: 'Pruebas',
+  krypto_lms: 'Krypto Lms',
+  diputado_lms: 'Diputado Lms',
+  pruebas_lms: 'Pruebas Lms',
 };
 
 /** Combinaciones válidas área × sección × variedad (recepción melón) + ha plantadas. */
@@ -358,17 +365,17 @@ export const RECEPCION_MELON_OPCIONES: Array<{
   { area: 'rancho', seccion: 5, variedad: 'diputado', hectareas: 15 },
   { area: 'rancho', seccion: 6, variedad: 'diputado', hectareas: 30 },
   { area: 'rancho', seccion: 7, variedad: 'diputado', hectareas: 30 },
-  { area: 'rancho', seccion: 8, variedad: 'diputado', hectareas: 53.6 },
+  { area: 'rancho', seccion: 8, variedad: 'diputado', hectareas: 54 },
   // Bajío
-  { area: 'bajio', seccion: 5, variedad: 'diputado', hectareas: 3.7 },
+  { area: 'bajio', seccion: 5, variedad: 'diputado', hectareas: 4 },
   { area: 'bajio', seccion: 5, variedad: 'heidi', hectareas: 16 },
   { area: 'bajio', seccion: 5, variedad: 'ultra_jelly', hectareas: 1 },
   { area: 'bajio', seccion: 6, variedad: 'ultra_jelly', hectareas: 6 },
-  { area: 'bajio', seccion: 7, variedad: 'ultra_jelly', hectareas: 14.5 },
-  // Lomas
-  { area: 'lomas', seccion: 2, variedad: 'krypto', hectareas: 1.8 },
-  { area: 'lomas', seccion: 2, variedad: 'diputado', hectareas: 8 },
-  { area: 'lomas', seccion: 2, variedad: 'pruebas', hectareas: 1.3 },
+  { area: 'bajio', seccion: 7, variedad: 'ultra_jelly', hectareas: 15 },
+  // Lomas (variedades independientes * Lms)
+  { area: 'lomas', seccion: 2, variedad: 'krypto_lms', hectareas: 1.8 },
+  { area: 'lomas', seccion: 2, variedad: 'diputado_lms', hectareas: 8 },
+  { area: 'lomas', seccion: 2, variedad: 'pruebas_lms', hectareas: 1.3 },
 ];
 
 /** Total ha melón (suma del catálogo). Preferir API /reports/melon/hectareas. */
@@ -408,6 +415,25 @@ export function variedadDesdeLoteMelon(lote: string): string {
   if (!s) return 'Sin variedad';
   const known = Object.values(VARIEDAD_MELON_LABEL).sort((a, b) => b.length - a.length);
   const lower = s.toLowerCase();
+  const esLomas = /(^|\s)lomas(\s|$)/i.test(s);
+
+  // Lomas: preferir variedades independientes * Lms (incluye lotes legacy sin sufijo)
+  if (esLomas) {
+    const lmsLabels = ['Krypto Lms', 'Diputado Lms', 'Pruebas Lms'];
+    for (const label of lmsLabels) {
+      const needle = label.toLowerCase();
+      if (lower.endsWith(` ${needle}`) || lower.endsWith(needle)) return label;
+    }
+    const legacyBaseToLms: Array<[string, string]> = [
+      ['krypto', 'Krypto Lms'],
+      ['diputado', 'Diputado Lms'],
+      ['pruebas', 'Pruebas Lms'],
+    ];
+    for (const [needle, label] of legacyBaseToLms) {
+      if (lower.endsWith(` ${needle}`) || lower.endsWith(needle)) return label;
+    }
+  }
+
   for (const label of known) {
     const needle = label.toLowerCase();
     if (lower === needle || lower.endsWith(` ${needle}`) || lower.endsWith(needle)) {
