@@ -810,6 +810,111 @@ export async function anularEmpaque(
   return res.data;
 }
 
+// ============================================
+// Reempaque melón (Correcciones)
+// ============================================
+export type ReempaqueMelonLinea = {
+  empaque_id: number;
+  fecha?: string;
+  presentacion: string;
+  talla: string;
+  calidad: string;
+  lote: string;
+  cantidad: number;
+  cantidad_parrillas?: number | null;
+  cajas_por_parrilla?: number | null;
+};
+
+export type ReempaqueMelonProceso = {
+  empaque_id: number;
+  fecha: string;
+  lote: string;
+  bins: number;
+  cajas: number;
+  empacador?: string | null;
+};
+
+export async function getReempaqueMelonDisponibles(
+  token: string,
+  fecha: string
+): Promise<{
+  fecha: string;
+  procesos: ReempaqueMelonProceso[];
+  lineas: ReempaqueMelonLinea[];
+  total_cajas: number;
+}> {
+  const res = await api.get('/api/correcciones/reempaque-melon/disponibles', {
+    headers: { Authorization: `Bearer ${token}` },
+    params: { fecha },
+  });
+  return res.data;
+}
+
+export async function getReempaqueMelonHistorial(
+  token: string,
+  limit = 100
+): Promise<{
+  total: number;
+  items: Array<{
+    id: number;
+    fecha_reempaque?: string | null;
+    fecha_origen?: string | null;
+    cajas_salidas: number;
+    cajas_resultado: number;
+    merma_cajas: number;
+    procesos_origen: number[];
+    salidas: any[];
+    resultados: any[];
+    notas?: string | null;
+    registrado_por?: string | null;
+    empacador?: string | null;
+  }>;
+}> {
+  const res = await api.get('/api/correcciones/reempaque-melon/historial', {
+    headers: { Authorization: `Bearer ${token}` },
+    params: { limit },
+  });
+  return res.data;
+}
+
+export async function crearReempaqueMelon(
+  token: string,
+  data: {
+    fecha_origen: string;
+    fecha_reempaque: string;
+    mercado?: string;
+    salidas: Array<{
+      empaque_id: number;
+      presentacion: string;
+      talla?: string | null;
+      calidad?: string;
+      lote?: string | null;
+      cantidad: number;
+    }>;
+    resultados: Array<{
+      presentacion: string;
+      talla?: string | null;
+      calidad?: string;
+      lote?: string | null;
+      cantidad: number;
+    }>;
+    numero_empacador?: string;
+    notas?: string | null;
+  }
+): Promise<{
+  message: string;
+  id: number;
+  cajas_salidas: number;
+  cajas_resultado: number;
+  merma_cajas: number;
+  proceso_destino_id: number;
+}> {
+  const res = await api.post('/api/correcciones/reempaque-melon', data, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  return res.data;
+}
+
 /** Borra permanentemente un empaque ya anulado (no toca inventarios) */
 export async function eliminarEmpaqueAnulado(
   token: string,

@@ -29,6 +29,7 @@ import {
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
 import type { EmpaqueRecord } from '../../types';
 import InventariosAdmin from './InventariosAdmin';
+import MelonReempaque from './MelonReempaque';
 
 type EmbarqueAdminRow = {
   id: number;
@@ -153,7 +154,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const [historial, setHistorial] = useState<HistorialMovimiento[]>([]);
   const [filtroModulo, setFiltroModulo] = useState<string>('recepcion');
   const [vistaSeccion, setVistaSeccion] = useState<
-    'historial' | 'empaques' | 'embarques' | 'desverdizado' | 'inventarios'
+    'historial' | 'empaques' | 'embarques' | 'desverdizado' | 'inventarios' | 'reempaque'
   >('historial');
   const [embarquesList, setEmbarquesList] = useState<EmbarqueAdminRow[]>([]);
   const [embSelId, setEmbSelId] = useState<number | null>(null);
@@ -248,6 +249,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setEditDesv(null);
     setEditRec(null);
     setSelKeys(new Set());
+    if (productoCorreccion !== 'melon' && vistaSeccion === 'reempaque') {
+      setVistaSeccion('historial');
+    }
   }, [productoCorreccion]);
 
   const esMelon = productoCorreccion === 'melon';
@@ -263,9 +267,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   const empaquesFiltrados = useMemo(
     () =>
-      empaques.filter((e) =>
-        matchProductoCorreccion(String(e.producto || ''), productoCorreccion)
-      ),
+      empaques.filter((e) => {
+        if (!matchProductoCorreccion(String(e.producto || ''), productoCorreccion)) {
+          return false;
+        }
+        // Los reempaques se gestionan en su pestaña (auditoría, no corrida de campo)
+        const tipo = String((e.detalle_corrida as any)?.tipo || '').toLowerCase();
+        return tipo !== 'reempaque_melon';
+      }),
     [empaques, productoCorreccion]
   );
 
@@ -1186,6 +1195,15 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         <button type="button" style={secBtn('empaques')} onClick={() => setVistaSeccion('empaques')}>
           Corregir empaques
         </button>
+        {esMelon && (
+          <button
+            type="button"
+            style={secBtn('reempaque')}
+            onClick={() => setVistaSeccion('reempaque')}
+          >
+            Reempaque
+          </button>
+        )}
         <button
           type="button"
           style={secBtn('embarques')}
@@ -1757,6 +1775,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             )}
           </div>
         )
+      )}
+
+      {/* ===== REEMPAQUE MELÓN ===== */}
+      {vistaSeccion === 'reempaque' && esMelon && (
+        <MelonReempaque token={token} onDone={() => { load(); onCorregido?.(); }} />
       )}
 
       {/* ===== EMPAQUES (detalle) ===== */}

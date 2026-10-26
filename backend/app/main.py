@@ -19,6 +19,7 @@ from app.routers.reports import router as reports_router
 from app.routers.embarques import router as embarques_router
 from app.routers.clientes import router as clientes_router   # ← NUEVO
 from app.routers.correcciones import router as correcciones_router
+from app.routers.reempaque_melon import router as reempaque_melon_router
 
 # Crear tablas y columnas nuevas
 try:
@@ -94,6 +95,7 @@ app.include_router(reports_router, prefix="/api/reports", tags=["Reportes"])
 app.include_router(embarques_router, prefix="/api/embarques", tags=["Embarques"])
 app.include_router(clientes_router, prefix="/api/clientes", tags=["Clientes"])  # ← NUEVO
 app.include_router(correcciones_router, prefix="/api/correcciones", tags=["Correcciones"])
+app.include_router(reempaque_melon_router, prefix="/api/correcciones", tags=["Correcciones"])
 
 @app.get("/")
 async def root():

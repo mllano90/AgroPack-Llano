@@ -100,6 +100,8 @@ function fmtKg(n: number): string {
 function parseDetalle(raw: unknown): {
   consumos?: Consumo[];
   produccion?: LineaProd[];
+  tipo?: string | null;
+  anulado?: boolean;
 } {
   if (!raw) return {};
   if (typeof raw === 'string') {
@@ -115,6 +117,15 @@ function parseDetalle(raw: unknown): {
 
 function isMelonEmpaque(e: EmpaqueRecord): boolean {
   return String(e.producto || '').toLowerCase() === 'melon';
+}
+
+/** Reempaques son auditoría; el resultado ya se integró al proceso de origen. */
+function esProcesoCampoMelon(e: EmpaqueRecord): boolean {
+  if (!isMelonEmpaque(e)) return false;
+  const det = parseDetalle(e.detalle_corrida);
+  if (det.anulado) return false;
+  const tipo = String(det.tipo || '').toLowerCase();
+  return tipo !== 'reempaque_melon';
 }
 
 type MelonKpiData = {
@@ -252,7 +263,7 @@ function buildProcesos(
   pesos: MelonPesosConfig
 ): ProcesoMelon[] {
   const out: ProcesoMelon[] = [];
-  for (const e of empaques.filter(isMelonEmpaque)) {
+  for (const e of empaques.filter(esProcesoCampoMelon)) {
     const det = parseDetalle(e.detalle_corrida);
     const consumos = Array.isArray(det.consumos) ? det.consumos : [];
     const produccion = Array.isArray(det.produccion) ? det.produccion : [];
@@ -516,7 +527,7 @@ export default function MelonReportes({ empaques, token }: Props) {
   /** Distribución por talla + tipo de caja (todas las calidades, kg). */
   const porTallaCaja = useMemo(() => {
     const map = new Map<string, TallaAgg>();
-    for (const e of empaques.filter(isMelonEmpaque)) {
+    for (const e of empaques.filter(esProcesoCampoMelon)) {
       const det = parseDetalle(e.detalle_corrida);
       for (const p of det.produccion || []) {
         const pres = String(p.presentacion || '');
@@ -548,7 +559,7 @@ export default function MelonReportes({ empaques, token }: Props) {
   /** Distribución solo por talla (#6s, #9s…), sumando todos los tipos de caja. */
   const porTallaSimple = useMemo(() => {
     const map = new Map<string, TallaAgg>();
-    for (const e of empaques.filter(isMelonEmpaque)) {
+    for (const e of empaques.filter(esProcesoCampoMelon)) {
       const det = parseDetalle(e.detalle_corrida);
       for (const p of det.produccion || []) {
         const pres = String(p.presentacion || '');
