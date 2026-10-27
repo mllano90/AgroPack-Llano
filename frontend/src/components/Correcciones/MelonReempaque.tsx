@@ -58,31 +58,70 @@ function lineKey(l: {
   return `${l.empaque_id || ''}|${l.presentacion}|${l.talla}|${l.calidad}|${l.lote}`;
 }
 
-/**
- * Calidad real en reempaque melón: `llano` (Primera LLANO) y `wallys` (Segunda Wallys).
- * Acepta variantes de captura (Wally/WALLY/wallys, Primera/PRIMERA/1ra/1ª, con acentos).
- */
-function familiaCalidadCaja(raw: string): 'wally' | 'primera' | null {
-  const s = String(raw || '')
+/** Minúsculas, sin acentos. "Primera LLANO" y "Wállýs" quedan comparables. */
+function textoCalidad(raw: string): string {
+  return String(raw || '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/['’`]/g, '')
     .replace(/[ªº]/g, 'a')
+    .replace(/\s+/g, ' ')
     .trim();
-  if (!s) return null;
-  if (s.includes('wally')) return 'wally';
-  if (/\b(primera|llano|1ra|1era|1a)\b/.test(s)) return 'primera';
+}
+
+/**
+ * El dato guardado es `llano` | `wallys`, y la celda muestra "Primera LLANO" /
+ * "Segunda Wallys". También entran variantes ("Wally", "PRIMERA", "1ra").
+ * Wally gana si el texto contiene "wally"; primera si empieza por "primera".
+ */
+function familiaCalidadCaja(raw: string): 'wally' | 'primera' | null {
+  const etiqueta = labelCalidadMelon(String(raw || ''));
+  const textos = [textoCalidad(raw), textoCalidad(etiqueta)];
+  if (textos.some((s) => s.includes('wally'))) return 'wally';
+  if (
+    textos.some(
+      (s) =>
+        s.startsWith('primera') ||
+        s === 'llano' ||
+        s.startsWith('llano ') ||
+        /^(1ra|1era|1a)\b/.test(s)
+    )
+  ) {
+    return 'primera';
+  }
   return null;
 }
 
-const CALIDAD_ACCENT: Record<
-  'wally' | 'primera',
-  { background: string; border: string; color: string }
-> = {
-  wally: { background: '#ffedd5', border: '#ea580c', color: '#c2410c' },
-  primera: { background: '#dbeafe', border: '#2563eb', color: '#1d4ed8' },
-};
+const CALIDAD_ACCENT = {
+  wally: {
+    background: '#ffedd5',
+    border: '#ea580c',
+    color: '#9a3412',
+    badgeBg: '#ea580c',
+    badgeColor: '#ffffff',
+  },
+  primera: {
+    background: '#dbeafe',
+    border: '#2563eb',
+    color: '#1e40af',
+    badgeBg: '#2563eb',
+    badgeColor: '#ffffff',
+  },
+} as const;
+
+function estiloCalidadControl(calidad: string): CSSProperties {
+  const familia = familiaCalidadCaja(calidad);
+  if (!familia) return inputStyle;
+  const accent = CALIDAD_ACCENT[familia];
+  return {
+    ...inputStyle,
+    background: accent.background,
+    color: accent.color,
+    borderColor: accent.border,
+    fontWeight: 700,
+  };
+}
 
 export default function MelonReempaque({ token, onDone }: Props) {
   const today = toInputDate(new Date().toISOString().slice(0, 10));
@@ -370,30 +409,43 @@ export default function MelonReempaque({ token, onDone }: Props) {
                     const cpp = cajasPorParrillaMelon(l.presentacion);
                     const familia = familiaCalidadCaja(l.calidad);
                     const accent = familia ? CALIDAD_ACCENT[familia] : null;
+                    const tdRow: CSSProperties = accent
+                      ? { ...td, background: accent.background }
+                      : td;
                     return (
-                      <tr
-                        key={k}
-                        style={{
-                          borderTop: '1px solid #e2e8f0',
-                          background: accent?.background,
-                          color: accent?.color,
-                        }}
-                      >
+                      <tr key={k} style={{ borderTop: '1px solid #e2e8f0' }}>
                         <td
                           style={{
-                            ...td,
-                            borderLeft: accent ? `4px solid ${accent.border}` : undefined,
+                            ...tdRow,
+                            boxShadow: accent ? `inset 4px 0 0 ${accent.border}` : undefined,
                           }}
                         >
                           #{l.empaque_id}
                         </td>
-                        <td style={td}>{labelPresentacionMelon(l.presentacion)}</td>
-                        <td style={td}>#{l.talla}s</td>
-                        <td style={{ ...td, fontWeight: accent ? 700 : undefined }}>
-                          {labelCalidadMelon(l.calidad)}
+                        <td style={tdRow}>{labelPresentacionMelon(l.presentacion)}</td>
+                        <td style={tdRow}>#{l.talla}s</td>
+                        <td style={tdRow}>
+                          {accent ? (
+                            <span
+                              style={{
+                                display: 'inline-block',
+                                padding: '2px 8px',
+                                borderRadius: 999,
+                                background: accent.badgeBg,
+                                color: accent.badgeColor,
+                                fontWeight: 700,
+                                lineHeight: 1.35,
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {labelCalidadMelon(l.calidad)}
+                            </span>
+                          ) : (
+                            labelCalidadMelon(l.calidad)
+                          )}
                         </td>
-                        <td style={td}>{l.lote || '—'}</td>
-                        <td style={td}>
+                        <td style={tdRow}>{l.lote || '—'}</td>
+                        <td style={tdRow}>
                           {l.cantidad}
                           {cpp > 0 ? (
                             <span style={{ color: '#94a3b8', fontSize: 11 }}>
@@ -402,7 +454,7 @@ export default function MelonReempaque({ token, onDone }: Props) {
                             </span>
                           ) : null}
                         </td>
-                        <td style={td}>
+                        <td style={tdRow}>
                           <input
                             type="number"
                             min={0}
@@ -494,10 +546,26 @@ export default function MelonReempaque({ token, onDone }: Props) {
                       next[i] = { ...next[i], calidad: e.target.value };
                       setResultados(next);
                     }}
-                    style={inputStyle}
+                    style={estiloCalidadControl(r.calidad)}
                   >
-                    <option value="llano">{labelCalidadMelon('llano')}</option>
-                    <option value="wallys">{labelCalidadMelon('wallys')}</option>
+                    <option
+                      value="llano"
+                      style={{
+                        background: CALIDAD_ACCENT.primera.background,
+                        color: CALIDAD_ACCENT.primera.color,
+                      }}
+                    >
+                      {labelCalidadMelon('llano')}
+                    </option>
+                    <option
+                      value="wallys"
+                      style={{
+                        background: CALIDAD_ACCENT.wally.background,
+                        color: CALIDAD_ACCENT.wally.color,
+                      }}
+                    >
+                      {labelCalidadMelon('wallys')}
+                    </option>
                   </select>
                 </label>
                 <label style={labelStyle}>
