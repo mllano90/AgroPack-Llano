@@ -3,7 +3,9 @@ import {
   FILAS_CAJA_MELON,
   cajasPorParrillaMelon,
   labelCalidadMelon,
+  labelEquivalenteParrillasMelon,
   labelPresentacionMelon,
+  parrillasEquivalentesMelon,
   type CalidadMelon,
   type TipoCajaMelon,
 } from '../../lib/constants';
@@ -12,10 +14,10 @@ import { formatFechaCorta } from '../../lib/dates';
 export type LineaMelon = {
   presentacion: TipoCajaMelon;
   talla: string;
-  /** Parrillas / pallets completos capturados en empaque */
+  /** Cajas capturadas (cualquier cantidad, no tiene que ser parrilla completa) */
   cantidad: number;
   calidad: CalidadMelon;
-  /** Cajas por parrilla (56 chica/normal, 49 jumbo) */
+  /** Referencia: cajas que caben en una parrilla (56 chica/normal, 49 jumbo) */
   cajas_por_parrilla: number;
 };
 
@@ -58,6 +60,18 @@ type QtyMap = Record<string, string>;
 
 function keyOf(calidad: CalidadMelon, presentacion: string, talla: string) {
   return `${calidad}|${presentacion}|${talla}`;
+}
+
+function cajasDeLineas(lineas: LineaMelon[]) {
+  return lineas.reduce((s, l) => s + (Math.round(Number(l.cantidad) || 0) || 0), 0);
+}
+
+function parrillasDeLineas(lineas: LineaMelon[]) {
+  const total = lineas.reduce(
+    (s, l) => s + parrillasEquivalentesMelon(l.cantidad, l.presentacion),
+    0
+  );
+  return Math.round(total * 100) / 100;
 }
 
 export default function MelonEmpaqueForm({
@@ -285,7 +299,7 @@ export default function MelonEmpaqueForm({
                     fontWeight: 600,
                   }}
                 >
-                  {cajasPorParrillaMelon(fila.presentacion)} cajas / parrilla
+                  Ref. {cajasPorParrillaMelon(fila.presentacion)} cajas / parrilla
                 </div>
                 <div
                   style={{
@@ -323,8 +337,9 @@ export default function MelonEmpaqueForm({
                         <input
                           type="number"
                           min={0}
-                          placeholder="parr."
-                          title="Parrillas / pallets completos"
+                          step={1}
+                          placeholder="cajas"
+                          title="Número de cajas (no tiene que ser parrilla completa)"
                           value={qty[k] || ''}
                           onChange={(e) =>
                             setCell(calidad, fila.presentacion, t, e.target.value)
@@ -348,10 +363,11 @@ export default function MelonEmpaqueForm({
                               lineHeight: 1.2,
                             }}
                           >
-                            ={' '}
-                            {(parseInt(qty[k] || '', 10) || 0) *
-                              cajasPorParrillaMelon(fila.presentacion)}{' '}
-                            cajas
+                            ≈{' '}
+                            {labelEquivalenteParrillasMelon(
+                              parseInt(qty[k] || '', 10) || 0,
+                              fila.presentacion
+                            )}
                           </span>
                         )}
                       </label>
@@ -432,11 +448,12 @@ export default function MelonEmpaqueForm({
             <ul style={{ margin: '8px 0 0', paddingLeft: 18 }}>
               {lotesLigados.map((lig, i) => {
                 const bins = lig.consumos.reduce((s, c) => s + c.bins, 0);
-                const parr = lig.lineas.reduce((s, l) => s + (l.cantidad || 0), 0);
+                const cajas = cajasDeLineas(lig.lineas);
+                const parr = parrillasDeLineas(lig.lineas);
                 return (
                   <li key={`${lig.lote}-${i}`} style={{ marginBottom: 4 }}>
-                    <strong>{lig.lote}</strong> · {bins} bins · {parr} parr. ·{' '}
-                    {lig.lineas.length} línea(s)
+                    <strong>{lig.lote}</strong> · {bins} bins · {cajas} cajas
+                    {parr > 0 ? ` (≈ ${parr} parr.)` : ''} · {lig.lineas.length} línea(s)
                     {onQuitarLoteLigado && (
                       <button
                         type="button"
@@ -628,9 +645,9 @@ export default function MelonEmpaqueForm({
           color: '#334155',
         }}
       >
-        Captura en <strong>parrillas / pallets</strong> completos — Chica y Normal ={' '}
-        <strong>56 cajas</strong>/parr. · Jumbo = <strong>49 cajas</strong>/parr. En reportes el
-        resumen irá por <strong>cajas empacadas</strong>.
+        Captura en <strong>cajas</strong> (cualquier cantidad, no hace falta parrilla
+        completa). Referencia: Chica y Normal = <strong>56 cajas</strong>/parr. · Jumbo ={' '}
+        <strong>49 cajas</strong>/parr. El inventario se mueve por las cajas que escribas.
       </div>
 
       {renderGrupo('llano')}
@@ -645,10 +662,8 @@ export default function MelonEmpaqueForm({
                 {labelCalidadMelon(l.calidad)} · {labelPresentacionMelon(l.presentacion)} · #
                 {l.talla}s:{' '}
                 <strong>
-                  {l.cantidad} parr. (
-                  {l.cantidad *
-                    (l.cajas_por_parrilla || cajasPorParrillaMelon(l.presentacion))}{' '}
-                  cajas)
+                  {l.cantidad} cajas (≈{' '}
+                  {labelEquivalenteParrillasMelon(l.cantidad, l.presentacion)})
                 </strong>{' '}
                 <button
                   type="button"
