@@ -391,7 +391,7 @@ export default function MelonReempaque({ token, onDone }: Props) {
             <p style={{ color: '#64748b' }}>No hay producción melón ese día.</p>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
                 <thead>
                   <tr style={{ background: '#f8fafc', textAlign: 'left' }}>
                     <th style={th}>Proc.</th>
@@ -409,9 +409,12 @@ export default function MelonReempaque({ token, onDone }: Props) {
                     const cpp = cajasPorParrillaMelon(l.presentacion);
                     const familia = familiaCalidadCaja(l.calidad);
                     const accent = familia ? CALIDAD_ACCENT[familia] : null;
-                    const tdRow: CSSProperties = accent
-                      ? { ...td, background: accent.background }
-                      : td;
+                    const tdRow: CSSProperties = {
+                      ...td,
+                      whiteSpace: 'nowrap',
+                      color: '#0f172a',
+                      ...(accent ? { background: accent.background } : {}),
+                    };
                     return (
                       <tr key={k} style={{ borderTop: '1px solid #e2e8f0' }}>
                         <td
@@ -422,8 +425,27 @@ export default function MelonReempaque({ token, onDone }: Props) {
                         >
                           #{l.empaque_id}
                         </td>
-                        <td style={tdRow}>{labelPresentacionMelon(l.presentacion)}</td>
-                        <td style={tdRow}>#{l.talla}s</td>
+                        <td style={{ ...tdRow, fontWeight: 600, fontSize: 14 }}>
+                          {labelPresentacionMelon(l.presentacion)}
+                        </td>
+                        <td style={tdRow}>
+                          <span
+                            style={{
+                              display: 'inline-block',
+                              padding: '4px 12px',
+                              borderRadius: 999,
+                              background: '#0f172a',
+                              color: '#fff',
+                              fontWeight: 800,
+                              fontSize: 16,
+                              lineHeight: 1.2,
+                              letterSpacing: 0.2,
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            #{l.talla}s
+                          </span>
+                        </td>
                         <td style={tdRow}>
                           {accent ? (
                             <span
@@ -446,13 +468,16 @@ export default function MelonReempaque({ token, onDone }: Props) {
                         </td>
                         <td style={tdRow}>{l.lote || '—'}</td>
                         <td style={tdRow}>
-                          {l.cantidad}
-                          {cpp > 0 ? (
-                            <span style={{ color: '#94a3b8', fontSize: 11 }}>
-                              {' '}
-                              (~{(l.cantidad / cpp).toFixed(1)} parr)
+                          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.05 }}>
+                            <span style={{ fontSize: 22, fontWeight: 800, color: '#0f172a' }}>
+                              {l.cantidad}
                             </span>
-                          ) : null}
+                            {cpp > 0 ? (
+                              <span style={{ color: '#64748b', fontSize: 11, fontWeight: 600, marginTop: 3 }}>
+                                (~{(l.cantidad / cpp).toFixed(1)} parr)
+                              </span>
+                            ) : null}
+                          </div>
                         </td>
                         <td style={tdRow}>
                           <input
@@ -471,9 +496,22 @@ export default function MelonReempaque({ token, onDone }: Props) {
               </table>
             </div>
           )}
-          <p style={{ marginBottom: 0, fontWeight: 700 }}>
-            Total a reempacar: {totalSalida} cajas
-          </p>
+          <div
+            style={{
+              marginTop: 14,
+              marginBottom: 0,
+              padding: '10px 14px',
+              borderRadius: 8,
+              background: '#f8fafc',
+              border: '1px solid #cbd5e1',
+              fontWeight: 800,
+              fontSize: 16,
+              color: '#0f172a',
+            }}
+          >
+            Total a reempacar:{' '}
+            <span style={{ fontSize: 26, lineHeight: 1 }}>{totalSalida}</span> cajas
+          </div>
         </div>
 
         {/* Derecha: resultado */}
