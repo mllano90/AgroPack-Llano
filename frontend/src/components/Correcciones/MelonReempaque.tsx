@@ -432,14 +432,13 @@ export default function MelonReempaque({ token, onDone }: Props) {
                           <span
                             style={{
                               display: 'inline-block',
-                              padding: '4px 12px',
+                              padding: '2px 8px',
                               borderRadius: 999,
                               background: '#0f172a',
                               color: '#fff',
-                              fontWeight: 800,
-                              fontSize: 16,
-                              lineHeight: 1.2,
-                              letterSpacing: 0.2,
+                              fontWeight: 700,
+                              fontSize: 14,
+                              lineHeight: 1.3,
                               whiteSpace: 'nowrap',
                             }}
                           >
@@ -468,12 +467,12 @@ export default function MelonReempaque({ token, onDone }: Props) {
                         </td>
                         <td style={tdRow}>{l.lote || '—'}</td>
                         <td style={tdRow}>
-                          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.05 }}>
-                            <span style={{ fontSize: 22, fontWeight: 800, color: '#0f172a' }}>
+                          <div style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.1 }}>
+                            <span style={{ fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
                               {l.cantidad}
                             </span>
                             {cpp > 0 ? (
-                              <span style={{ color: '#64748b', fontSize: 11, fontWeight: 600, marginTop: 3 }}>
+                              <span style={{ color: '#64748b', fontSize: 11, fontWeight: 600, marginTop: 1 }}>
                                 (~{(l.cantidad / cpp).toFixed(1)} parr)
                               </span>
                             ) : null}
@@ -498,19 +497,19 @@ export default function MelonReempaque({ token, onDone }: Props) {
           )}
           <div
             style={{
-              marginTop: 14,
+              marginTop: 12,
               marginBottom: 0,
-              padding: '10px 14px',
+              padding: '6px 10px',
               borderRadius: 8,
               background: '#f8fafc',
               border: '1px solid #cbd5e1',
-              fontWeight: 800,
-              fontSize: 16,
+              fontWeight: 700,
+              fontSize: 15,
               color: '#0f172a',
             }}
           >
             Total a reempacar:{' '}
-            <span style={{ fontSize: 26, lineHeight: 1 }}>{totalSalida}</span> cajas
+            <span style={{ fontSize: 20, fontWeight: 800, lineHeight: 1 }}>{totalSalida}</span> cajas
           </div>
         </div>
 
