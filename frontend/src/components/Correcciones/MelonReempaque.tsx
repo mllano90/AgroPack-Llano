@@ -58,6 +58,32 @@ function lineKey(l: {
   return `${l.empaque_id || ''}|${l.presentacion}|${l.talla}|${l.calidad}|${l.lote}`;
 }
 
+/**
+ * Calidad real en reempaque melón: `llano` (Primera LLANO) y `wallys` (Segunda Wallys).
+ * Acepta variantes de captura (Wally/WALLY/wallys, Primera/PRIMERA/1ra/1ª, con acentos).
+ */
+function familiaCalidadCaja(raw: string): 'wally' | 'primera' | null {
+  const s = String(raw || '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/['’`]/g, '')
+    .replace(/[ªº]/g, 'a')
+    .trim();
+  if (!s) return null;
+  if (s.includes('wally')) return 'wally';
+  if (/\b(primera|llano|1ra|1era|1a)\b/.test(s)) return 'primera';
+  return null;
+}
+
+const CALIDAD_ACCENT: Record<
+  'wally' | 'primera',
+  { background: string; border: string; color: string }
+> = {
+  wally: { background: '#ffedd5', border: '#ea580c', color: '#c2410c' },
+  primera: { background: '#dbeafe', border: '#2563eb', color: '#1d4ed8' },
+};
+
 export default function MelonReempaque({ token, onDone }: Props) {
   const today = toInputDate(new Date().toISOString().slice(0, 10));
   const [fechaOrigen, setFechaOrigen] = useState(today);
@@ -342,12 +368,30 @@ export default function MelonReempaque({ token, onDone }: Props) {
                   {lineasVisibles.map((l) => {
                     const k = lineKey(l);
                     const cpp = cajasPorParrillaMelon(l.presentacion);
+                    const familia = familiaCalidadCaja(l.calidad);
+                    const accent = familia ? CALIDAD_ACCENT[familia] : null;
                     return (
-                      <tr key={k} style={{ borderTop: '1px solid #e2e8f0' }}>
-                        <td style={td}>#{l.empaque_id}</td>
+                      <tr
+                        key={k}
+                        style={{
+                          borderTop: '1px solid #e2e8f0',
+                          background: accent?.background,
+                          color: accent?.color,
+                        }}
+                      >
+                        <td
+                          style={{
+                            ...td,
+                            borderLeft: accent ? `4px solid ${accent.border}` : undefined,
+                          }}
+                        >
+                          #{l.empaque_id}
+                        </td>
                         <td style={td}>{labelPresentacionMelon(l.presentacion)}</td>
                         <td style={td}>#{l.talla}s</td>
-                        <td style={td}>{labelCalidadMelon(l.calidad)}</td>
+                        <td style={{ ...td, fontWeight: accent ? 700 : undefined }}>
+                          {labelCalidadMelon(l.calidad)}
+                        </td>
                         <td style={td}>{l.lote || '—'}</td>
                         <td style={td}>
                           {l.cantidad}
@@ -365,7 +409,7 @@ export default function MelonReempaque({ token, onDone }: Props) {
                             max={l.cantidad}
                             value={l.seleccionar || ''}
                             onChange={(e) => setSeleccionar(k, Number(e.target.value))}
-                            style={{ ...inputStyle, width: 90 }}
+                            style={{ ...inputStyle, width: 90, color: '#0f172a', background: '#fff' }}
                           />
                         </td>
                       </tr>
