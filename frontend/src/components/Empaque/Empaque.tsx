@@ -18,6 +18,8 @@ import {
   esPresentacionCarton,
   labelPresentacionLimon,
   KG_POR_PRESENTACION,
+  cajasPorParrillaMelon,
+  parrillasEquivalentesMelon,
 } from '../../lib/constants';
 import { formatFechaCorta, todayInputDate } from '../../lib/dates';
 import MelonEmpaqueForm, {
@@ -106,7 +108,7 @@ export default function Empaque({
   const [binsMelonList, setBinsMelonList] = useState<BinMelonDisponible[]>([]);
   const [consumosMelon, setConsumosMelon] = useState<ConsumoMelon[]>([]);
   /**
-   * Lotes ya ligados (bins + parrillas) esperando el «Registrar Empaque» final.
+   * Lotes ya ligados (bins + cajas) esperando el «Registrar Empaque» final.
    * «Registrar otro lote» acumula aquí y pide el siguiente lote.
    */
   const [lotesMelonLigados, setLotesMelonLigados] = useState<
@@ -137,14 +139,17 @@ export default function Empaque({
       notas_merma: '',
       numero_empacador: 'EMP-01',
       produccion: lineas.map((l) => {
-        const cpp = l.cajas_por_parrilla || 56;
+        const cpp = l.cajas_por_parrilla || cajasPorParrillaMelon(l.presentacion);
+        const cajas = Math.max(0, Math.round(Number(l.cantidad) || 0));
+        const parrillas = parrillasEquivalentesMelon(cajas, l.presentacion);
         return {
           presentacion: l.presentacion,
           talla: l.talla,
-          cantidad: l.cantidad * cpp,
+          // `cantidad` es el número de cajas que entra al inventario.
+          cantidad: cajas,
           calidad: l.calidad,
           fecha_empaque: fechaEmpaque,
-          cantidad_parrillas: l.cantidad,
+          cantidad_parrillas: parrillas,
           cajas_por_parrilla: cpp,
         };
       }),
@@ -168,12 +173,12 @@ export default function Empaque({
       return 'En melón no se mezclan lotes en la captura actual';
     }
     if (lineasMelon.length === 0) {
-      return 'Agrega al menos una talla de melón (LLANO o Wallys) en parrillas';
+      return 'Agrega al menos una talla de melón (LLANO o Wallys) en cajas';
     }
     return null;
   };
 
-  /** Liga bins + parrillas del lote actual y deja listo el siguiente (sin enviar aún). */
+  /** Liga bins + cajas del lote actual y deja listo el siguiente (sin enviar aún). */
   const registrarOtroLoteMelon = () => {
     const err = validarCapturaMelonActual();
     if (err) return alert(err);
@@ -1557,7 +1562,7 @@ export default function Empaque({
               type="button"
               onClick={registrarOtroLoteMelon}
               disabled={isSubmitting}
-              title="Liga bins + parrillas de este lote y pide el siguiente"
+              title="Liga bins + cajas de este lote y pide el siguiente"
               style={{
                 padding: '12px 22px',
                 background: '#16a34a',
@@ -1594,7 +1599,7 @@ export default function Empaque({
             </div>
           </div>
           <p style={{ fontSize: 12, color: '#64748b', margin: '8px 0 0', textAlign: 'center' }}>
-            Verde: liga el lote actual (bins + parrillas) y captura el siguiente. Azul: al terminar,
+            Verde: liga el lote actual (bins + cajas) y captura el siguiente. Azul: al terminar,
             registra todos los lotes ligados (+ el actual si está completo).
           </p>
         </>

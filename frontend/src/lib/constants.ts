@@ -201,8 +201,10 @@ export const TALLAS_MELON_CAJA_B = ['9', '12', '15'] as const; // caja normal
 export const TALLAS_MELON_CAJA_C = ['6', '9', '12'] as const; // jumbo
 
 /**
- * Cajas por parrilla/pallet completo (captura de empaque = parrillas).
- * Reportes resumen por cajas = parrillas × este factor.
+ * Cajas que caben en una parrilla/pallet completo.
+ * La captura de empaque es en cajas (cualquier cantidad). Este factor solo
+ * es referencia (equivalente en parrillas) y lo usan los reportes.
+ * Chica y Normal = 56, Jumbo = 49.
  */
 export const CAJAS_POR_PARRILLA_MELON: Record<TipoCajaMelon, number> = {
   caja_chica_a: 56,
@@ -219,6 +221,33 @@ export const PESO_CAJA_MELON_KG: Record<TipoCajaMelon, number> = {
 
 export function cajasPorParrillaMelon(presentacion: string): number {
   return CAJAS_POR_PARRILLA_MELON[presentacion as TipoCajaMelon] || 56;
+}
+
+/**
+ * Parrillas equivalentes a un número de cajas (referencia, puede ser fraccionario).
+ * No redondea hacia una parrilla completa.
+ */
+export function parrillasEquivalentesMelon(cajas: number, presentacion: string): number {
+  const cpp = cajasPorParrillaMelon(presentacion);
+  const n = Math.max(0, Math.round(Number(cajas) || 0));
+  if (n <= 0 || cpp <= 0) return 0;
+  return Math.round((n / cpp) * 10000) / 10000;
+}
+
+/** Texto de referencia: cajas → parrillas enteras + cajas sueltas. */
+export function labelEquivalenteParrillasMelon(cajas: number, presentacion: string): string {
+  const cpp = cajasPorParrillaMelon(presentacion);
+  const n = Math.max(0, Math.round(Number(cajas) || 0));
+  if (n <= 0 || cpp <= 0) return '';
+  const enteras = Math.floor(n / cpp);
+  const sueltas = n % cpp;
+  if (enteras > 0 && sueltas > 0) {
+    return `${enteras} parrilla${enteras === 1 ? '' : 's'} + ${sueltas} caja${sueltas === 1 ? '' : 's'}`;
+  }
+  if (enteras > 0) {
+    return `${enteras} parrilla${enteras === 1 ? '' : 's'}`;
+  }
+  return `${sueltas} caja${sueltas === 1 ? '' : 's'} suelta${sueltas === 1 ? '' : 's'}`;
 }
 
 export function pesoCajaMelonKg(presentacion: string): number {
