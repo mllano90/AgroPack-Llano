@@ -1111,17 +1111,44 @@ def _reempaques_de_proceso(db: Session, empaque_id: int) -> list[Empaque]:
     return hits
 
 
-def _mensaje_bloqueo_reempaque(empaque_id: int, refs: list[Empaque]) -> str:
-    partes = []
-    for e in refs[:6]:
+def _resumen_reempaques(refs: list[Empaque]) -> list[dict]:
+    items = []
+    for e in refs:
         det = _detalle_as_dict(e.detalle_corrida)
-        cuando = det.get("fecha_reempaque") or (str(e.fecha) if e.fecha else "?")
-        partes.append(f"#{e.id} del {cuando}")
-    extra = f" ({', '.join(partes)})" if partes else ""
+        salidas = det.get("salidas") or det.get("consumos_cajas") or []
+        resultados = det.get("produccion") or []
+        c_out = sum(int(s.get("cantidad") or 0) for s in salidas if isinstance(s, dict))
+        c_in = sum(int(r.get("cantidad") or 0) for r in resultados if isinstance(r, dict))
+        cuando = det.get("fecha_reempaque") or (str(e.fecha) if e.fecha else None)
+        items.append(
+            {
+                "id": e.id,
+                "fecha_reempaque": cuando,
+                "fecha_origen": det.get("fecha_origen"),
+                "cajas_salidas": c_out,
+                "cajas_resultado": c_in,
+                "merma_cajas": det.get("merma_cajas"),
+            }
+        )
+    return items
+
+
+def _mensaje_confirmacion_reempaques(empaque_id: int, refs: list[Empaque]) -> str:
+    lineas = []
+    for item in _resumen_reempaques(refs):
+        lineas.append(
+            f"• Reempaque #{item['id']} del {item['fecha_reempaque']}: "
+            f"{item['cajas_salidas']} cajas salieron → {item['cajas_resultado']} recuperadas "
+            f"(merma {item['merma_cajas'] if item['merma_cajas'] is not None else '—'})"
+        )
     return (
-        f"No se puede eliminar el proceso de empaque de melón #{empaque_id}: "
-        f"tiene cajas reempacadas{extra}. "
-        f"Borrarlo dejaría el reempaque y el inventario cruzados. No se cambió nada."
+        f"Al eliminar el proceso de empaque #{empaque_id} también se eliminarán "
+        f"estos reempaques:\n"
+        + "\n".join(lineas)
+        + "\n\nPrimero se deshacen: las cajas originales vuelven a su día de empaque "
+        f"y se quitan las cajas recuperadas. Después se borra el proceso "
+        f"#{empaque_id}: sus bins vuelven al inventario una sola vez y se quitan sus cajas.\n\n"
+        f"¿Continuar?"
     )
 
 
@@ -2209,7 +2236,11 @@ def anular_empaque(
         if refs_re:
             raise HTTPException(
                 status_code=409,
-                detail=_mensaje_bloqueo_reempaque(empaque_id, refs_re),
+                detail=(
+                    f"No se anula el proceso de melón #{empaque_id} porque tiene reempaques. "
+                    f"Usa Eliminar: pide confirmación y, si aceptas, deshace esos reempaques "
+                    f"y borra el proceso. Los bins vuelven una sola vez. No se cambió nada."
+                ),
             )
     if produccion and es_melon_emp:
         # En melón no se fuerza: un reverso a medias deja cajas de más o de menos.
@@ -2638,7 +2669,7 @@ def _produccion_empaque(emp: Empaque, detalle: dict) -> list[dict]:
 
 
 def _eliminar_proceso_melon_activo(
-    db: Session, emp: Empaque
+    db: Session, emp: Empaque, *, commit: bool = True
 ) -> EliminarEmpaqueResponse:
     """
     Una sola transacción: devuelve los bins exactos, quita solo las cajas
@@ -2715,7 +2746,10 @@ def _eliminar_proceso_melon_activo(
         cajas = sum(int(a.get("cantidad") or 0) for a in aplicadas)
 
     db.delete(emp)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     return EliminarEmpaqueResponse(
         message=(
             f"Proceso de empaque de melón #{empaque_id} eliminado. "
@@ -2728,17 +2762,22 @@ def _eliminar_proceso_melon_activo(
 @router.delete("/{empaque_id}", response_model=EliminarEmpaqueResponse)
 def eliminar_empaque_anulado(
     empaque_id: int,
+    confirmar_reempaques: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
     Limón: borra solo un empaque ya anulado (el anular ya revirtió inventarios).
 
-    Melón activo: en una sola transacción devuelve los bins que usó, quita
-    solo sus cajas y borra el proceso. Si las cajas ya se embarcaron o hay
-    reempaque, no cambia nada. Un segundo clic responde 404 y no devuelve
-    bins otra vez.
-    Melón ya anulado: solo quita el registro (los inventarios ya se revirtieron).
+    Melón reempaque: lo deshace (cajas originales vuelven a su día, se quitan
+    las recuperadas, no mueve bins) y borra la auditoría.
+
+    Melón activo: devuelve los bins que usó, quita solo sus cajas y borra el
+    proceso. Si tiene reempaques, sin confirmar_reempaques responde 409 con
+    la lista; con confirmar_reempaques los deshace primero y luego borra el
+    proceso, en una sola transacción. Los bins se devuelven una sola vez.
+    Si las cajas ya se embarcaron, no cambia nada.
+    Melón ya anulado: solo quita el registro.
     """
     emp = _cargar_empaque_bloqueado(db, empaque_id)
     if not emp:
@@ -2746,22 +2785,49 @@ def eliminar_empaque_anulado(
 
     detalle = _detalle_as_dict(emp.detalle_corrida)
     if emp.producto == Producto.MELON:
-        if _es_reempaque_melon_detalle(detalle) and not detalle.get("anulado"):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"El registro #{empaque_id} es un reempaque de melón, no un proceso de empacado. "
-                    f"Eliminarlo quitaría cajas que siguen en el proceso de origen. No se cambió nada."
-                ),
-            )
+        if _es_reempaque_melon_detalle(detalle):
+            from app.routers.reempaque_melon import revertir_reempaque_melon
+
+            info = revertir_reempaque_melon(db, emp, commit=True)
+            return EliminarEmpaqueResponse(message=info["message"], id=empaque_id)
+
         refs = _reempaques_de_proceso(db, emp.id)
-        if refs:
+        if refs and not detalle.get("anulado") and not confirmar_reempaques:
             raise HTTPException(
                 status_code=409,
-                detail=_mensaje_bloqueo_reempaque(empaque_id, refs),
+                detail={
+                    "code": "confirmar_reempaques",
+                    "message": _mensaje_confirmacion_reempaques(empaque_id, refs),
+                    "reempaques": _resumen_reempaques(refs),
+                },
+            )
+        if refs and detalle.get("anulado"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"El proceso #{empaque_id} ya está anulado y todavía tiene reempaques. "
+                    f"Elimina primero cada reempaque (eso devuelve las cajas a su día) "
+                    f"y después borra este registro. Los bins no se vuelven a mover."
+                ),
             )
         if not detalle.get("anulado"):
-            return _eliminar_proceso_melon_activo(db, emp)
+            ids_rev: list[int] = []
+            if refs and confirmar_reempaques:
+                from app.routers.reempaque_melon import revertir_reempaque_melon
+
+                # El más nuevo primero: así se puede deshacer una cadena
+                # (el reempaque que usó las cajas recuperadas se quita antes).
+                ordenados = sorted(refs, key=lambda e: e.id or 0, reverse=True)
+                ids_rev = [int(r.id) for r in ordenados]
+                for rev in ordenados:
+                    revertir_reempaque_melon(db, rev, commit=False)
+            resp = _eliminar_proceso_melon_activo(db, emp, commit=True)
+            if ids_rev:
+                ids = ", ".join(f"#{i}" for i in ids_rev)
+                resp.message = (
+                    f"{resp.message} También se eliminaron los reempaques {ids}."
+                )
+            return resp
         db.delete(emp)
         db.commit()
         return EliminarEmpaqueResponse(
