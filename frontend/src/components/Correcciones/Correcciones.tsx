@@ -5,6 +5,7 @@ import {
   eliminarEmpaqueAnulado,
   editarEmpaqueCompleto,
   getDesverdizadoAdmin,
+  eliminarBinsDevueltos,
   eliminarDesverdizado,
   editarDesverdizado,
   getHistorialMovimientos,
@@ -167,6 +168,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   /** Selección múltiple en historial: clave "modulo:id" */
   const [selKeys, setSelKeys] = useState<Set<string>>(new Set());
+  const [selBinsDevueltos, setSelBinsDevueltos] = useState<Set<number>>(new Set());
 
   const histKey = (m: Pick<HistorialMovimiento, 'modulo' | 'id'>) =>
     `${m.modulo}:${m.id}`;
@@ -249,6 +251,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setEditDesv(null);
     setEditRec(null);
     setSelKeys(new Set());
+    setSelBinsDevueltos(new Set());
     if (productoCorreccion !== 'melon' && vistaSeccion === 'reempaque') {
       setVistaSeccion('historial');
     }
@@ -706,6 +709,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         throw err;
       }
     }
+    if (m.modulo === 'bins_devueltos') {
+      const res = await eliminarBinsDevueltos(token, m.id);
+      return { ok: true, message: res.message || `Bins devueltos #${m.id} eliminados` };
+    }
     if (m.modulo === 'desverdizado') {
       const res = await eliminarDesverdizado(token, m.id, false);
       return { ok: true, message: res.message || `Desverdizado #${m.id} eliminado` };
@@ -810,7 +817,49 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
+  const confirmarQuitarBinsDevueltos = (
+    filas: Array<{ lote?: string; corte?: string; bins: number }>
+  ) => {
+    const total = filas.reduce((s, f) => s + f.bins, 0);
+    const lineas = filas
+      .map((f) => `• ${f.lote || '—'} · corte ${f.corte || '—'} · ${f.bins} bins`)
+      .join('\n');
+    return confirm(
+      `Bins devueltos por cancelación (sin recepción ligada)\n\n` +
+        `Se quitarán ${total} bins del inventario:\n${lineas}\n\n` +
+        `Solo esas filas. No se tocan otros lotes, procesos de empaque, cajas ni recepciones.`
+    );
+  };
+
   const handleHistorialEliminar = async (m: HistorialMovimiento) => {
+    if (m.modulo === 'bins_devueltos') {
+      const bins = Number(m.meta?.cantidad_bins || 0);
+      if (
+        !confirmarQuitarBinsDevueltos([
+          {
+            lote: String(m.meta?.lote || ''),
+            corte: String(m.meta?.fecha_corte || m.fecha || ''),
+            bins,
+          },
+        ])
+      ) {
+        return;
+      }
+      setBusy(true);
+      setError('');
+      setOkMsg('');
+      try {
+        const res = await eliminarBinsDevueltos(token, m.id);
+        setOkMsg(res.message || `Se quitaron ${bins} bins`);
+        await load();
+        onCorregido?.();
+      } catch (err: any) {
+        setError(err?.response?.data?.detail || 'No se pudieron quitar los bins devueltos');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
     if (m.modulo === 'empaque') {
       if (esEmpaqueMelon(m)) {
         const tipo = String(
@@ -1017,8 +1066,31 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       return { code: '', texto: formatApiDetail(detail, err?.message || 'error') };
     };
 
-    const melones = sorted.filter((m) => esEmpaqueMelon(m));
-    const resto = sorted.filter((m) => !esEmpaqueMelon(m));
+    const huerfanosSel = sorted.filter((m) => m.modulo === 'bins_devueltos');
+    if (huerfanosSel.length) {
+      const filas = huerfanosSel.map((m) => ({
+        lote: String(m.meta?.lote || ''),
+        corte: String(m.meta?.fecha_corte || m.fecha || ''),
+        bins: Number(m.meta?.cantidad_bins || 0),
+      }));
+      if (!confirmarQuitarBinsDevueltos(filas)) {
+        errMsgs.push('No se eliminaron los bins devueltos por cancelación.');
+      } else {
+        for (const m of huerfanosSel) {
+          try {
+            const res = await eliminarBinsDevueltos(token, m.id);
+            okMsgs.push(res.message);
+          } catch (err: any) {
+            const { texto } = detalleError(err);
+            errMsgs.push(`${m.titulo}: ${texto}`);
+          }
+        }
+      }
+    }
+
+    const sinHuerfanos = sorted.filter((m) => m.modulo !== 'bins_devueltos');
+    const melones = sinHuerfanos.filter((m) => esEmpaqueMelon(m));
+    const resto = sinHuerfanos.filter((m) => !esEmpaqueMelon(m));
     const porConfirmar: Array<{ m: HistorialMovimiento; texto: string }> = [];
 
     for (const m of melones) {
@@ -1193,6 +1265,39 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
+  const quitarBinsDevueltos = async (filas: DesverdizadoAdminItem[]) => {
+    if (!filas.length) return;
+    if (
+      !confirmarQuitarBinsDevueltos(
+        filas.map((d) => ({
+          lote: d.lote,
+          corte: d.fecha_recepcion || '',
+          bins: d.cantidad_bins_disponibles || 0,
+        }))
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const msgs: string[] = [];
+      for (const d of filas) {
+        const res = await eliminarBinsDevueltos(token, d.id);
+        msgs.push(res.message);
+      }
+      setOkMsg(msgs.join('\n'));
+      setSelBinsDevueltos(new Set());
+      await load();
+      onCorregido?.();
+    } catch (err: any) {
+      setError(err?.response?.data?.detail || 'No se pudieron quitar los bins devueltos');
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleEliminarDesverdizado = async (d: DesverdizadoAdminItem, soloEste = false) => {
     const mismos = desverdizado.filter((x) => (x.lote || '').trim() === (d.lote || '').trim());
     const binsTotal = mismos.reduce((s, x) => s + (x.cantidad_bins_disponibles || 0), 0);
@@ -1223,6 +1328,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const moduloLabel = (m: string) => {
     const map: Record<string, string> = {
       recepcion: 'Recepción',
+      bins_devueltos: 'Bins devueltos',
       desverdizado: 'Desverdizado',
       empaque: 'Empaque',
       embarque: 'Embarque',
@@ -1233,6 +1339,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const moduloColor = (m: string) => {
     const map: Record<string, string> = {
       recepcion: '#dbeafe',
+      bins_devueltos: '#ffedd5',
       desverdizado: '#fef9c3',
       empaque: '#dcfce7',
       embarque: '#fce7f3',
@@ -1395,7 +1502,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             <strong style={{ fontSize: 14 }}>Filtrar:</strong>
             {(
               [
-                ['recepcion', 'Recepción (lote / bins / fecha)'],
+                ['recepcion', esMelon ? 'Recepciones de bins' : 'Recepción (lote / bins / fecha)'],
                 ['empaque', 'Empaque'],
                 ['embarque', 'Embarque'],
                 ['todos', 'Todos'],
@@ -1662,6 +1769,15 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                         </td>
                         <td style={td}>
                           <strong>{formatFecha(m.fecha || '')}</strong>
+                          {m.modulo === 'bins_devueltos' && (
+                            <div style={{ fontSize: 11, color: '#9a3412', marginTop: 2 }}>
+                              Bins devueltos por cancelación (sin recepción ligada)
+                              {m.meta?.lote ? ` · ${String(m.meta.lote)}` : ''}
+                              {m.meta?.cantidad_bins != null
+                                ? ` · ${String(m.meta.cantidad_bins)} bins`
+                                : ''}
+                            </div>
+                          )}
                           {m.modulo === 'recepcion' && m.meta?.cantidad_bins != null && (
                             <div style={{ fontSize: 11, color: '#0369a1', marginTop: 2 }}>
                               {String(m.meta.cantidad_bins)} bins
@@ -2791,8 +2907,119 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             </div>
           )}
 
-          {desverdizadoFiltrado.length === 0 ? (
-            <p style={{ color: '#64748b' }}>No hay lotes con bins para este producto.</p>
+          {desverdizadoFiltrado.some((d) => d.huerfano) && (
+            <div
+              style={{
+                marginBottom: 18,
+                padding: 14,
+                border: '1px solid #fdba74',
+                borderRadius: 10,
+                background: '#fff7ed',
+              }}
+            >
+              <h4 style={{ margin: '0 0 6px', color: '#9a3412' }}>
+                Bins devueltos por cancelación (sin recepción ligada)
+              </h4>
+              <p style={{ fontSize: 13, color: '#9a3412', marginTop: 0 }}>
+                Volvieron al inventario al cancelar un empaque. No tienen recepción.
+                Eliminarlos solo quita esa fila de bins.
+              </p>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
+                  <thead>
+                    <tr style={{ textAlign: 'left' }}>
+                      <th style={th}></th>
+                      <th style={th}>Lote</th>
+                      <th style={th}>Corte</th>
+                      <th style={th}>Bins</th>
+                      <th style={th}></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {desverdizadoFiltrado
+                      .filter((d) => d.huerfano)
+                      .map((d) => (
+                        <tr key={d.id}>
+                          <td style={td}>
+                            <input
+                              type="checkbox"
+                              checked={selBinsDevueltos.has(d.id)}
+                              disabled={busy}
+                              onChange={() =>
+                                setSelBinsDevueltos((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(d.id)) next.delete(d.id);
+                                  else next.add(d.id);
+                                  return next;
+                                })
+                              }
+                            />
+                          </td>
+                          <td style={td}>
+                            <strong>{d.lote}</strong>
+                          </td>
+                          <td style={td}>{formatFecha(d.fecha_recepcion || '')}</td>
+                          <td style={td}>{d.cantidad_bins_disponibles}</td>
+                          <td style={td}>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={() => quitarBinsDevueltos([d])}
+                              style={{
+                                padding: '6px 12px',
+                                background: '#c2410c',
+                                color: 'white',
+                                border: 'none',
+                                borderRadius: 6,
+                                cursor: busy ? 'wait' : 'pointer',
+                                fontWeight: 700,
+                                fontSize: 13,
+                              }}
+                            >
+                              Eliminar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+              {desverdizadoFiltrado.some(
+                (d) => d.huerfano && selBinsDevueltos.has(d.id)
+              ) && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() =>
+                    quitarBinsDevueltos(
+                      desverdizadoFiltrado.filter(
+                        (d) => d.huerfano && selBinsDevueltos.has(d.id)
+                      )
+                    )
+                  }
+                  style={{
+                    marginTop: 10,
+                    padding: '8px 14px',
+                    background: '#9a3412',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: 6,
+                    fontWeight: 700,
+                    cursor: busy ? 'wait' : 'pointer',
+                  }}
+                >
+                  Eliminar seleccionados
+                </button>
+              )}
+            </div>
+          )}
+
+          {desverdizadoFiltrado.filter((d) => !d.huerfano).length === 0 ? (
+            <p style={{ color: '#64748b' }}>
+              {desverdizadoFiltrado.some((d) => d.huerfano)
+                ? 'No hay otras filas de bins con recepción para este producto.'
+                : 'No hay lotes con bins para este producto.'}
+            </p>
           ) : (
             <div style={{ overflowX: 'auto', border: '1px solid #e2e8f0', borderRadius: 8 }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 14 }}>
@@ -2808,7 +3035,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                   </tr>
                 </thead>
                 <tbody>
-                  {desverdizadoFiltrado.map((d) => (
+                  {desverdizadoFiltrado.filter((d) => !d.huerfano).map((d) => (
                     <tr
                       key={d.id}
                       style={{
