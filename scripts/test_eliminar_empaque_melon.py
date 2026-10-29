@@ -987,6 +987,132 @@ def main():
     check(any(e["id"] == re_e.json()["id"] for e in snap()["emps"]), "el reempaque embarcado sigue")
     check(bins_de(lote_e) == 0, "bins del caso embarque no se movieron")
 
+    # Proceso original con cajas faltantes (sin embarque): aviso y, al confirmar, borra.
+    lote_p = "Rancho S4 Krypto Proc"
+    recepcion(h, lote_p, 10, "2026-10-22")
+    proc_p = empacar(
+        h,
+        "2026-10-22",
+        lote_p,
+        "2026-10-22",
+        10,
+        [linea("2026-10-22", lote_p, 392, "llano", talla="21")],
+    )
+    db = SessionLocal()
+    for inv in db.query(InventarioFinal).all():
+        extra = inv.atributos_extra or {}
+        if extra.get("lote") == lote_p and str(extra.get("talla")) == "21":
+            inv.cantidad_stock = 168
+    db.commit()
+    db.close()
+    av_p = client.delete(f"/api/empaque/{proc_p['id']}", headers=h)
+    det_p = av_p.json().get("detail")
+    check(av_p.status_code == 409 and isinstance(det_p, dict) and det_p.get("code") == "confirmar_faltantes", f"proceso avisa faltantes {av_p.text[:300]}")
+    falt_p = (det_p or {}).get("faltantes") or []
+    check(
+        any(f.get("pedido") == 392 and f.get("hay") == 168 and f.get("faltan") == 224 for f in falt_p),
+        f"pedido/hay/faltan {falt_p}",
+    )
+    check(bins_de(lote_p) == 0, "el aviso del proceso no movió bins")
+    ok_p = client.delete(f"/api/empaque/{proc_p['id']}?forzar_faltantes=true", headers=h)
+    check(ok_p.status_code == 200, f"proceso forzado {ok_p.status_code} {ok_p.text[:260]}")
+    check(bins_de(lote_p) == 10, f"devolvió los 10 bins ({bins_de(lote_p)})")
+    check(
+        all(i["stock"] >= 0 for i in snap()["inv"] if (i["extra"] or {}).get("lote") == lote_p),
+        "cajas del proceso no quedaron negativas",
+    )
+    check(cajas_inv("21", lote_p, "2026-10-22") == [], "se quitaron las 168 cajas que existían")
+
+    # Dos procesos con los mismos bins: el alta real descontó una vez; el duplicado no.
+    # Al borrar, el piso no puede pasar de lo recibido.
+    lote_dup = "Rancho S4 Krypto Dup"
+    recepcion(h, lote_dup, 10, "2026-10-20")
+    real = empacar(
+        h,
+        "2026-10-20",
+        lote_dup,
+        "2026-10-20",
+        10,
+        [linea("2026-10-20", lote_dup, 40, "llano", talla="21")],
+    )
+    check(bins_de(lote_dup) == 0, "el proceso real dejó el piso en 0")
+    db = SessionLocal()
+    src = db.query(Empaque).filter(Empaque.id == real["id"]).one()
+    import json as _json
+    clon = Empaque(
+        producto=src.producto,
+        fecha=src.fecha,
+        mercado=src.mercado,
+        numero_empacador=src.numero_empacador,
+        cantidad_cajas_campo_usadas=0,
+        cantidad_cajas_carton_producidas=0,
+        bins_desverdizado_usados=src.bins_desverdizado_usados,
+        lote_desverdizado=src.lote_desverdizado,
+        detalle_corrida=_json.loads(_json.dumps(src.detalle_corrida)),
+        usuario_id=src.usuario_id,
+    )
+    db.add(clon)
+    db.commit()
+    clon_id = clon.id
+    db.close()
+    check(bins_de(lote_dup) == 0, "el duplicado no volvió a descontar bins")
+    del_real = client.delete(f"/api/empaque/{real['id']}", headers=h)
+    check(del_real.status_code == 200, f"borra el real {del_real.status_code} {del_real.text[:200]}")
+    check(bins_de(lote_dup) == 10, f"el real devolvió 10 ({bins_de(lote_dup)})")
+    av_dup = client.delete(f"/api/empaque/{clon_id}", headers=h)
+    det_dup = av_dup.json().get("detail") if av_dup.headers.get("content-type", "").startswith("application/json") else None
+    check(av_dup.status_code == 409, f"duplicado avisa {av_dup.status_code} {av_dup.text[:300]}")
+    check(bins_de(lote_dup) == 10, "el aviso del duplicado no infló bins")
+    ok_dup = client.delete(f"/api/empaque/{clon_id}?forzar_faltantes=true", headers=h)
+    check(ok_dup.status_code == 200, f"duplicado forzado {ok_dup.status_code} {ok_dup.text[:300]}")
+    check("0 bins de 10" in ok_dup.text or "se devolvieron 0" in ok_dup.text.lower(), f"texto de tope {ok_dup.text[:300]}")
+    check(bins_de(lote_dup) == 10, f"el duplicado no pasó de lo recibido ({bins_de(lote_dup)})")
+    filas_dup = [b for b in snap()["bins"] if b["lote"] == lote_dup]
+    check(len(filas_dup) == 1 and filas_dup[0]["bins"] == 10, f"una fila de 10 bins {filas_dup}")
+
+    # Embarque posterior de las cajas del proceso: ni forzando se borra.
+    lote_s = "Lomas S9 Krypto"
+    recepcion(h, lote_s, 6, "2026-10-21")
+    proc_s = empacar(
+        h,
+        "2026-10-21",
+        lote_s,
+        "2026-10-21",
+        6,
+        [linea("2026-10-21", lote_s, 24, "llano", talla="18")],
+    )
+    cli_s = client.post("/api/clientes/", headers=h, json={"nombre": "Cliente Proc Ship", "activo": 1})
+    emb_s = client.post(
+        "/api/embarques/",
+        headers=h,
+        json={
+            "cliente_id": cli_s.json()["id"],
+            "notas": "proceso",
+            "detalles": [
+                {
+                    "producto": "melon",
+                    "mercado": "nacional",
+                    "cantidad_cajas": 4,
+                    "presentacion": "caja_normal_b",
+                    "talla": "18",
+                    "calidad": "llano",
+                }
+            ],
+        },
+    )
+    check(emb_s.status_code == 200, f"embarque proceso {emb_s.status_code} {emb_s.text[:140]}")
+    db = SessionLocal()
+    emb_s_row = db.query(Embarque).filter(Embarque.id == emb_s.json()["id"]).first()
+    emb_s_row.fecha_salida = date(2026, 10, 28)
+    db.commit()
+    db.close()
+    b1 = client.delete(f"/api/empaque/{proc_s['id']}", headers=h)
+    b2 = client.delete(f"/api/empaque/{proc_s['id']}?forzar_faltantes=true", headers=h)
+    check(b1.status_code == 409 and "embarque" in b1.text.lower(), f"proceso embarcado bloqueado {b1.text[:200]}")
+    check(b2.status_code == 409 and "embarque" in b2.text.lower(), f"forzar no borra proceso embarcado {b2.text[:200]}")
+    check(bins_de(lote_s) == 0, "bins del proceso embarcado no se movieron")
+    check(any(e["id"] == proc_s["id"] for e in snap()["emps"]), "el proceso embarcado sigue")
+
     print("\nFALLOS", len(FAILS))
     for f in FAILS:
         print(" -", f)

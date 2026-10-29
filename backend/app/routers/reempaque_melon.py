@@ -670,6 +670,16 @@ def _embarques_posibles_de_linea(db: Session, fecha_reempaque, linea: dict) -> l
     pres, _cant, talla, _lote, _fecha, cal = _partes_linea_melon(linea)
     if pres not in _CAJAS_MELON:
         return []
+    from datetime import date as _date
+    from datetime import datetime as _datetime
+
+    if isinstance(fecha_reempaque, _datetime):
+        fecha_reempaque = fecha_reempaque.date()
+    elif isinstance(fecha_reempaque, str):
+        try:
+            fecha_reempaque = _date.fromisoformat(str(fecha_reempaque)[:10])
+        except ValueError:
+            fecha_reempaque = None
     cal_n = (cal or "").strip().lower()
     talla_n = talla or ""
     ids: list[int] = []

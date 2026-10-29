@@ -2668,32 +2668,61 @@ def _produccion_empaque(emp: Empaque, detalle: dict) -> list[dict]:
     return produccion
 
 
-def _eliminar_proceso_melon_activo(
-    db: Session, emp: Empaque, *, commit: bool = True
-) -> EliminarEmpaqueResponse:
+def _recibido_bins_melon(db: Session, lote: str, fecha: str | None) -> int | None:
     """
-    Una sola transacción: devuelve los bins exactos, quita solo las cajas
-    de este proceso y borra el registro. Si algo no cuadra, no se guarda nada.
+    Bins registrados en recepción para ese lote y corte.
+    None si no hay recepción: no hay techo conocido y no se inventa uno.
     """
-    empaque_id = emp.id
-    detalle = _detalle_as_dict(emp.detalle_corrida)
-    consumos = _consumos_desde_empaque(emp, detalle)
-    produccion = _produccion_empaque(emp, detalle)
+    from app.models.inventory import RecepcionCampo
 
-    problemas = _problemas_stock_cajas_melon(db, emp.mercado, produccion)
-    if problemas:
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f"No se puede eliminar el proceso de empaque de melón #{empaque_id}. "
-                + " | ".join(problemas)
-                + " No se cambió nada."
-            ),
-        )
+    fecha_n = _norm_fecha_emp(fecha) if fecha else None
+    lote_cf = _norm_lote(lote).casefold()
+    matched = []
+    for r in db.query(RecepcionCampo).filter(RecepcionCampo.producto == Producto.MELON).all():
+        if _norm_lote(r.lote).casefold() != lote_cf:
+            continue
+        fr = _norm_fecha_emp(getattr(r, "fecha_corte", None) or r.fecha)
+        if fecha_n and fr != fecha_n:
+            continue
+        matched.append(r)
+    if not matched:
+        return None
+    return sum(int(getattr(r, "cantidad_bins", 0) or 0) for r in matched)
 
-    # Agrupa por lote + corte para devolver el total exacto (sin doble conteo).
+
+def _otros_procesos_mismos_bins(
+    db: Session, empaque_id: int, lote: str, fecha: str
+) -> list[int]:
+    lote_cf = _norm_lote(lote).casefold()
+    ids: list[int] = []
+    rows = (
+        db.query(Empaque)
+        .filter(Empaque.producto == Producto.MELON, Empaque.id != empaque_id)
+        .all()
+    )
+    for e in rows:
+        det = _detalle_as_dict(e.detalle_corrida)
+        if det.get("anulado") or _es_reempaque_melon_detalle(det):
+            continue
+        for c in _consumos_desde_empaque(e, det):
+            if _norm_lote(c.get("lote")).casefold() != lote_cf:
+                continue
+            fr = _norm_fecha_emp(c.get("fecha_recepcion")) or ""
+            if fecha and fr != fecha:
+                continue
+            if int(c.get("bins") or 0) > 0:
+                ids.append(e.id)
+                break
+    return ids
+
+
+def _plan_devolucion_bins(db: Session, empaque_id: int, consumos: list) -> list[dict]:
+    """
+    No devuelve más bins de los que caben hasta la recepción de ese corte.
+    Si dos procesos repiten los mismos bins, el segundo no infla el piso.
+    """
     esperado: dict[tuple[str, str], int] = {}
-    for c in consumos:
+    for c in consumos or []:
         lo = _norm_lote(c.get("lote"))
         try:
             b = int(c.get("bins") or 0)
@@ -2703,27 +2732,207 @@ def _eliminar_proceso_melon_activo(
             continue
         fr = _norm_fecha_emp(c.get("fecha_recepcion")) or ""
         esperado[(lo, fr)] = esperado.get((lo, fr), 0) + b
+    planes = []
+    for (lo, fr), pedido in esperado.items():
+        en_piso = _sumar_bins_melon(db, lo, fr or None)
+        recibido = _recibido_bins_melon(db, lo, fr or None)
+        if recibido is None:
+            devolver = pedido
+            cupo = None
+        else:
+            cupo = max(0, int(recibido) - int(en_piso))
+            devolver = min(pedido, cupo)
+        planes.append(
+            {
+                "lote": lo,
+                "fecha": fr,
+                "pedido": pedido,
+                "devolver": devolver,
+                "en_piso": en_piso,
+                "recibido": recibido,
+                "otros": _otros_procesos_mismos_bins(db, empaque_id, lo, fr),
+            }
+        )
+    return planes
+
+
+def _texto_tope_bins(plan: dict) -> str:
+    corte = f" corte {plan['fecha']}" if plan.get("fecha") else ""
+    otros = plan.get("otros") or []
+    extra = ""
+    if otros:
+        extra = " También lo piden los procesos " + ", ".join(f"#{i}" for i in otros[:6]) + "."
+    if plan.get("recibido") is None:
+        return (
+            f"se devolverán {plan['devolver']} bins de {plan['pedido']} "
+            f"del lote {plan['lote']}{corte} (no hay recepción para topar).{extra}"
+        )
+    return (
+        f"se devolverán {plan['devolver']} bins de {plan['pedido']} "
+        f"del lote {plan['lote']}{corte} porque en piso ya hay {plan['en_piso']} "
+        f"y la recepción de ese corte fue {plan['recibido']}.{extra}"
+    )
+
+
+def _clasificar_cajas_proceso(db: Session, emp: Empaque, produccion: list) -> dict:
+    """No muta. Separa faltantes explicados por embarque de los que se pueden confirmar."""
+    from app.routers.reempaque_melon import _embarques_posibles_de_linea, _etiqueta_caja
+
+    fecha_proc = emp.fecha
+    embarques: list[dict] = []
+    faltantes: list[dict] = []
+    for linea in produccion or []:
+        if not isinstance(linea, dict):
+            continue
+        pres, cant, talla, lote, fecha, cal = _partes_linea_melon(linea)
+        if not pres or cant <= 0:
+            continue
+        rows = _filas_para_restar_melon(
+            db,
+            pres=pres,
+            talla=talla,
+            lote=lote,
+            fecha=fecha,
+            calidad=cal,
+            mercado=emp.mercado,
+            cantidad=cant,
+        )
+        hay = sum(int(r.cantidad_stock or 0) for r in rows)
+        if hay >= cant:
+            continue
+        item = {
+            "presentacion": pres,
+            "talla": talla,
+            "calidad": cal,
+            "lote": lote,
+            "fecha_empaque": fecha,
+            "pedido": cant,
+            "hay": hay,
+            "faltan": cant - hay,
+            "etiqueta": _etiqueta_caja(pres, talla, cal, cant - hay),
+            "embarques": _embarques_posibles_de_linea(db, fecha or fecha_proc, linea),
+        }
+        if item["embarques"]:
+            embarques.append(item)
+        else:
+            faltantes.append(item)
+    return {"embarques": embarques, "faltantes": faltantes}
+
+
+def _mensaje_faltantes_proceso(
+    empaque_id: int, faltantes: list[dict], planes_bins: list[dict]
+) -> str:
+    lineas = [f"Proceso #{empaque_id}:"]
+    for it in faltantes:
+        donde = ""
+        if it.get("lote") or it.get("fecha_empaque"):
+            donde = f" (lote {it.get('lote') or '—'}, día {it.get('fecha_empaque') or '—'})"
+        lineas.append(
+            f"• {it['etiqueta']}{donde}: pedido {it['pedido']}, hay {it['hay']}, "
+            f"faltan {it['faltan']}; se quitarán solo las que existen"
+        )
+    for plan in planes_bins:
+        if int(plan["devolver"]) < int(plan["pedido"]):
+            lineas.append("• " + _texto_tope_bins(plan))
+    return (
+        "Faltan cajas o el tope de bins no permite devolver todo. "
+        "No hay embarque posterior que explique esas cajas:\n"
+        + "\n".join(lineas)
+        + "\n\nSi continúas, se quitan solo las cajas que sí están, "
+        "se devuelven solo los bins indicados y se borra el proceso.\n\n¿Continuar?"
+    )
+
+
+def _mensaje_bloqueo_embarque_proceso(empaque_id: int, items: list[dict]) -> str:
+    lineas = []
+    for it in items:
+        emb = ", ".join(f"#{i}" for i in it.get("embarques") or [])
+        lineas.append(
+            f"faltan {it['faltan']} {it['etiqueta']} y hay embarque posterior ({emb}) "
+            f"de esa misma presentación, talla y calidad"
+        )
+    return (
+        f"No se puede eliminar el proceso de empaque de melón #{empaque_id}: "
+        + "; ".join(lineas)
+        + ". Esas cajas pudieron embarcarse. No se cambió nada."
+    )
+
+
+def _eliminar_proceso_melon_activo(
+    db: Session,
+    emp: Empaque,
+    *,
+    commit: bool = True,
+    forzar_faltantes: bool = False,
+) -> EliminarEmpaqueResponse:
+    """
+    Una sola transacción: devuelve bins sin pasar la recepción, quita solo
+    las cajas que existen y borra el proceso.
+    """
+    empaque_id = emp.id
+    detalle = _detalle_as_dict(emp.detalle_corrida)
+    consumos = _consumos_desde_empaque(emp, detalle)
+    produccion = _produccion_empaque(emp, detalle)
+    cajas_info = _clasificar_cajas_proceso(db, emp, produccion)
+    planes = _plan_devolucion_bins(db, empaque_id, consumos)
+    bins_topados = [p for p in planes if int(p["devolver"]) < int(p["pedido"])]
+
+    if cajas_info["embarques"]:
+        raise HTTPException(
+            status_code=409,
+            detail=_mensaje_bloqueo_embarque_proceso(empaque_id, cajas_info["embarques"]),
+        )
+    if (cajas_info["faltantes"] or bins_topados) and not forzar_faltantes:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "confirmar_faltantes",
+                "message": _mensaje_faltantes_proceso(
+                    empaque_id, cajas_info["faltantes"], planes
+                ),
+                "faltantes": cajas_info["faltantes"],
+                "bins": [
+                    {
+                        "lote": p["lote"],
+                        "fecha": p["fecha"],
+                        "pedido": p["pedido"],
+                        "devolver": p["devolver"],
+                        "en_piso": p["en_piso"],
+                        "recibido": p["recibido"],
+                    }
+                    for p in planes
+                ],
+            },
+        )
 
     antes_bins = {
-        key: _sumar_bins_melon(db, key[0], key[1] or None) for key in esperado
+        (p["lote"], p["fecha"]): _sumar_bins_melon(db, p["lote"], p["fecha"] or None)
+        for p in planes
     }
     bins_devueltos = 0
-    for (lo, fr), b in esperado.items():
-        _devolver_bins_lote(db, lo, b, fr or None, producto=Producto.MELON)
+    bins_pedidos = 0
+    for plan in planes:
+        b = int(plan["devolver"])
+        bins_pedidos += int(plan["pedido"])
+        lo, fr = plan["lote"], plan["fecha"]
+        if b > 0:
+            _devolver_bins_lote(db, lo, b, fr or None, producto=Producto.MELON)
         bins_devueltos += b
-    for (lo, fr), b in esperado.items():
+    for plan in planes:
+        lo, fr = plan["lote"], plan["fecha"]
         ahora = _sumar_bins_melon(db, lo, fr or None)
-        if ahora - antes_bins[(lo, fr)] != b:
+        if ahora - antes_bins[(lo, fr)] != int(plan["devolver"]):
             raise HTTPException(
                 status_code=409,
                 detail=(
-                    f"No se pudieron devolver exactamente {b} bins del lote {lo}"
+                    f"No se pudieron devolver {plan['devolver']} bins del lote {lo}"
                     + (f" (corte {fr})" if fr else "")
                     + f". No se cambió nada y no se eliminó el proceso #{empaque_id}."
                 ),
             )
 
     cajas = 0
+    permitir_parcial = bool(cajas_info["faltantes"]) and forzar_faltantes
     if produccion:
         aplicadas, problemas_rev = _ajustar_inventario_final(
             db,
@@ -2731,10 +2940,10 @@ def _eliminar_proceso_melon_activo(
             emp.mercado,
             produccion,
             signo=-1,
-            best_effort=False,
+            best_effort=permitir_parcial,
             ignorar_reclamo_empaque_id=empaque_id,
         )
-        if problemas_rev:
+        if problemas_rev and not permitir_parcial:
             raise HTTPException(
                 status_code=409,
                 detail=(
@@ -2750,10 +2959,25 @@ def _eliminar_proceso_melon_activo(
         db.commit()
     else:
         db.flush()
+    aviso_bins = ""
+    if bins_devueltos < bins_pedidos:
+        aviso_bins = (
+            " " + " ".join(_texto_tope_bins(p) for p in planes if p["devolver"] < p["pedido"])
+        )
+    aviso_cajas = ""
+    if cajas_info["faltantes"]:
+        aviso_cajas = (
+            " No estaban en inventario: "
+            + ", ".join(
+                f"{it['faltan']} {it['etiqueta']}" for it in cajas_info["faltantes"]
+            )
+            + "."
+        )
     return EliminarEmpaqueResponse(
         message=(
             f"Proceso de empaque de melón #{empaque_id} eliminado. "
-            f"Se devolvieron {bins_devueltos} bins y se quitaron {cajas} cajas de este proceso."
+            f"Se devolvieron {bins_devueltos} bins de {bins_pedidos} "
+            f"y se quitaron {cajas} cajas que sí había.{aviso_bins}{aviso_cajas}"
         ),
         id=empaque_id,
     )
@@ -2829,7 +3053,9 @@ def eliminar_empaque_anulado(
                         commit=False,
                         forzar_faltantes=forzar_faltantes,
                     )
-            resp = _eliminar_proceso_melon_activo(db, emp, commit=True)
+            resp = _eliminar_proceso_melon_activo(
+                db, emp, commit=True, forzar_faltantes=forzar_faltantes
+            )
             if ids_rev:
                 ids = ", ".join(f"#{i}" for i in ids_rev)
                 resp.message = (

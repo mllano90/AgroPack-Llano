@@ -980,8 +980,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           `Por tipo:\n${resumenMods}\n\n` +
           `Incluye:\n${preview}${extra}\n\n` +
           `• Recepciones: borra también desverdizado ligado\n` +
-          `• Empaque de melón: devuelve sus bins, quita sus cajas y borra el proceso\n` +
-          `• Si ese proceso tiene reempaques, elimínalo desde su fila para confirmarlos\n` +
+          `• Empaque de melón: devuelve bins (sin pasar lo recibido), quita las cajas que existan y borra el proceso\n` +
+          `• Si faltan cajas o hay reempaques, sale un solo aviso para todos los seleccionados\n` +
           `• Reempaque de melón: se deshace (las cajas originales vuelven a su día; los bins no se mueven)\n` +
           `• Empaque de limón activo: se ANULA (revierte stock)\n` +
           `• Empaques ya anulados: se borran del historial\n` +
@@ -1006,16 +1006,65 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       (a, b) => (orden[a.modulo] ?? 9) - (orden[b.modulo] ?? 9) || b.id - a.id
     );
 
-    for (const m of sorted) {
+    const detalleError = (err: any) => {
+      const detail = err?.response?.data?.detail;
+      if (detail && typeof detail === 'object' && 'message' in detail) {
+        return {
+          code: String((detail as { code?: string }).code || ''),
+          texto: String((detail as { message?: string }).message || ''),
+        };
+      }
+      return { code: '', texto: formatApiDetail(detail, err?.message || 'error') };
+    };
+
+    const melones = sorted.filter((m) => esEmpaqueMelon(m));
+    const resto = sorted.filter((m) => !esEmpaqueMelon(m));
+    const porConfirmar: Array<{ m: HistorialMovimiento; texto: string }> = [];
+
+    for (const m of melones) {
       try {
         const r = await ejecutarEliminarMovimiento(m);
         okMsgs.push(r.message);
       } catch (err: any) {
-        const detail = err?.response?.data?.detail;
-        const texto =
-          detail && typeof detail === 'object' && 'message' in detail
-            ? String((detail as { message?: string }).message || '')
-            : formatApiDetail(detail, err?.message || 'error');
+        const { code, texto } = detalleError(err);
+        if (code === 'confirmar_faltantes' || code === 'confirmar_reempaques') {
+          porConfirmar.push({ m, texto });
+        } else {
+          errMsgs.push(`${m.titulo}: ${texto}`);
+        }
+      }
+    }
+
+    if (porConfirmar.length) {
+      const aviso = porConfirmar.map((p) => p.texto).join('\n\n');
+      const seguir = confirm(
+        `Estos ${porConfirmar.length} proceso(s) de melón necesitan confirmación.\n` +
+          `Cada uno se borra por separado: si uno falla, los ya borrados no se revierten.\n\n` +
+          `${aviso}\n\n¿Continuar con todos?`
+      );
+      if (!seguir) {
+        errMsgs.push(
+          'No se confirmaron los procesos de melón con faltantes o reempaques. No se borraron.'
+        );
+      } else {
+        for (const p of porConfirmar) {
+          try {
+            const res = await eliminarEmpaqueAnulado(token, p.m.id, true, true);
+            okMsgs.push(res.message);
+          } catch (err: any) {
+            const { texto } = detalleError(err);
+            errMsgs.push(`${p.m.titulo}: ${texto}`);
+          }
+        }
+      }
+    }
+
+    for (const m of resto) {
+      try {
+        const r = await ejecutarEliminarMovimiento(m);
+        okMsgs.push(r.message);
+      } catch (err: any) {
+        const { texto } = detalleError(err);
         errMsgs.push(`${m.titulo}: ${texto}`);
       }
     }
