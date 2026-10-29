@@ -212,19 +212,39 @@ export default function MelonReempaque({ token, onDone }: Props) {
     setError('');
     setOkMsg('');
     try {
-      const res = await eliminarEmpaqueAnulado(token, h.id);
+      let res: { message: string; id: number } | undefined;
+      let forzarFaltantes = false;
+      while (!res) {
+        try {
+          res = await eliminarEmpaqueAnulado(token, h.id, false, forzarFaltantes);
+        } catch (err: any) {
+          const detail = err?.response?.data?.detail;
+          const code =
+            err?.response?.status === 409 && detail && typeof detail === 'object'
+              ? String((detail as { code?: string }).code || '')
+              : '';
+          if (code === 'confirmar_faltantes' && !forzarFaltantes) {
+            const texto = String((detail as { message?: string }).message || '');
+            if (!confirm(texto)) {
+              setError('No se eliminó el reempaque.');
+              return;
+            }
+            forzarFaltantes = true;
+            continue;
+          }
+          const texto =
+            typeof detail === 'string'
+              ? detail
+              : detail && typeof detail === 'object' && 'message' in detail
+                ? String((detail as { message?: string }).message)
+                : 'No se pudo eliminar el reempaque';
+          setError(texto);
+          return;
+        }
+      }
       setOkMsg(res.message || `Reempaque #${h.id} eliminado`);
       await Promise.all([cargarHistorial(), cargarDisponibles()]);
       onDone?.();
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail;
-      const texto =
-        typeof detail === 'string'
-          ? detail
-          : detail && typeof detail === 'object' && 'message' in detail
-            ? String(detail.message)
-            : 'No se pudo eliminar el reempaque';
-      setError(texto);
     } finally {
       setBusy(false);
     }

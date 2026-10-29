@@ -920,19 +920,26 @@ export async function crearReempaqueMelon(
  * Si tiene reempaques, el backend pide confirmación (409 code confirmar_reempaques);
  * al reintentar con confirmarReempaques los deshace y luego borra el proceso.
  * Melón reempaque: deshace ese reempaque (no mueve bins).
+ * Si faltan cajas recuperadas y no hay embarque ni reempaque posterior,
+ * el backend pide confirmación (409 code confirmar_faltantes); al reintentar
+ * con forzarFaltantes quita solo las que existen.
  * Melón o limón ya anulado: solo quita el registro.
  * Limón activo: el backend lo rechaza; primero hay que anularlo.
  */
 export async function eliminarEmpaqueAnulado(
   token: string,
   empaqueId: number,
-  confirmarReempaques = false
+  confirmarReempaques = false,
+  forzarFaltantes = false
 ): Promise<{ message: string; id: number }> {
+  const params: Record<string, boolean> = {};
+  if (confirmarReempaques) params.confirmar_reempaques = true;
+  if (forzarFaltantes) params.forzar_faltantes = true;
   const res = await api.delete<{ message: string; id: number }>(
     `/api/empaque/${empaqueId}`,
     {
       headers: { Authorization: `Bearer ${token}` },
-      params: confirmarReempaques ? { confirmar_reempaques: true } : undefined,
+      params: Object.keys(params).length ? params : undefined,
     }
   );
   return res.data;
