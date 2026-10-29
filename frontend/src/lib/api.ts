@@ -915,7 +915,11 @@ export async function crearReempaqueMelon(
   return res.data;
 }
 
-/** Borra permanentemente un empaque ya anulado (no toca inventarios) */
+/**
+ * Melón activo: devuelve los bins, quita solo sus cajas y borra el proceso.
+ * Melón o limón ya anulado: solo quita el registro (no mueve inventarios).
+ * Limón activo: el backend lo rechaza; primero hay que anularlo.
+ */
 export async function eliminarEmpaqueAnulado(
   token: string,
   empaqueId: number

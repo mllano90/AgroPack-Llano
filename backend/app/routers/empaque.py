@@ -780,6 +780,365 @@ def _restar_una_linea_final(
     return a_restar, problema
 
 
+def _es_producto_melon(producto) -> bool:
+    return str(getattr(producto, "value", producto) or "").lower() == "melon"
+
+
+def _partes_linea_melon(linea: dict) -> tuple:
+    pres = (linea.get("presentacion") or "").strip()
+    try:
+        cant = int(linea.get("cantidad") or 0)
+    except (TypeError, ValueError):
+        cant = 0
+    talla = _talla_for_pres(pres, linea.get("talla"))
+    lote = _norm_lote_extra(linea.get("lote"))
+    fecha = _norm_fecha_emp(linea.get("fecha_empaque") or linea.get("fecha"))
+    cal = str(linea.get("calidad") or "").strip().lower() or None
+    return pres, cant, talla, lote, fecha, cal
+
+
+def _partes_fila_melon(inv: InventarioFinal) -> tuple:
+    extra = _extra_dict(inv)
+    pres = (extra.get("presentacion") or "").strip()
+    talla = _talla_for_pres(pres, extra.get("talla"))
+    lote = _norm_lote_extra(extra.get("lote"))
+    fecha = _norm_fecha_emp(extra.get("fecha_empaque"))
+    cal = str(extra.get("calidad") or "").strip().lower() or None
+    return pres, talla, lote, fecha, cal
+
+
+def _filas_inventario_melon(
+    db: Session,
+    *,
+    pres: str,
+    talla,
+    lote,
+    fecha,
+    calidad,
+    mercado,
+    exigir_fecha: bool,
+) -> list:
+    """Filas de cajas de melón. No mezcla otro producto, otra calidad ni otro día."""
+    mval = str(getattr(mercado, "value", mercado) or "") or None
+    rows = []
+    for inv in (
+        db.query(InventarioFinal)
+        .filter(InventarioFinal.producto == Producto.MELON)
+        .all()
+    ):
+        rp, rt, rl, rf, rc = _partes_fila_melon(inv)
+        if rp != pres or rt != talla or rl != lote or rc != calidad:
+            continue
+        if exigir_fecha and rf != fecha:
+            continue
+        if mval:
+            rm = str(getattr(inv.mercado, "value", inv.mercado) or "")
+            if rm != mval:
+                continue
+        rows.append(inv)
+    rows.sort(key=lambda r: r.id or 0)
+    return rows
+
+
+def _filas_para_restar_melon(
+    db: Session,
+    *,
+    pres: str,
+    talla,
+    lote,
+    fecha,
+    calidad,
+    mercado,
+    cantidad: int,
+) -> list:
+    """
+    Resta solo la fila de ese día.
+    Si el día no tiene fila (datos viejos mezclados en un solo registro),
+    usa esa fila única. Si hay varios días distintos, no adivina.
+    """
+    exact = _filas_inventario_melon(
+        db,
+        pres=pres,
+        talla=talla,
+        lote=lote,
+        fecha=fecha,
+        calidad=calidad,
+        mercado=mercado,
+        exigir_fecha=True,
+    )
+    if exact:
+        # Aunque esté en cero: no tomar cajas de otro día.
+        return exact
+    loose = _filas_inventario_melon(
+        db,
+        pres=pres,
+        talla=talla,
+        lote=lote,
+        fecha=fecha,
+        calidad=calidad,
+        mercado=mercado,
+        exigir_fecha=False,
+    )
+    fechas = {_partes_fila_melon(r)[3] for r in loose}
+    if len(loose) == 1 or (loose and len(fechas) <= 1):
+        return loose
+    return []
+
+
+def _otro_proceso_reclama_fila(
+    db: Session, inv: InventarioFinal, ignorar_empaque_id: int | None
+) -> bool:
+    """¿Otro proceso de empaque de melón (no reempaque, no anulado) sigue usando esta fila?"""
+    pres, talla, lote, fecha, cal = _partes_fila_melon(inv)
+    q = db.query(Empaque).filter(Empaque.producto == Producto.MELON)
+    if ignorar_empaque_id:
+        q = q.filter(Empaque.id != ignorar_empaque_id)
+    for e in q.all():
+        det = _detalle_as_dict(e.detalle_corrida)
+        if det.get("anulado"):
+            continue
+        if (det.get("tipo") or "") == "reempaque_melon":
+            continue
+        for p in det.get("produccion") or []:
+            if not isinstance(p, dict):
+                continue
+            pp, _cant, pt, pl, pf, pc = _partes_linea_melon(p)
+            if pp == pres and pt == talla and pl == lote and pf == fecha and pc == cal:
+                if int(p.get("cantidad") or 0) > 0:
+                    return True
+    return False
+
+
+def _ajustar_inventario_final_melon(
+    db: Session,
+    mercado,
+    produccion: list,
+    signo: int,
+    *,
+    best_effort: bool = False,
+    ignorar_reclamo_empaque_id: int | None = None,
+) -> tuple[list[dict], list[str]]:
+    """
+    Suma o resta cajas de melón sin mezclar días, lotes ni calidades (LLANO / Wallys).
+    No fusiona filas de otros procesos ni las deja en cero como duplicado visible:
+    si la fila queda en 0 y nadie más la reclama, se quita.
+    """
+    aplicadas: list[dict] = []
+    problemas: list[str] = []
+
+    for linea in produccion or []:
+        if not isinstance(linea, dict):
+            continue
+        pres, cant, talla, lote, fecha, cal = _partes_linea_melon(linea)
+        if not pres or cant <= 0:
+            continue
+        label = _sku_label(pres, talla, lote, fecha) + (f" {cal}" if cal else "")
+
+        if signo < 0:
+            rows = _filas_para_restar_melon(
+                db,
+                pres=pres,
+                talla=talla,
+                lote=lote,
+                fecha=fecha,
+                calidad=cal,
+                mercado=mercado,
+                cantidad=cant,
+            )
+            total = sum(int(r.cantidad_stock or 0) for r in rows)
+            if total < cant and not best_effort:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        f"Stock insuficiente de {label} "
+                        f"(hay {total}, se intentan restar {cant})"
+                    ),
+                )
+            a_restar = min(cant, total)
+            restante = a_restar
+            tocadas = []
+            for inv in rows:
+                if restante <= 0:
+                    break
+                disp = int(inv.cantidad_stock or 0)
+                if disp <= 0:
+                    continue
+                toma = min(disp, restante)
+                inv.cantidad_stock = disp - toma
+                inv.fecha_actualizacion = datetime.utcnow()
+                restante -= toma
+                tocadas.append(inv)
+            for inv in tocadas:
+                if int(inv.cantidad_stock or 0) != 0:
+                    continue
+                if _otro_proceso_reclama_fila(db, inv, ignorar_reclamo_empaque_id):
+                    continue
+                db.delete(inv)
+            db.flush()
+            if a_restar > 0:
+                aplicadas.append(
+                    {
+                        "presentacion": pres,
+                        "talla": talla,
+                        "lote": lote,
+                        "fecha_empaque": fecha,
+                        "calidad": cal,
+                        "cantidad": a_restar,
+                        "solicitado": cant,
+                    }
+                )
+            if a_restar < cant:
+                problemas.append(
+                    f"Stock parcial de {label}: se revirtieron {a_restar} de {cant} "
+                    f"(faltan {cant - a_restar}; probablemente ya se embarcaron o reempacaron)"
+                )
+            continue
+
+        rows = _filas_inventario_melon(
+            db,
+            pres=pres,
+            talla=talla,
+            lote=lote,
+            fecha=fecha,
+            calidad=cal,
+            mercado=mercado,
+            exigir_fecha=True,
+        )
+        if rows:
+            keep = next((r for r in rows if int(r.cantidad_stock or 0) > 0), rows[0])
+            keep.cantidad_stock = int(keep.cantidad_stock or 0) + cant
+            keep.fecha_actualizacion = datetime.utcnow()
+        else:
+            extra: dict = {"presentacion": pres}
+            if cal:
+                extra["calidad"] = cal
+            if talla:
+                extra["talla"] = talla
+            if lote:
+                extra["lote"] = lote
+            if fecha:
+                extra["fecha_empaque"] = fecha
+            db.add(
+                InventarioFinal(
+                    producto=Producto.MELON,
+                    variedad=None,
+                    tipo_cultivo=None,
+                    mercado=mercado,
+                    cantidad_stock=cant,
+                    atributos_extra=extra,
+                    fecha_actualizacion=datetime.utcnow(),
+                )
+            )
+            db.flush()
+        aplicadas.append(
+            {
+                "presentacion": pres,
+                "talla": talla,
+                "lote": lote,
+                "fecha_empaque": fecha,
+                "calidad": cal,
+                "cantidad": cant,
+            }
+        )
+
+    return aplicadas, problemas
+
+
+def _problemas_stock_cajas_melon(db: Session, mercado, produccion: list) -> list[str]:
+    """No muta. Vacío = se pueden quitar todas las cajas de este proceso."""
+    problemas: list[str] = []
+    for linea in produccion or []:
+        if not isinstance(linea, dict):
+            continue
+        pres, cant, talla, lote, fecha, cal = _partes_linea_melon(linea)
+        if not pres or cant <= 0:
+            continue
+        rows = _filas_para_restar_melon(
+            db,
+            pres=pres,
+            talla=talla,
+            lote=lote,
+            fecha=fecha,
+            calidad=cal,
+            mercado=mercado,
+            cantidad=cant,
+        )
+        hay = sum(int(r.cantidad_stock or 0) for r in rows)
+        label = _sku_label(pres, talla, lote, fecha) + (f" {cal}" if cal else "")
+        if hay < cant:
+            problemas.append(
+                f"No se pueden quitar las cajas de {label}: hay {hay} y este proceso tiene {cant}. "
+                f"Esas cajas ya se embarcaron, se reempacaron o no están en el inventario de ese día."
+            )
+    return problemas
+
+
+def _es_reempaque_melon_detalle(detalle: dict | None) -> bool:
+    return (detalle or {}).get("tipo") == "reempaque_melon"
+
+
+def _reempaques_de_proceso(db: Session, empaque_id: int) -> list[Empaque]:
+    """Reempaques vivos que salieron de este proceso o le devolvieron cajas."""
+    hits: list[Empaque] = []
+    rows = (
+        db.query(Empaque)
+        .filter(Empaque.producto == Producto.MELON, Empaque.id != empaque_id)
+        .all()
+    )
+    for e in rows:
+        det = _detalle_as_dict(e.detalle_corrida)
+        if det.get("anulado") or not _es_reempaque_melon_detalle(det):
+            continue
+        ids: set[int] = set()
+        for raw in det.get("procesos_origen") or []:
+            try:
+                ids.add(int(raw))
+            except (TypeError, ValueError):
+                continue
+        if det.get("proceso_destino_id") is not None:
+            try:
+                ids.add(int(det.get("proceso_destino_id")))
+            except (TypeError, ValueError):
+                pass
+        for s in (det.get("salidas") or det.get("consumos_cajas") or []):
+            if isinstance(s, dict) and s.get("empaque_id") is not None:
+                try:
+                    ids.add(int(s.get("empaque_id")))
+                except (TypeError, ValueError):
+                    continue
+        if empaque_id in ids:
+            hits.append(e)
+    return hits
+
+
+def _mensaje_bloqueo_reempaque(empaque_id: int, refs: list[Empaque]) -> str:
+    partes = []
+    for e in refs[:6]:
+        det = _detalle_as_dict(e.detalle_corrida)
+        cuando = det.get("fecha_reempaque") or (str(e.fecha) if e.fecha else "?")
+        partes.append(f"#{e.id} del {cuando}")
+    extra = f" ({', '.join(partes)})" if partes else ""
+    return (
+        f"No se puede eliminar el proceso de empaque de melón #{empaque_id}: "
+        f"tiene cajas reempacadas{extra}. "
+        f"Borrarlo dejaría el reempaque y el inventario cruzados. No se cambió nada."
+    )
+
+
+def _sumar_bins_melon(db: Session, lote: str, fecha=None) -> int:
+    fecha_n = _norm_fecha_emp(fecha) if fecha else None
+    total = 0
+    for d in _match_desverdizado_por_lote(db, lote, producto=Producto.MELON):
+        if (d.estado or "").lower() == "eliminado":
+            continue
+        if fecha_n:
+            fr = _norm_fecha_emp(d.fecha_recepcion)
+            if fr != fecha_n:
+                continue
+        total += int(d.cantidad_bins or 0)
+    return total
+
+
 def _ajustar_inventario_final(
     db: Session,
     producto: Producto,
@@ -788,9 +1147,13 @@ def _ajustar_inventario_final(
     signo: int,
     *,
     best_effort: bool = False,
+    ignorar_reclamo_empaque_id: int | None = None,
 ) -> tuple[list[dict], list[str]]:
     """
     Suma (signo=+1) o resta (signo=-1) producción en inventario final.
+
+    Melón: cada día, lote y calidad es una fila aparte (no se mezcla con otro proceso).
+    Limón: sin cambio.
 
     Resta: descuenta en FIFO sobre TODAS las filas del mismo SKU (talla/lote/fecha).
     Suma: consolida duplicados y suma en una sola fila.
@@ -801,6 +1164,16 @@ def _ajustar_inventario_final(
 
     Devuelve (lineas_aplicadas, problemas).
     """
+    if _es_producto_melon(producto):
+        return _ajustar_inventario_final_melon(
+            db,
+            mercado,
+            produccion,
+            signo,
+            best_effort=best_effort,
+            ignorar_reclamo_empaque_id=ignorar_reclamo_empaque_id,
+        )
+
     aplicadas: list[dict] = []
     problemas: list[str] = []
 
@@ -1490,8 +1863,10 @@ def editar_empaque_completo(
             "lote": emp.lote_desverdizado or "SIN_LOTE",
             "bins": int(emp.bins_desverdizado_usados),
         }]
-    # Empaques legacy sin fecha_recepcion → inferir por reverse-FIFO
-    old_consumos = _inferir_fechas_consumos_legacy(db, old_consumos)
+    # Empaques legacy de limón sin fecha_recepcion → inferir por reverse-FIFO.
+    # En melón esa inferencia mira recepciones de limón y puede abrir otra fila de bins.
+    if emp.producto != Producto.MELON:
+        old_consumos = _inferir_fechas_consumos_legacy(db, old_consumos)
     old_produccion = _norm_produccion(detalle.get("produccion"))
     if not old_produccion and emp.presentacion and emp.cantidad_producida:
         old_row = {
@@ -1629,6 +2004,7 @@ def editar_empaque_completo(
             mercado_dest,
             [linea_net],
             signo=int(net["_signo"]),
+            ignorar_reclamo_empaque_id=emp.id,
         )
 
     bins_total = sum(int(c.get("bins") or 0) for c in new_consumos) or int(
@@ -1800,9 +2176,11 @@ def anular_empaque(
         raise HTTPException(status_code=400, detail="Este empaque ya está anulado")
 
     consumos = _consumos_desde_empaque(emp, detalle)
-    # Crítico: empaques viejos sin fecha_recepcion → inferir por cupo de recepción
+    # Crítico en limón: empaques viejos sin fecha_recepcion → inferir por cupo de recepción
     # (reverse-FIFO) para no devolver bins del 05-ago al stock del 03-ago del mismo lote.
-    consumos = _inferir_fechas_consumos_legacy(db, consumos)
+    # Melón no usa esa inferencia (consulta recepciones de limón).
+    if emp.producto != Producto.MELON:
+        consumos = _inferir_fechas_consumos_legacy(db, consumos)
     produccion = _norm_produccion(detalle.get("produccion"))
     if not produccion and emp.presentacion and emp.cantidad_producida:
         row = {
@@ -1816,7 +2194,37 @@ def anular_empaque(
 
     # Pre-check inventario final ANTES de devolver bins (evita estado a medias)
     problemas_final: list[str] = []
-    if produccion:
+    es_melon_emp = emp.producto == Producto.MELON
+    if es_melon_emp and _es_reempaque_melon_detalle(detalle):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"El registro #{empaque_id} es un reempaque de melón, no un proceso de empacado. "
+                f"Anularlo descontaría otra vez las cajas que ya están en el proceso de origen. "
+                f"No se cambió nada."
+            ),
+        )
+    if es_melon_emp:
+        refs_re = _reempaques_de_proceso(db, emp.id)
+        if refs_re:
+            raise HTTPException(
+                status_code=409,
+                detail=_mensaje_bloqueo_reempaque(empaque_id, refs_re),
+            )
+    if produccion and es_melon_emp:
+        # En melón no se fuerza: un reverso a medias deja cajas de más o de menos.
+        problemas_final = _problemas_stock_cajas_melon(db, emp.mercado, produccion)
+        if problemas_final:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se puede anular el empaque de melón #{empaque_id}. "
+                    + " | ".join(problemas_final)
+                    + " No se cambió nada."
+                ),
+            )
+        forzar = False
+    elif produccion:
         problemas_final = _validar_restar_produccion(db, emp.mercado, produccion)
 
     if problemas_final and not forzar:
@@ -1862,6 +2270,7 @@ def anular_empaque(
                 produccion,
                 signo=-1,
                 best_effort=bool(forzar),
+                ignorar_reclamo_empaque_id=emp.id,
             )
         except HTTPException as e:
             if e.status_code == 400 and forzar:
@@ -1873,6 +2282,7 @@ def anular_empaque(
                     produccion,
                     signo=-1,
                     best_effort=True,
+                    ignorar_reclamo_empaque_id=emp.id,
                 )
                 if not problemas_rev:
                     problemas_rev = [str(e.detail)]
@@ -2183,6 +2593,138 @@ def reparar_devolucion_anulacion(
     }
 
 
+def _cargar_empaque_bloqueado(db: Session, empaque_id: int) -> Empaque | None:
+    """
+    Evita que dos clics seguidos devuelvan los bins dos veces.
+    En Postgres bloquea la fila; en SQLite toma el lock de escritura.
+    """
+    from sqlalchemy import text
+
+    bind = db.get_bind()
+    dialect = bind.dialect.name if bind is not None else ""
+    if dialect == "postgresql":
+        return (
+            db.query(Empaque)
+            .filter(Empaque.id == empaque_id)
+            .with_for_update()
+            .first()
+        )
+    if dialect == "sqlite":
+        db.commit()
+        try:
+            db.execute(text("BEGIN IMMEDIATE"))
+        except Exception:
+            db.rollback()
+        return db.query(Empaque).filter(Empaque.id == empaque_id).first()
+    return db.query(Empaque).filter(Empaque.id == empaque_id).first()
+
+
+def _produccion_empaque(emp: Empaque, detalle: dict) -> list[dict]:
+    produccion = _norm_produccion(detalle.get("produccion"))
+    if not produccion and emp.presentacion and emp.cantidad_producida:
+        row = {
+            "presentacion": emp.presentacion,
+            "talla": emp.talla,
+            "cantidad": emp.cantidad_producida,
+        }
+        if emp.calidad:
+            row["calidad"] = str(emp.calidad)
+        if emp.lote_desverdizado:
+            row["lote"] = emp.lote_desverdizado
+        if emp.fecha:
+            row["fecha_empaque"] = str(emp.fecha)
+        produccion = _norm_produccion([row])
+    return produccion
+
+
+def _eliminar_proceso_melon_activo(
+    db: Session, emp: Empaque
+) -> EliminarEmpaqueResponse:
+    """
+    Una sola transacción: devuelve los bins exactos, quita solo las cajas
+    de este proceso y borra el registro. Si algo no cuadra, no se guarda nada.
+    """
+    empaque_id = emp.id
+    detalle = _detalle_as_dict(emp.detalle_corrida)
+    consumos = _consumos_desde_empaque(emp, detalle)
+    produccion = _produccion_empaque(emp, detalle)
+
+    problemas = _problemas_stock_cajas_melon(db, emp.mercado, produccion)
+    if problemas:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No se puede eliminar el proceso de empaque de melón #{empaque_id}. "
+                + " | ".join(problemas)
+                + " No se cambió nada."
+            ),
+        )
+
+    # Agrupa por lote + corte para devolver el total exacto (sin doble conteo).
+    esperado: dict[tuple[str, str], int] = {}
+    for c in consumos:
+        lo = _norm_lote(c.get("lote"))
+        try:
+            b = int(c.get("bins") or 0)
+        except (TypeError, ValueError):
+            b = 0
+        if b <= 0 or not lo:
+            continue
+        fr = _norm_fecha_emp(c.get("fecha_recepcion")) or ""
+        esperado[(lo, fr)] = esperado.get((lo, fr), 0) + b
+
+    antes_bins = {
+        key: _sumar_bins_melon(db, key[0], key[1] or None) for key in esperado
+    }
+    bins_devueltos = 0
+    for (lo, fr), b in esperado.items():
+        _devolver_bins_lote(db, lo, b, fr or None, producto=Producto.MELON)
+        bins_devueltos += b
+    for (lo, fr), b in esperado.items():
+        ahora = _sumar_bins_melon(db, lo, fr or None)
+        if ahora - antes_bins[(lo, fr)] != b:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se pudieron devolver exactamente {b} bins del lote {lo}"
+                    + (f" (corte {fr})" if fr else "")
+                    + f". No se cambió nada y no se eliminó el proceso #{empaque_id}."
+                ),
+            )
+
+    cajas = 0
+    if produccion:
+        aplicadas, problemas_rev = _ajustar_inventario_final(
+            db,
+            Producto.MELON,
+            emp.mercado,
+            produccion,
+            signo=-1,
+            best_effort=False,
+            ignorar_reclamo_empaque_id=empaque_id,
+        )
+        if problemas_rev:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se puede eliminar el proceso de empaque de melón #{empaque_id}. "
+                    + " | ".join(problemas_rev)
+                    + " No se cambió nada."
+                ),
+            )
+        cajas = sum(int(a.get("cantidad") or 0) for a in aplicadas)
+
+    db.delete(emp)
+    db.commit()
+    return EliminarEmpaqueResponse(
+        message=(
+            f"Proceso de empaque de melón #{empaque_id} eliminado. "
+            f"Se devolvieron {bins_devueltos} bins y se quitaron {cajas} cajas de este proceso."
+        ),
+        id=empaque_id,
+    )
+
+
 @router.delete("/{empaque_id}", response_model=EliminarEmpaqueResponse)
 def eliminar_empaque_anulado(
     empaque_id: int,
@@ -2190,14 +2732,46 @@ def eliminar_empaque_anulado(
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
     """
-    Borra permanentemente un empaque ya anulado (limpia historial).
-    No toca inventarios: al anular ya se revirtieron.
+    Limón: borra solo un empaque ya anulado (el anular ya revirtió inventarios).
+
+    Melón activo: en una sola transacción devuelve los bins que usó, quita
+    solo sus cajas y borra el proceso. Si las cajas ya se embarcaron o hay
+    reempaque, no cambia nada. Un segundo clic responde 404 y no devuelve
+    bins otra vez.
+    Melón ya anulado: solo quita el registro (los inventarios ya se revirtieron).
     """
-    emp = db.query(Empaque).filter(Empaque.id == empaque_id).first()
+    emp = _cargar_empaque_bloqueado(db, empaque_id)
     if not emp:
         raise HTTPException(status_code=404, detail="Empaque no encontrado")
 
     detalle = _detalle_as_dict(emp.detalle_corrida)
+    if emp.producto == Producto.MELON:
+        if _es_reempaque_melon_detalle(detalle) and not detalle.get("anulado"):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"El registro #{empaque_id} es un reempaque de melón, no un proceso de empacado. "
+                    f"Eliminarlo quitaría cajas que siguen en el proceso de origen. No se cambió nada."
+                ),
+            )
+        refs = _reempaques_de_proceso(db, emp.id)
+        if refs:
+            raise HTTPException(
+                status_code=409,
+                detail=_mensaje_bloqueo_reempaque(empaque_id, refs),
+            )
+        if not detalle.get("anulado"):
+            return _eliminar_proceso_melon_activo(db, emp)
+        db.delete(emp)
+        db.commit()
+        return EliminarEmpaqueResponse(
+            message=(
+                f"Empaque de melón #{empaque_id} borrado del historial. "
+                f"Los inventarios no se movieron (ya se habían revertido al anular)."
+            ),
+            id=empaque_id,
+        )
+
     if not detalle.get("anulado"):
         raise HTTPException(
             status_code=400,
