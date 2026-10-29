@@ -15,6 +15,13 @@ import {
 import { formatFechaCorta } from '../../lib/dates';
 import { getMelonHectareas } from '../../lib/api';
 import {
+  agregarDistribucionTallas,
+  esProcesoCampoMelon,
+  filtrarProcesosAcumulado,
+  lotesDeEmpaqueMelon,
+  sumaKgTallas,
+} from '../../lib/melonDistribucionTallas';
+import {
   pesoCajaDesdeConfig,
   useMelonPesos,
   type MelonPesosConfig,
@@ -113,19 +120,6 @@ function parseDetalle(raw: unknown): {
   }
   if (typeof raw === 'object') return raw as any;
   return {};
-}
-
-function isMelonEmpaque(e: EmpaqueRecord): boolean {
-  return String(e.producto || '').toLowerCase() === 'melon';
-}
-
-/** Reempaques son auditoría; el resultado ya se integró al proceso de origen. */
-function esProcesoCampoMelon(e: EmpaqueRecord): boolean {
-  if (!isMelonEmpaque(e)) return false;
-  const det = parseDetalle(e.detalle_corrida);
-  if (det.anulado) return false;
-  const tipo = String(det.tipo || '').toLowerCase();
-  return tipo !== 'reempaque_melon';
 }
 
 type MelonKpiData = {
@@ -324,12 +318,10 @@ type FiltroAcumuladoTipo = 'todos' | 'variedad' | 'corrida';
 
 function lotesDeProceso(p: ProcesoMelon, empaques: EmpaqueRecord[]): string[] {
   const e = empaques.find((x) => x.id === p.id);
-  const det = parseDetalle(e?.detalle_corrida);
-  const fromConsumos = (det.consumos || [])
-    .map((c) => String(c.lote || '').trim())
-    .filter(Boolean);
-  if (fromConsumos.length > 0) return [...new Set(fromConsumos)];
-  // resumen "LoteA, LoteB" o un solo lote
+  if (e) {
+    const lots = lotesDeEmpaqueMelon(e);
+    if (lots.length > 0) return lots;
+  }
   return String(p.lote || '')
     .split(',')
     .map((s) => s.trim())
@@ -467,19 +459,16 @@ export default function MelonReportes({ empaques, token }: Props) {
     }
   }, [filtroTipo, variedadesDisponibles, corridasDisponibles, filtroValor]);
 
-  const procesosKpi = useMemo(() => {
-    if (filtroTipo === 'todos') return procesos;
-    if (filtroTipo === 'corrida') {
-      if (filtroCorridas.length === 0) return [];
-      const ids = new Set(filtroCorridas.map((id) => Number(id)));
-      return procesos.filter((p) => ids.has(p.id));
-    }
-    if (!filtroValor) return procesos;
-    // variedad: procesos cuyos lotes incluyen esa variedad
-    return procesos.filter((p) =>
-      lotesDeProceso(p, empaques).some((lote) => variedadDesdeLoteMelon(lote) === filtroValor)
-    );
-  }, [procesos, empaques, filtroTipo, filtroValor, filtroCorridas]);
+  const procesosKpi = useMemo(
+    () =>
+      filtrarProcesosAcumulado(
+        procesos,
+        (p) => lotesDeProceso(p, empaques),
+        { tipo: filtroTipo, variedad: filtroValor, corridaIds: filtroCorridas },
+        variedadDesdeLoteMelon
+      ),
+    [procesos, empaques, filtroTipo, filtroValor, filtroCorridas]
+  );
 
   const haParaKpi = useMemo(() => {
     if (filtroTipo === 'todos') {
@@ -511,89 +500,39 @@ export default function MelonReportes({ empaques, token }: Props) {
     [procesosKpi, haParaKpi, pesos.bin_campo_kg]
   );
 
-  type TallaAgg = {
-    label: string;
-    presentacion: string;
-    talla: string;
-    cajas: number;
-    kg: number;
-    llano: number;
-    wallys: number;
-  };
-
   /** Vista del pastel/tabla de tallas: simple (#6s…) o tipos de caja (#6s Jumbo…). */
   const [vistaTallas, setVistaTallas] = useState<'simple' | 'tipos_caja'>('simple');
 
+  /** Mismos empaques que las tarjetas del filtro activo. */
+  const empaquesDistribucion = useMemo(() => {
+    const ids = new Set(procesosKpi.map((p) => p.id));
+    return empaques.filter((e) => ids.has(e.id));
+  }, [empaques, procesosKpi]);
+
   /** Distribución por talla + tipo de caja (todas las calidades, kg). */
-  const porTallaCaja = useMemo(() => {
-    const map = new Map<string, TallaAgg>();
-    for (const e of empaques.filter(esProcesoCampoMelon)) {
-      const det = parseDetalle(e.detalle_corrida);
-      for (const p of det.produccion || []) {
-        const pres = String(p.presentacion || '');
-        const talla = String(p.talla || '');
-        const cajas = Number(p.cantidad) || 0;
-        if (!pres || cajas <= 0) continue;
-        const label = labelTallaCajaMelon(pres, talla);
-        const key = `${pres}|${talla}`;
-        const prev = map.get(key) || {
-          label,
-          presentacion: pres,
-          talla,
-          cajas: 0,
-          kg: 0,
-          llano: 0,
-          wallys: 0,
-        };
-        const kg = cajas * pesoCajaDesdeConfig(pesos, pres, talla);
-        prev.cajas += cajas;
-        prev.kg += kg;
-        if (String(p.calidad || '').toLowerCase() === 'wallys') prev.wallys += kg;
-        else prev.llano += kg;
-        map.set(key, prev);
-      }
-    }
-    return [...map.values()].sort((a, b) => b.kg - a.kg);
-  }, [empaques, pesos]);
+  const porTallaCaja = useMemo(
+    () =>
+      agregarDistribucionTallas(
+        empaquesDistribucion,
+        (pres, talla) => pesoCajaDesdeConfig(pesos, pres, talla),
+        'tipos_caja'
+      ),
+    [empaquesDistribucion, pesos]
+  );
 
   /** Distribución solo por talla (#6s, #9s…), sumando todos los tipos de caja. */
-  const porTallaSimple = useMemo(() => {
-    const map = new Map<string, TallaAgg>();
-    for (const e of empaques.filter(esProcesoCampoMelon)) {
-      const det = parseDetalle(e.detalle_corrida);
-      for (const p of det.produccion || []) {
-        const pres = String(p.presentacion || '');
-        const tallaRaw = String(p.talla || '').replace(/^#/, '').replace(/s$/i, '').trim();
-        const cajas = Number(p.cantidad) || 0;
-        if (!tallaRaw || cajas <= 0) continue;
-        const label = `#${tallaRaw}s`;
-        const prev = map.get(tallaRaw) || {
-          label,
-          presentacion: '',
-          talla: tallaRaw,
-          cajas: 0,
-          kg: 0,
-          llano: 0,
-          wallys: 0,
-        };
-        const kg = cajas * pesoCajaDesdeConfig(pesos, pres, tallaRaw);
-        prev.cajas += cajas;
-        prev.kg += kg;
-        if (String(p.calidad || '').toLowerCase() === 'wallys') prev.wallys += kg;
-        else prev.llano += kg;
-        map.set(tallaRaw, prev);
-      }
-    }
-    // Orden típico de calibre: 6, 9, 12, 15…
-    return [...map.values()].sort((a, b) => {
-      const na = Number(a.talla) || 0;
-      const nb = Number(b.talla) || 0;
-      if (na !== nb) return na - nb;
-      return b.kg - a.kg;
-    });
-  }, [empaques, pesos]);
+  const porTallaSimple = useMemo(
+    () =>
+      agregarDistribucionTallas(
+        empaquesDistribucion,
+        (pres, talla) => pesoCajaDesdeConfig(pesos, pres, talla),
+        'simple'
+      ),
+    [empaquesDistribucion, pesos]
+  );
 
   const distribucionTallas = vistaTallas === 'simple' ? porTallaSimple : porTallaCaja;
+  const totalesTallas = sumaKgTallas(distribucionTallas);
 
   const porLote = useMemo(() => {
     type LoteAgg = {
@@ -1037,6 +976,14 @@ export default function MelonReportes({ empaques, token }: Props) {
             {vistaTallas === 'simple'
               ? 'Solo tallas (#6s, #9s, #12s…). Suma todos los tipos de caja. Kg = LLANO + Wallys.'
               : 'Talla × tipo de caja (ej. #6s Jumbo, #9s Chica, #12s Normal). Kg = LLANO + Wallys.'}
+            {' '}
+            {filtroTipo === 'todos'
+              ? 'Todo el acumulado.'
+              : filtroTipo === 'variedad'
+                ? `Solo la variedad ${filtroValor || '—'}.`
+                : `Solo ${filtroCorridas.length} corrida${filtroCorridas.length === 1 ? '' : 's'}.`}
+            {' '}
+            El total es el mismo que 1ra LLANO + 2da Wallys de las tarjetas.
           </p>
           {distribucionTallas.length === 0 ? (
             <p style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
@@ -1118,6 +1065,17 @@ export default function MelonReportes({ empaques, token }: Props) {
                   </tr>
                 ))}
               </tbody>
+              {distribucionTallas.length > 0 && (
+                <tfoot>
+                  <tr style={{ background: '#f8fafc', fontWeight: 700 }}>
+                    <td style={td}>Total</td>
+                    <td style={td}>{fmtNum(totalesTallas.cajas, 0)}</td>
+                    <td style={td}>{fmtNum(totalesTallas.llano, 0)}</td>
+                    <td style={td}>{fmtNum(totalesTallas.wallys, 0)}</td>
+                    <td style={td}>{fmtNum(totalesTallas.kg, 0)}</td>
+                  </tr>
+                </tfoot>
+              )}
             </table>
           </div>
 
