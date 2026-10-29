@@ -2763,6 +2763,7 @@ def _eliminar_proceso_melon_activo(
 def eliminar_empaque_anulado(
     empaque_id: int,
     confirmar_reempaques: bool = False,
+    forzar_faltantes: bool = False,
     db: Session = Depends(get_db),
     current_user=Depends(require_roles([Rol.ADMIN])),
 ):
@@ -2788,7 +2789,9 @@ def eliminar_empaque_anulado(
         if _es_reempaque_melon_detalle(detalle):
             from app.routers.reempaque_melon import revertir_reempaque_melon
 
-            info = revertir_reempaque_melon(db, emp, commit=True)
+            info = revertir_reempaque_melon(
+                db, emp, commit=True, forzar_faltantes=forzar_faltantes
+            )
             return EliminarEmpaqueResponse(message=info["message"], id=empaque_id)
 
         refs = _reempaques_de_proceso(db, emp.id)
@@ -2820,7 +2823,12 @@ def eliminar_empaque_anulado(
                 ordenados = sorted(refs, key=lambda e: e.id or 0, reverse=True)
                 ids_rev = [int(r.id) for r in ordenados]
                 for rev in ordenados:
-                    revertir_reempaque_melon(db, rev, commit=False)
+                    revertir_reempaque_melon(
+                        db,
+                        rev,
+                        commit=False,
+                        forzar_faltantes=forzar_faltantes,
+                    )
             resp = _eliminar_proceso_melon_activo(db, emp, commit=True)
             if ids_rev:
                 ids = ", ".join(f"#{i}" for i in ids_rev)

@@ -8,6 +8,7 @@ Requiere las dependencias del backend y el paquete httpx.
 """
 import os
 import sys
+from datetime import date
 from pathlib import Path
 
 os.environ["SECRET_KEY"] = "test-secret-key-repro"
@@ -25,6 +26,7 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.core.database import SessionLocal
 from app.models.inventory import (
+    Embarque,
     Empaque,
     InventarioDesverdizado,
     InventarioFinal,
@@ -710,6 +712,11 @@ def main():
         },
     )
     check(emb2.status_code == 200, f"embarque resultado {emb2.status_code} {emb2.text[:160]}")
+    db = SessionLocal()
+    emb2_row = db.query(Embarque).filter(Embarque.id == emb2.json()["id"]).first()
+    emb2_row.fecha_salida = date(2026, 11, 2)
+    db.commit()
+    db.close()
     blk_ship = client.delete(f"/api/empaque/{r_new.json()['id']}", headers=h)
     check(blk_ship.status_code == 409, f"reempaque embarcado no se borra {blk_ship.status_code} {blk_ship.text[:220]}")
     blk_proc = client.delete(
@@ -718,6 +725,267 @@ def main():
     check(blk_proc.status_code == 409, f"el proceso tampoco se borra si el resultado ya se embarcó {blk_proc.status_code} {blk_proc.text[:220]}")
     check(any(e["id"] == proc_c["id"] for e in snap()["emps"]), "el proceso de la cadena sigue")
     check(bins_de(lote_c) == 0, f"bins de la cadena siguen empacados ({bins_de(lote_c)})")
+    # forzar no salta el embarque
+    blk_force = client.delete(
+        f"/api/empaque/{r_new.json()['id']}?forzar_faltantes=true", headers=h
+    )
+    check(
+        blk_force.status_code == 409 and "embarque" in blk_force.text.lower(),
+        f"forzar no borra si hay embarque {blk_force.status_code} {blk_force.text[:220]}",
+    )
+    check(bins_de(lote_c) == 0, "forzar con embarque no movió bins")
+
+    # Como el reempaque #98: el resultado quedó en 0 sin embarque (corrección vieja).
+    lote_f = "Rancho S4 Krypto"
+    recepcion(h, lote_f, 10, "2026-10-15")
+    proc_f = empacar(
+        h,
+        "2026-10-22",
+        lote_f,
+        "2026-10-15",
+        10,
+        [linea("2026-10-22", lote_f, 80, "llano", talla="9")],
+    )
+    re_f = client.post(
+        "/api/correcciones/reempaque-melon",
+        headers=h,
+        json={
+            "fecha_origen": "2026-10-22",
+            "fecha_reempaque": "2026-10-24",
+            "salidas": [
+                {
+                    "empaque_id": proc_f["id"],
+                    "presentacion": "caja_normal_b",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "lote": lote_f,
+                    "cantidad": 80,
+                }
+            ],
+            "resultados": [
+                {
+                    "presentacion": "caja_normal_b",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "lote": lote_f,
+                    "cantidad": 20,
+                },
+                {
+                    "presentacion": "caja_chica_a",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "lote": lote_f,
+                    "cantidad": 56,
+                },
+            ],
+        },
+    )
+    check(re_f.status_code == 200, f"reempaque faltantes {re_f.status_code} {re_f.text[:180]}")
+    re_f_id = re_f.json()["id"]
+    db = SessionLocal()
+    tocadas = 0
+    for inv in db.query(InventarioFinal).all():
+        extra = inv.atributos_extra or {}
+        if (
+            extra.get("presentacion") == "caja_chica_a"
+            and str(extra.get("talla")) == "9"
+            and extra.get("lote") == lote_f
+        ):
+            inv.cantidad_stock = 0
+            tocadas += 1
+    db.commit()
+    db.close()
+    check(tocadas == 1, f"se puso en 0 la fila chica, filas={tocadas}")
+    bins_antes = bins_de(lote_f)
+    aviso = client.delete(f"/api/empaque/{re_f_id}", headers=h)
+    check(aviso.status_code == 409, f"avisa faltantes {aviso.status_code} {aviso.text[:280]}")
+    det_aviso = aviso.json().get("detail")
+    check(
+        isinstance(det_aviso, dict) and det_aviso.get("code") == "confirmar_faltantes",
+        f"code confirmar_faltantes {det_aviso}",
+    )
+    check(
+        "56" in str(det_aviso) and "cajas chica" in str(det_aviso).lower(),
+        "el aviso dice que faltan 56 cajas chica",
+    )
+    check(bins_de(lote_f) == bins_antes == 0, "el aviso no movió bins")
+    sigue = next(e for e in snap()["emps"] if e["id"] == proc_f["id"])
+    cajas9 = sum(int(p["cantidad"]) for p in sigue["produccion"] if str(p.get("talla")) == "9" and p.get("presentacion") == "caja_normal_b")
+    check(cajas9 == 20, f"sin confirmar, el proceso sigue en 20 normal (80-80+20), hay {cajas9}")
+    hecho = client.delete(f"/api/empaque/{re_f_id}?forzar_faltantes=true", headers=h)
+    check(hecho.status_code == 200, f"forzar faltantes {hecho.status_code} {hecho.text[:300]}")
+    check(bins_de(lote_f) == 0, f"reempaque forzado no movió bins ({bins_de(lote_f)})")
+    restaurado = next(e for e in snap()["emps"] if e["id"] == proc_f["id"])
+    cajas9b = sum(
+        int(p["cantidad"])
+        for p in restaurado["produccion"]
+        if str(p.get("talla")) == "9" and p.get("presentacion") == "caja_normal_b"
+    )
+    chica = sum(
+        int(p["cantidad"])
+        for p in restaurado["produccion"]
+        if p.get("presentacion") == "caja_chica_a"
+    )
+    check(cajas9b == 80, f"volvieron las 80 cajas originales #9, hay {cajas9b}")
+    check(chica == 0, f"el proceso ya no lista la caja chica, hay {chica}")
+    inv_chica = [
+        i
+        for i in snap()["inv"]
+        if (i["extra"] or {}).get("presentacion") == "caja_chica_a"
+        and (i["extra"] or {}).get("lote") == lote_f
+    ]
+    check(
+        all(i["stock"] >= 0 for i in snap()["inv"]) and all(i["stock"] == 0 for i in inv_chica),
+        f"caja chica no quedó negativa {inv_chica}",
+    )
+    inv_norm = cajas_inv("9", lote_f, "2026-10-22")
+    # normal: 80 - 80 + 20 = 20 antes de deshacer; al deshacer se quitan 20 y vuelven 80 → 80
+    check(
+        len(inv_norm) == 1 and inv_norm[0]["stock"] == 80,
+        f"inventario del día original volvió a 80 {inv_norm}",
+    )
+    check(all(e["id"] != re_f_id for e in snap()["emps"]), "reempaque faltante borrado")
+
+    # Cascada: borrar el proceso pide el aviso de faltantes y, al confirmar, devuelve los bins una vez.
+    lote_g = "Bajio S8 Krypto"
+    recepcion(h, lote_g, 10, "2026-10-18")
+    proc_g = empacar(
+        h,
+        "2026-10-22",
+        lote_g,
+        "2026-10-18",
+        10,
+        [linea("2026-10-22", lote_g, 50, "llano", talla="9")],
+    )
+    re_g = client.post(
+        "/api/correcciones/reempaque-melon",
+        headers=h,
+        json={
+            "fecha_origen": "2026-10-22",
+            "fecha_reempaque": "2026-10-24",
+            "salidas": [
+                {
+                    "empaque_id": proc_g["id"],
+                    "presentacion": "caja_normal_b",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "lote": lote_g,
+                    "cantidad": 20,
+                }
+            ],
+            "resultados": [
+                {
+                    "presentacion": "caja_chica_a",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "lote": lote_g,
+                    "cantidad": 15,
+                }
+            ],
+        },
+    )
+    check(re_g.status_code == 200, f"reempaque cascada {re_g.status_code}")
+    db = SessionLocal()
+    for inv in db.query(InventarioFinal).all():
+        extra = inv.atributos_extra or {}
+        if extra.get("lote") == lote_g and extra.get("presentacion") == "caja_chica_a":
+            inv.cantidad_stock = 0
+    db.commit()
+    db.close()
+    solo_re = client.delete(
+        f"/api/empaque/{proc_g['id']}?confirmar_reempaques=true", headers=h
+    )
+    check(
+        solo_re.status_code == 409
+        and solo_re.json().get("detail", {}).get("code") == "confirmar_faltantes",
+        f"cascada avisa faltantes {solo_re.status_code} {solo_re.text[:240]}",
+    )
+    check(bins_de(lote_g) == 0, "el aviso de cascada no movió bins")
+    check(any(e["id"] == re_g.json()["id"] for e in snap()["emps"]), "el reempaque sigue hasta confirmar faltantes")
+    ambos = client.delete(
+        f"/api/empaque/{proc_g['id']}?confirmar_reempaques=true&forzar_faltantes=true",
+        headers=h,
+    )
+    check(ambos.status_code == 200, f"cascada forzada {ambos.status_code} {ambos.text[:240]}")
+    check(bins_de(lote_g) == 10, f"cascada devolvió 10 bins una vez ({bins_de(lote_g)})")
+    check(
+        all(e["id"] not in (proc_g["id"], re_g.json()["id"]) for e in snap()["emps"]),
+        "proceso y reempaque de la cascada borrados",
+    )
+    check(all(i["stock"] >= 0 for i in snap()["inv"]), "ningún inventario quedó negativo")
+
+    # Mismo faltante, pero con embarque posterior de esa caja: se bloquea aunque se fuerce.
+    lote_e = "Rancho S4 Krypto B"
+    recepcion(h, lote_e, 4, "2026-10-16")
+    proc_e = empacar(
+        h,
+        "2026-10-22",
+        lote_e,
+        "2026-10-16",
+        4,
+        [linea("2026-10-22", lote_e, 40, "llano", talla="12")],
+    )
+    re_e = client.post(
+        "/api/correcciones/reempaque-melon",
+        headers=h,
+        json={
+            "fecha_origen": "2026-10-22",
+            "fecha_reempaque": "2026-10-23",
+            "salidas": [
+                {
+                    "empaque_id": proc_e["id"],
+                    "presentacion": "caja_normal_b",
+                    "talla": "12",
+                    "calidad": "llano",
+                    "lote": lote_e,
+                    "cantidad": 10,
+                }
+            ],
+            "resultados": [
+                {
+                    "presentacion": "caja_chica_a",
+                    "talla": "15",
+                    "calidad": "llano",
+                    "lote": lote_e,
+                    "cantidad": 8,
+                }
+            ],
+        },
+    )
+    check(re_e.status_code == 200, f"reempaque embarcable {re_e.status_code} {re_e.text[:160]}")
+    cli_e = client.post("/api/clientes/", headers=h, json={"nombre": "Cliente Faltante", "activo": 1})
+    emb_e = client.post(
+        "/api/embarques/",
+        headers=h,
+        json={
+            "cliente_id": cli_e.json()["id"],
+            "notas": "despues del reempaque",
+            "detalles": [
+                {
+                    "producto": "melon",
+                    "mercado": "nacional",
+                    "cantidad_cajas": 3,
+                    "presentacion": "caja_chica_a",
+                    "talla": "15",
+                    "calidad": "llano",
+                }
+            ],
+        },
+    )
+    check(emb_e.status_code == 200, f"embarque chica {emb_e.status_code} {emb_e.text[:160]}")
+    db = SessionLocal()
+    emb_row = db.query(Embarque).filter(Embarque.id == emb_e.json()["id"]).first()
+    emb_row.fecha_salida = date(2026, 10, 25)
+    db.commit()
+    db.close()
+    no_force = client.delete(f"/api/empaque/{re_e.json()['id']}", headers=h)
+    si_force = client.delete(
+        f"/api/empaque/{re_e.json()['id']}?forzar_faltantes=true", headers=h
+    )
+    check(no_force.status_code == 409 and "embarque" in no_force.text.lower(), f"bloquea por embarque {no_force.text[:220]}")
+    check(si_force.status_code == 409 and "embarque" in si_force.text.lower(), f"forzar no salta embarque {si_force.text[:220]}")
+    check(any(e["id"] == re_e.json()["id"] for e in snap()["emps"]), "el reempaque embarcado sigue")
+    check(bins_de(lote_e) == 0, "bins del caso embarque no se movieron")
 
     print("\nFALLOS", len(FAILS))
     for f in FAILS:

@@ -759,23 +759,43 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setError('');
     setOkMsg('');
     try {
-      let res: { message: string; id: number };
-      try {
-        res = await eliminarEmpaqueAnulado(token, id, false);
-      } catch (err: any) {
-        const detail = err?.response?.data?.detail;
-        const pideConfirmar =
-          err?.response?.status === 409 &&
-          detail &&
-          typeof detail === 'object' &&
-          (detail as { code?: string }).code === 'confirmar_reempaques';
-        if (!pideConfirmar) throw err;
-        const texto = String((detail as { message?: string }).message || '');
-        if (!confirm(texto)) {
-          setError('No se eliminó el proceso ni sus reempaques.');
-          return;
+      let res: { message: string; id: number } | undefined;
+      let confirmarReempaques = false;
+      let forzarFaltantes = false;
+      while (!res) {
+        try {
+          res = await eliminarEmpaqueAnulado(
+            token,
+            id,
+            confirmarReempaques,
+            forzarFaltantes
+          );
+        } catch (err: any) {
+          const detail = err?.response?.data?.detail;
+          const code =
+            err?.response?.status === 409 && detail && typeof detail === 'object'
+              ? String((detail as { code?: string }).code || '')
+              : '';
+          if (code === 'confirmar_reempaques' && !confirmarReempaques) {
+            const texto = String((detail as { message?: string }).message || '');
+            if (!confirm(texto)) {
+              setError('No se eliminó el proceso ni sus reempaques.');
+              return;
+            }
+            confirmarReempaques = true;
+            continue;
+          }
+          if (code === 'confirmar_faltantes' && !forzarFaltantes) {
+            const texto = String((detail as { message?: string }).message || '');
+            if (!confirm(texto)) {
+              setError('No se eliminó nada.');
+              return;
+            }
+            forzarFaltantes = true;
+            continue;
+          }
+          throw err;
         }
-        res = await eliminarEmpaqueAnulado(token, id, true);
       }
       setOkMsg(res.message || `Proceso de melón #${id} eliminado`);
       if (selectedId === id) setSelectedId(null);

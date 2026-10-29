@@ -26,12 +26,13 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.database import get_db
 from app.core.security import require_roles
 from app.models.enums import Rol, Producto, TipoMercado
-from app.models.inventory import Empaque
+from app.models.inventory import Embarque, EmbarqueDetalle, Empaque
 from app.routers.empaque import (
     _ajustar_inventario_final,
     _detalle_as_dict,
+    _filas_para_restar_melon,
     _parse_fecha_empaque,
-    _problemas_stock_cajas_melon,
+    _partes_linea_melon,
     _sync_legacy_empaque_fields,
 )
 
@@ -215,7 +216,8 @@ def _restar_de_produccion_empaque(
     calidad: str,
     lote: str | None,
     cantidad: int,
-) -> None:
+    exigir: bool = True,
+) -> int:
     det = _detalle_as_dict(emp.detalle_corrida)
     prod = list(det.get("produccion") or [])
     need = int(cantidad)
@@ -273,7 +275,7 @@ def _restar_de_produccion_empaque(
                 p["cantidad_parrillas"] = round(new_cant / cpp, 4) if new_cant else 0
             prod[i] = p
             need -= take
-    if need > 0:
+    if need > 0 and exigir:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -291,6 +293,7 @@ def _restar_de_produccion_empaque(
         consumos=det.get("consumos") or [],
         bins_usados=int(emp.bins_desverdizado_usados or 0),
     )
+    return int(cantidad) - max(need, 0)
 
 
 def _sumar_a_produccion_empaque(
@@ -618,16 +621,198 @@ def _lineas_salida(det: dict) -> list[dict]:
     return [s for s in raw if isinstance(s, dict) and int(s.get("cantidad") or 0) > 0]
 
 
+_CAJAS_MELON = {
+    "caja_chica_a": "caja chica",
+    "caja_normal_b": "caja normal",
+    "caja_jumbo_c": "caja jumbo",
+}
+
+
+def _etiqueta_caja(pres: str, talla, cal: str | None, cantidad: int | None = None) -> str:
+    nombre = _CAJAS_MELON.get(pres, pres or "cajas")
+    if cantidad is not None and int(cantidad) != 1 and nombre.startswith("caja "):
+        nombre = "cajas " + nombre[len("caja ") :]
+    extra = ""
+    if talla:
+        extra += f" talla {talla}"
+    if cal:
+        extra += f" {cal}"
+    return f"{nombre}{extra}"
+
+
+def _fecha_reempaque_de(audit: Empaque, det: dict):
+    from datetime import date, datetime
+
+    raw = det.get("fecha_reempaque") or audit.fecha
+    if raw is None:
+        return None
+    if isinstance(raw, datetime):
+        return raw.date()
+    if isinstance(raw, date):
+        return raw
+    s = str(raw).strip()[:10]
+    try:
+        return date.fromisoformat(s)
+    except ValueError:
+        return None
+
+
+def _embarques_posibles_de_linea(db: Session, fecha_reempaque, linea: dict) -> list[int]:
+    """
+    Embarques que pudieron llevar estas cajas.
+
+    embarque_detalle no guarda lote ni fecha de empaque. Un embarque de melón
+    a veces queda con producto limón porque la captura manda la presentación.
+    Se toma como posible si es caja de melón (chica/normal/jumbo), misma
+    presentación, talla y calidad, y la salida es el día del reempaque o después.
+    Si el embarque no tiene fecha, también cuenta: no se puede probar que fue antes.
+    """
+    pres, _cant, talla, _lote, _fecha, cal = _partes_linea_melon(linea)
+    if pres not in _CAJAS_MELON:
+        return []
+    cal_n = (cal or "").strip().lower()
+    talla_n = talla or ""
+    ids: list[int] = []
+    vistos: set[int] = set()
+    rows = (
+        db.query(EmbarqueDetalle, Embarque)
+        .join(Embarque, EmbarqueDetalle.embarque_id == Embarque.id)
+        .all()
+    )
+    for det_e, emb in rows:
+        if (emb.estado or "").lower() == "anulado":
+            continue
+        if int(det_e.cantidad_cajas or 0) <= 0:
+            continue
+        dpres = str(det_e.presentacion or "").strip()
+        dprod = str(getattr(det_e.producto, "value", det_e.producto) or "").lower()
+        if dpres not in _CAJAS_MELON and dprod != "melon":
+            continue
+        if dpres != pres:
+            continue
+        from app.routers.empaque import _talla_for_pres
+
+        if (_talla_for_pres(dpres, det_e.talla) or "") != talla_n:
+            continue
+        dcal = str(det_e.calidad or "").strip().lower()
+        if dcal and cal_n and dcal != cal_n:
+            continue
+        fs = emb.fecha_salida
+        if fs is not None and fecha_reempaque is not None and fs < fecha_reempaque:
+            continue
+        if emb.id not in vistos:
+            vistos.add(emb.id)
+            ids.append(emb.id)
+    return ids
+
+
+def revisar_faltantes_reempaque(db: Session, audit: Empaque) -> dict:
+    """
+    No modifica nada.
+    embarques: faltan cajas y hay un embarque que pudo llevárselas (bloqueo).
+    faltantes: faltan cajas y no hay embarque ni reempaque posterior (se puede confirmar).
+    """
+    det = _detalle_as_dict(audit.detalle_corrida)
+    fecha_re = _fecha_reempaque_de(audit, det)
+    embarques: list[dict] = []
+    faltantes: list[dict] = []
+    for linea in _lineas_resultado(det):
+        pres, cant, talla, lote, fecha, cal = _partes_linea_melon(linea)
+        if not pres or cant <= 0:
+            continue
+        rows = _filas_para_restar_melon(
+            db,
+            pres=pres,
+            talla=talla,
+            lote=lote,
+            fecha=fecha,
+            calidad=cal,
+            mercado=audit.mercado,
+            cantidad=cant,
+        )
+        hay = sum(int(r.cantidad_stock or 0) for r in rows)
+        if hay >= cant:
+            continue
+        item = {
+            "reempaque_id": audit.id,
+            "presentacion": pres,
+            "talla": talla,
+            "calidad": cal,
+            "lote": lote,
+            "fecha_empaque": fecha,
+            "pedido": cant,
+            "hay": hay,
+            "faltan": cant - hay,
+            "etiqueta": _etiqueta_caja(pres, talla, cal, cant - hay),
+        }
+        emb_ids = _embarques_posibles_de_linea(db, fecha_re, linea)
+        if emb_ids:
+            item["embarques"] = emb_ids
+            embarques.append(item)
+        else:
+            faltantes.append(item)
+    return {"embarques": embarques, "faltantes": faltantes}
+
+
+def _mensaje_bloqueo_embarque(audit_id: int, items: list[dict]) -> str:
+    lineas = []
+    for it in items:
+        emb = ", ".join(f"#{i}" for i in it.get("embarques") or [])
+        lineas.append(
+            f"faltan {it['faltan']} {it['etiqueta']} y hay embarque posterior ({emb}) "
+            f"de esa misma presentación, talla y calidad"
+        )
+    return (
+        f"No se puede eliminar el reempaque #{audit_id}: "
+        + "; ".join(lineas)
+        + ". Esas cajas pudieron embarcarse. No se cambió nada."
+    )
+
+
+def _mensaje_confirmacion_faltantes(items: list[dict]) -> str:
+    por_re: dict[int, list[dict]] = {}
+    for it in items:
+        por_re.setdefault(int(it["reempaque_id"]), []).append(it)
+    bloques = []
+    for rid, lineas in por_re.items():
+        detalle = []
+        for it in lineas:
+            donde = ""
+            if it.get("lote") or it.get("fecha_empaque"):
+                donde = (
+                    f" (lote {it.get('lote') or '—'}, día {it.get('fecha_empaque') or '—'})"
+                )
+            detalle.append(
+                f"faltan {it['faltan']} {it['etiqueta']}{donde}; "
+                f"hay {it['hay']}, se quitarán solo las que existen"
+            )
+        bloques.append(
+            f"Reempaque #{rid}: " + "; ".join(detalle)
+        )
+    return (
+        "Faltan cajas en el inventario y no hay embarque posterior ni otro reempaque "
+        "que las explique (pudo ser una corrección vieja):\n"
+        + "\n".join(f"• {b}" for b in bloques)
+        + "\n\nSi continúas, se quitan solo las cajas que sí están, vuelven las cajas "
+        "originales a su día de empaque y se borra el reempaque. Los bins no se mueven.\n\n"
+        "¿Continuar?"
+    )
+
+
 def revertir_reempaque_melon(
-    db: Session, audit: Empaque, *, commit: bool = True
+    db: Session,
+    audit: Empaque,
+    *,
+    commit: bool = True,
+    forzar_faltantes: bool = False,
 ) -> dict:
     """
     Deshace un reempaque de melón sin tocar bins.
 
-    Quita del día de origen las cajas recuperadas y devuelve las cajas
-    que se habían sacado (la merma vuelve como cajas originales).
-    Si esas cajas ya se embarcaron o un reempaque posterior las volvió
-    a usar, no cambia nada.
+    Quita del día de origen las cajas recuperadas que sí estén en inventario
+    y devuelve las cajas que se habían sacado (la merma vuelve como cajas originales).
+    Si un reempaque posterior las usó, o un embarque posterior pudo llevárselas,
+    no cambia nada. Si faltan cajas sin esa explicación, pide forzar_faltantes.
     """
     det = _detalle_as_dict(audit.detalle_corrida)
     if (det.get("tipo") or "") != TIPO_REEMPAQUE:
@@ -663,16 +848,22 @@ def revertir_reempaque_melon(
 
     resultados = _lineas_resultado(det)
     salidas = _lineas_salida(det)
-    problemas = _problemas_stock_cajas_melon(db, audit.mercado, resultados)
-    if problemas:
+    revision = revisar_faltantes_reempaque(db, audit)
+    if revision["embarques"]:
         raise HTTPException(
             status_code=409,
-            detail=(
-                f"No se puede eliminar el reempaque #{audit.id}. "
-                + " | ".join(problemas)
-                + " No se cambió nada."
-            ),
+            detail=_mensaje_bloqueo_embarque(audit.id, revision["embarques"]),
         )
+    if revision["faltantes"] and not forzar_faltantes:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "confirmar_faltantes",
+                "message": _mensaje_confirmacion_faltantes(revision["faltantes"]),
+                "faltantes": revision["faltantes"],
+            },
+        )
+    permitir_parcial = bool(revision["faltantes"]) and forzar_faltantes
 
     dest_id = det.get("proceso_destino_id")
     try:
@@ -738,17 +929,29 @@ def revertir_reempaque_melon(
             calidad=str(r.get("calidad") or "llano"),
             lote=(str(r.get("lote") or "").strip() or None),
             cantidad=int(r.get("cantidad") or 0),
+            exigir=not permitir_parcial,
         )
+    cajas_quitadas = 0
     if resultados:
-        _ajustar_inventario_final(
+        aplicadas, problemas_rev = _ajustar_inventario_final(
             db,
             Producto.MELON,
             audit.mercado,
             resultados,
             signo=-1,
-            best_effort=False,
+            best_effort=permitir_parcial,
             ignorar_reclamo_empaque_id=dest_id_i,
         )
+        if problemas_rev and not permitir_parcial:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se puede eliminar el reempaque #{audit.id}. "
+                    + " | ".join(problemas_rev)
+                    + " No se cambió nada."
+                ),
+            )
+        cajas_quitadas = sum(int(a.get("cantidad") or 0) for a in aplicadas)
 
     credit: list[dict] = []
     for s in salidas:
@@ -785,16 +988,23 @@ def revertir_reempaque_melon(
         )
 
     cajas_devueltas = sum(int(s.get("cantidad") or 0) for s in salidas)
-    cajas_quitadas = sum(int(r.get("cantidad") or 0) for r in resultados)
     db.delete(audit)
     db.flush()
     if commit:
         db.commit()
+    aviso_falt = ""
+    if revision["faltantes"]:
+        aviso_falt = (
+            " No estaban en inventario: "
+            + ", ".join(f"{it['faltan']} {it['etiqueta']}" for it in revision["faltantes"])
+            + "."
+        )
     return {
         "message": (
             f"Reempaque #{audit.id} eliminado. "
             f"Volvieron {cajas_devueltas} cajas al día de empaque "
-            f"y se quitaron {cajas_quitadas} cajas recuperadas. "
+            f"y se quitaron {cajas_quitadas} cajas recuperadas que sí había."
+            f"{aviso_falt} "
             f"Los bins no se movieron."
         ),
         "id": audit.id,
