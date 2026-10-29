@@ -780,6 +780,53 @@ def historial_movimientos(
                     }
                 )
 
+        # Bins devueltos al cancelar un empaque cuando ya no había recepción
+        # de ese corte: la fila de inventario queda con recepcion_id vacío.
+        for d in (
+            db.query(InventarioDesverdizado)
+            .filter(
+                InventarioDesverdizado.recepcion_id.is_(None),
+                InventarioDesverdizado.cantidad_bins > 0,
+            )
+            .order_by(InventarioDesverdizado.fecha_recepcion.desc())
+            .all()
+        ):
+            if (d.estado or "").lower() == "eliminado":
+                continue
+            ufields = _usuario_fields(users, getattr(d, "usuario_id", None))
+            bins_n = int(d.cantidad_bins or 0)
+            corte = str(d.fecha_recepcion) if d.fecha_recepcion else None
+            items.append(
+                {
+                    "modulo": "bins_devueltos",
+                    "id": d.id,
+                    "fecha": corte,
+                    "hora": None,
+                    "titulo": "Bins devueltos por cancelación (sin recepción ligada)",
+                    "resumen": (
+                        f"Lote {d.lote or '—'} · {bins_n} bins · corte {corte or '—'}"
+                    ),
+                    "detalle": (
+                        "Estos bins volvieron al inventario al cancelar un proceso "
+                        "de empaque y no tienen recepción ligada. "
+                        "Eliminarlos solo quita esta fila del inventario de bins."
+                    ),
+                    "producto": _pval(d.producto),
+                    "puede_editar": False,
+                    "puede_eliminar": True,
+                    **ufields,
+                    "meta": {
+                        "huerfano": True,
+                        "lote": d.lote,
+                        "cantidad_bins": bins_n,
+                        "fecha_corte": corte,
+                        "fecha_recepcion": corte,
+                        "estado": d.estado,
+                        "recepcion_id": None,
+                    },
+                }
+            )
+
     if mod in ("todos", "empaque"):
         for e in db.query(Empaque).order_by(Empaque.id.desc()).limit(limit).all():
             det = e.detalle_corrida if isinstance(e.detalle_corrida, dict) else {}
@@ -923,9 +970,86 @@ def historial_movimientos(
         return (f, it.get("id") or 0)
 
     items.sort(key=sort_key, reverse=True)
+    page = items[:limit]
+    # Los bins devueltos suelen ser cortes viejos. Si el límite se llena con
+    # movimientos más nuevos, igual se muestran: son los que hay que poder borrar.
+    vistos = {(it.get("modulo"), it.get("id")) for it in page}
+    faltan = [
+        it
+        for it in items
+        if it.get("modulo") == "bins_devueltos"
+        and (it.get("modulo"), it.get("id")) not in vistos
+    ]
+    if faltan:
+        page = page + faltan
+        page.sort(key=sort_key, reverse=True)
     return {
         "total": len(items),
-        "items": items[:limit],
+        "items": page,
+    }
+
+
+@router.delete("/bins-devueltos/{desverdizado_id}")
+def eliminar_bins_devueltos(
+    desverdizado_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    """
+    Quita una fila de bins devueltos que no tiene recepción ligada.
+    Solo esa fila. No toca otras filas, procesos, cajas ni recepciones.
+    """
+    from sqlalchemy.exc import IntegrityError
+
+    d = (
+        db.query(InventarioDesverdizado)
+        .filter(InventarioDesverdizado.id == desverdizado_id)
+        .first()
+    )
+    if not d or (d.estado or "").lower() == "eliminado":
+        raise HTTPException(status_code=404, detail="Fila de bins no encontrada")
+    if d.recepcion_id is not None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Esta fila está ligada a una recepción. "
+                "Bórrala desde la recepción, no como bins devueltos."
+            ),
+        )
+    bins = int(d.cantidad_bins or 0)
+    if bins <= 0:
+        raise HTTPException(status_code=400, detail="Esta fila ya no tiene bins")
+
+    lote = d.lote
+    corte = str(d.fecha_recepcion) if d.fecha_recepcion else None
+    try:
+        db.delete(d)
+        db.commit()
+        como = "eliminada"
+    except IntegrityError:
+        db.rollback()
+        d = (
+            db.query(InventarioDesverdizado)
+            .filter(InventarioDesverdizado.id == desverdizado_id)
+            .first()
+        )
+        if not d:
+            raise HTTPException(status_code=404, detail="Fila de bins no encontrada")
+        d.cantidad_bins = 0
+        d.estado = "eliminado"
+        db.commit()
+        como = "puesta en cero (otra tabla la referencia y no se pudo borrar la fila)"
+
+    return {
+        "message": (
+            f"Se quitaron {bins} bins del lote {lote or '—'} "
+            f"(corte {corte or '—'}). La fila quedó {como}. "
+            f"No se tocaron otros lotes, procesos, cajas ni recepciones."
+        ),
+        "id": desverdizado_id,
+        "lote": lote,
+        "fecha_corte": corte,
+        "bins_eliminados": bins,
     }
 
 
