@@ -673,6 +673,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     }
   };
 
+  const esEmpaqueMelon = (m: { producto?: string | null; modulo?: string }) =>
+    m.modulo === 'empaque' && String(m.producto || '').toLowerCase() === 'melon';
+
   /** Ejecuta borrado/anulación de un movimiento sin diálogo (para masivo). */
   const ejecutarEliminarMovimiento = async (
     m: HistorialMovimiento,
@@ -680,6 +683,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   ): Promise<{ ok: boolean; message: string }> => {
     if (m.modulo === 'empaque') {
       const yaAnulado = Boolean(m.meta?.anulado);
+      // Melón: un solo paso. Si las cajas ya salieron, el backend responde 409 y no se fuerza.
+      if (esEmpaqueMelon(m)) {
+        const res = await eliminarEmpaqueAnulado(token, m.id);
+        return { ok: true, message: res.message || `Empaque #${m.id} eliminado` };
+      }
       if (yaAnulado) {
         const res = await eliminarEmpaqueAnulado(token, m.id);
         return { ok: true, message: res.message || `Empaque #${m.id} borrado` };
@@ -713,8 +721,49 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     return { ok: false, message: `Módulo no soportado: ${m.modulo}` };
   };
 
+  const handleEliminarProcesoMelon = async (empaqueId?: number) => {
+    const id = empaqueId ?? selectedId;
+    if (!id) return;
+    const reg = empaques.find((e) => e.id === id);
+    const yaAnulado = Boolean(reg?.detalle_corrida?.anulado);
+    if (
+      !confirm(
+        yaAnulado
+          ? `¿Borrar el registro anulado de melón #${id}?\n\n` +
+              `Solo se quita del historial. No mueve bins ni cajas (ya se revirtieron al anular).`
+          : `¿Eliminar el proceso de empaque de melón #${id}?\n\n` +
+              `• Devuelve al inventario los bins que usó este proceso\n` +
+              `• Quita solo las cajas que produjo\n` +
+              `• Borra el proceso por completo\n\n` +
+              `Si esas cajas ya se embarcaron o se reempacaron, no se cambia nada.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const res = await eliminarEmpaqueAnulado(token, id);
+      setOkMsg(res.message || `Proceso de melón #${id} eliminado`);
+      if (selectedId === id) setSelectedId(null);
+      await load();
+      onCorregido?.();
+    } catch (err: any) {
+      setError(
+        formatApiDetail(err?.response?.data?.detail, 'No se pudo eliminar el proceso de melón')
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleHistorialEliminar = async (m: HistorialMovimiento) => {
     if (m.modulo === 'empaque') {
+      if (esEmpaqueMelon(m)) {
+        await handleEliminarProcesoMelon(m.id);
+        return;
+      }
       const yaAnulado = Boolean(m.meta?.anulado);
       if (yaAnulado) {
         await handleBorrarAnulado(m.id);
@@ -876,7 +925,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           `Por tipo:\n${resumenMods}\n\n` +
           `Incluye:\n${preview}${extra}\n\n` +
           `• Recepciones: borra también desverdizado ligado\n` +
-          `• Empaques activos: se ANULAN (revierten stock)\n` +
+          `• Empaque de melón: devuelve sus bins, quita sus cajas y borra el proceso\n` +
+          `• Empaque de limón activo: se ANULA (revierte stock)\n` +
           `• Empaques ya anulados: se borran del historial\n` +
           `• Embarques: devuelven inventario final\n\n` +
           `Esta acción no se puede deshacer.`
@@ -1582,11 +1632,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                                   fontWeight: 600,
                                 }}
                               >
-                                {m.modulo === 'empaque' && m.meta?.anulado
-                                  ? 'Borrar'
-                                  : m.modulo === 'empaque'
-                                    ? 'Anular'
-                                    : 'Eliminar'}
+                                {m.modulo === 'empaque' &&
+                                String(m.producto || '').toLowerCase() === 'melon'
+                                  ? 'Eliminar'
+                                  : m.modulo === 'empaque' && m.meta?.anulado
+                                    ? 'Borrar'
+                                    : m.modulo === 'empaque'
+                                      ? 'Anular'
+                                      : 'Eliminar'}
                               </button>
                             )}
                             {!m.puede_editar && !m.puede_eliminar && (
@@ -1606,8 +1659,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             guardan al usuario logueado). Datos importados viejos pueden decir “Sin registrar”.{' '}
             <strong>Selección múltiple:</strong> marca varias filas y usa “Eliminar
             seleccionados”. <strong>Recepción:</strong> Editar = lote/bins/fecha; Eliminar =
-            borra recepción + desverdizado. <strong>Empaque:</strong> Anular revierte stock; si
-            ya está anulado, Borrar lo quita del historial. <strong>Embarque:</strong> devuelve
+            borra recepción + desverdizado. <strong>Empaque de melón:</strong> Eliminar devuelve
+            los bins, quita solo sus cajas y borra el proceso. <strong>Empaque de limón:</strong>{' '}
+            Anular revierte stock; si ya está anulado, Borrar lo quita del historial.{' '}
+            <strong>Embarque:</strong> devuelve
             inventario final.
           </p>
         </div>
@@ -2431,7 +2486,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                       <button
                         type="button"
                         disabled={busy}
-                        onClick={handleAnular}
+                        onClick={
+                          String(selected.producto || '').toLowerCase() === 'melon'
+                            ? () => handleEliminarProcesoMelon(selected.id)
+                            : handleAnular
+                        }
                         style={{
                           padding: '12px 20px',
                           background: '#dc2626',
@@ -2442,11 +2501,15 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                           fontWeight: 600,
                         }}
                       >
-                        Anular empaque completo
+                        {String(selected.producto || '').toLowerCase() === 'melon'
+                          ? 'Eliminar proceso'
+                          : 'Anular empaque completo'}
                       </button>
                     </div>
                     <p style={{ fontSize: 12, color: '#64748b', marginTop: 10 }}>
-                      Guardar ajusta bins e inventario final. Anular revierte todo el registro.
+                      {String(selected.producto || '').toLowerCase() === 'melon'
+                        ? 'Guardar ajusta bins y cajas. Eliminar devuelve los bins de este proceso, quita solo sus cajas y borra el registro.'
+                        : 'Guardar ajusta bins e inventario final. Anular revierte todo el registro.'}
                     </p>
                   </>
                 )}
