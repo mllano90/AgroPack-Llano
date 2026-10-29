@@ -337,7 +337,15 @@ def main():
     )
     check(re.status_code == 200, f"reempaque {re.status_code} {re.text[:250]}")
     blocked = client.delete(f"/api/empaque/{b['id']}", headers=h)
-    check(blocked.status_code == 409, f"delete con reempaque bloqueado {blocked.status_code} {blocked.text[:220]}")
+    check(blocked.status_code == 409, f"delete con reempaque pide confirmación {blocked.status_code} {blocked.text[:300]}")
+    try:
+        body_b = blocked.json().get("detail")
+    except Exception:
+        body_b = None
+    check(
+        isinstance(body_b, dict) and body_b.get("code") == "confirmar_reempaques",
+        f"409 trae code confirmar_reempaques ({body_b})",
+    )
     still = snap()
     check(any(e["id"] == b["id"] for e in still["emps"]), "B sigue después del bloqueo")
     # cajas de B: 40-10+8 = 38 on the process? salida 10, resultado 8 added. 30 remaining original + 8 new = 38
@@ -458,6 +466,258 @@ def main():
     hist = client.get("/api/correcciones/reempaque-melon/historial", headers=h)
     items = hist.json().get("items") or []
     check(len(items) == 1, f"sigue un reempaque (el de B), hay {len(items)}")
+
+    # Escenario del usuario: 10 bins, empacar, reempacar.
+    def bins_de(nombre):
+        return sum(x["bins"] for x in snap()["bins"] if x["lote"] == nombre)
+
+    def cajas_inv(talla, lote_n, fecha):
+        return [
+            i
+            for i in snap()["inv"]
+            if "MELON" in i["prod"].upper()
+            and (i["extra"] or {}).get("talla") == talla
+            and (i["extra"] or {}).get("lote") == lote_n
+            and (i["extra"] or {}).get("fecha_empaque") == fecha
+            and i["stock"] > 0
+        ]
+
+    lote10 = "Rancho S1 Krypto"
+    recepcion(h, lote10, 10, "2026-10-08")
+    proc = empacar(
+        h,
+        "2026-10-25",
+        lote10,
+        "2026-10-08",
+        10,
+        [linea("2026-10-25", lote10, 40, "llano", talla="9")],
+    )
+    check(bins_de(lote10) == 0, f"los 10 bins quedaron empacados, piso={bins_de(lote10)}")
+    re1 = client.post(
+        "/api/correcciones/reempaque-melon",
+        headers=h,
+        json={
+            "fecha_origen": "2026-10-25",
+            "fecha_reempaque": "2026-10-26",
+            "salidas": [
+                {
+                    "empaque_id": proc["id"],
+                    "presentacion": "caja_normal_b",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "lote": lote10,
+                    "cantidad": 10,
+                }
+            ],
+            "resultados": [
+                {
+                    "presentacion": "caja_normal_b",
+                    "talla": "12",
+                    "calidad": "llano",
+                    "lote": lote10,
+                    "cantidad": 7,
+                }
+            ],
+        },
+    )
+    check(re1.status_code == 200, f"reempaque escenario A {re1.status_code} {re1.text[:200]}")
+    re1_id = re1.json()["id"]
+    # (a) borrar solo el reempaque
+    del_re = client.delete(f"/api/empaque/{re1_id}", headers=h)
+    check(del_re.status_code == 200, f"delete reempaque {del_re.status_code} {del_re.text[:240]}")
+    check(bins_de(lote10) == 0, f"bins no se movieron al borrar reempaque ({bins_de(lote10)})")
+    vivo = next(e for e in snap()["emps"] if e["id"] == proc["id"])
+    check(
+        sum(int(p["cantidad"]) for p in vivo["produccion"] if str(p.get("talla")) == "9") == 40,
+        f"volvieron las 40 cajas #9 al proceso {vivo['produccion']}",
+    )
+    check(
+        sum(int(p["cantidad"]) for p in vivo["produccion"] if str(p.get("talla")) == "12") == 0,
+        "ya no hay cajas #12 del reempaque en el proceso",
+    )
+    inv9 = cajas_inv("9", lote10, "2026-10-25")
+    inv12 = cajas_inv("12", lote10, "2026-10-25")
+    check(len(inv9) == 1 and inv9[0]["stock"] == 40, f"inventario #9 del día original = 40 {inv9}")
+    check(inv12 == [], f"inventario #12 del reempaque desapareció {inv12}")
+    hist_a = client.get("/api/correcciones/reempaque-melon/historial", headers=h).json()
+    check(
+        all(it["id"] != re1_id for it in hist_a.get("items") or []),
+        "el reempaque ya no está en el historial",
+    )
+    del_re2 = client.delete(f"/api/empaque/{re1_id}", headers=h)
+    check(del_re2.status_code == 404, f"segundo delete del reempaque es 404 ({del_re2.status_code})")
+    check(bins_de(lote10) == 0, "el segundo clic no devolvió bins")
+    # luego borrar el proceso original: los 10 bins vuelven una vez
+    del_p = client.delete(f"/api/empaque/{proc['id']}", headers=h)
+    check(del_p.status_code == 200, f"delete proceso tras reempaque {del_p.status_code} {del_p.text[:200]}")
+    check(bins_de(lote10) == 10, f"volvieron exactamente 10 bins ({bins_de(lote10)})")
+    check(cajas_inv("9", lote10, "2026-10-25") == [], "no quedan cajas del proceso")
+    check(all(e["id"] != proc["id"] for e in snap()["emps"]), "el proceso ya no existe")
+    del_p2 = client.delete(f"/api/empaque/{proc['id']}", headers=h)
+    check(del_p2.status_code == 404, "segundo delete del proceso es 404")
+    check(bins_de(lote10) == 10, f"los bins siguen en 10, no se duplicaron ({bins_de(lote10)})")
+    filas_lote = [(b["lote"], b["fecha"], b["bins"]) for b in snap()["bins"] if b["lote"] == lote10]
+    check(len(filas_lote) == 1 and filas_lote[0][2] == 10, f"una sola fila de bins {filas_lote}")
+
+    # (b) borrar el día original directo, confirmando que se lleva el reempaque
+    lote_b = "Bajio S3 Diputado"
+    recepcion(h, lote_b, 10, "2026-10-09")
+    proc_b = empacar(
+        h,
+        "2026-10-27",
+        lote_b,
+        "2026-10-09",
+        10,
+        [linea("2026-10-27", lote_b, 40, "llano", talla="9")],
+    )
+    re_b = client.post(
+        "/api/correcciones/reempaque-melon",
+        headers=h,
+        json={
+            "fecha_origen": "2026-10-27",
+            "fecha_reempaque": "2026-10-28",
+            "salidas": [
+                {
+                    "empaque_id": proc_b["id"],
+                    "presentacion": "caja_normal_b",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "lote": lote_b,
+                    "cantidad": 12,
+                }
+            ],
+            "resultados": [
+                {
+                    "presentacion": "caja_normal_b",
+                    "talla": "15",
+                    "calidad": "wallys",
+                    "lote": lote_b,
+                    "cantidad": 9,
+                }
+            ],
+        },
+    )
+    check(re_b.status_code == 200, f"reempaque escenario B {re_b.status_code} {re_b.text[:180]}")
+    re_b_id = re_b.json()["id"]
+    sin_flag = client.delete(f"/api/empaque/{proc_b['id']}", headers=h)
+    check(sin_flag.status_code == 409, "sin confirmación no borra el proceso con reempaque")
+    check(bins_de(lote_b) == 0, "sin confirmación los bins no se mueven")
+    con_flag = client.delete(
+        f"/api/empaque/{proc_b['id']}?confirmar_reempaques=true", headers=h
+    )
+    check(con_flag.status_code == 200, f"delete confirmado {con_flag.status_code} {con_flag.text[:260]}")
+    check(bins_de(lote_b) == 10, f"escenario B devolvió 10 bins ({bins_de(lote_b)})")
+    sfin = snap()
+    check(all(e["id"] not in (proc_b["id"], re_b_id) for e in sfin["emps"]), "proceso y reempaque borrados")
+    check(
+        cajas_inv("9", lote_b, "2026-10-27") == [] and cajas_inv("15", lote_b, "2026-10-27") == [],
+        "no quedan cajas del día ni del reempaque",
+    )
+    ceros = [i for i in sfin["inv"] if i["stock"] == 0 and "MELON" in i["prod"].upper() and (i["extra"] or {}).get("lote") == lote_b]
+    check(ceros == [], f"sin filas en cero de ese lote {ceros}")
+    filas_b = [b for b in sfin["bins"] if b["lote"] == lote_b]
+    check(len(filas_b) == 1 and filas_b[0]["bins"] == 10, f"sin bins duplicados {filas_b}")
+    hist_b = client.get("/api/correcciones/reempaque-melon/historial", headers=h).json()
+    check(all(it["id"] != re_b_id for it in hist_b.get("items") or []), "historial sin ese reempaque")
+
+    # Cadena: el reempaque nuevo bloquea borrar el viejo; borrar el proceso deshace los dos
+    lote_c = "Lomas S4 Krypto"
+    recepcion(h, lote_c, 10, "2026-10-11")
+    proc_c = empacar(
+        h,
+        "2026-10-29",
+        lote_c,
+        "2026-10-11",
+        10,
+        [linea("2026-10-29", lote_c, 30, "llano", talla="6")],
+    )
+    r_old = client.post(
+        "/api/correcciones/reempaque-melon",
+        headers=h,
+        json={
+            "fecha_origen": "2026-10-29",
+            "fecha_reempaque": "2026-10-30",
+            "salidas": [
+                {
+                    "empaque_id": proc_c["id"],
+                    "presentacion": "caja_normal_b",
+                    "talla": "6",
+                    "calidad": "llano",
+                    "lote": lote_c,
+                    "cantidad": 10,
+                }
+            ],
+            "resultados": [
+                {
+                    "presentacion": "caja_normal_b",
+                    "talla": "18",
+                    "calidad": "llano",
+                    "lote": lote_c,
+                    "cantidad": 8,
+                }
+            ],
+        },
+    )
+    r_new = client.post(
+        "/api/correcciones/reempaque-melon",
+        headers=h,
+        json={
+            "fecha_origen": "2026-10-29",
+            "fecha_reempaque": "2026-10-31",
+            "salidas": [
+                {
+                    "empaque_id": proc_c["id"],
+                    "presentacion": "caja_normal_b",
+                    "talla": "18",
+                    "calidad": "llano",
+                    "lote": lote_c,
+                    "cantidad": 8,
+                }
+            ],
+            "resultados": [
+                {
+                    "presentacion": "caja_jumbo_c",
+                    "talla": "6",
+                    "calidad": "wallys",
+                    "lote": lote_c,
+                    "cantidad": 5,
+                }
+            ],
+        },
+    )
+    check(r_old.status_code == 200 and r_new.status_code == 200, f"cadena {r_old.status_code} {r_new.status_code} {r_new.text[:180]}")
+    blk_chain = client.delete(f"/api/empaque/{r_old.json()['id']}", headers=h)
+    check(blk_chain.status_code == 409, f"no borra el reempaque viejo si hay uno nuevo {blk_chain.status_code} {blk_chain.text[:200]}")
+    check(bins_de(lote_c) == 0, "la cadena bloqueada no movió bins")
+    # embarcar el resultado del reempaque más nuevo y bloquear su borrado
+    cli2 = client.post("/api/clientes/", headers=h, json={"nombre": "Cliente QA 2", "activo": 1})
+    emb2 = client.post(
+        "/api/embarques/",
+        headers=h,
+        json={
+            "cliente_id": cli2.json()["id"],
+            "notas": "resultado reempaque",
+            "detalles": [
+                {
+                    "producto": "melon",
+                    "mercado": "nacional",
+                    "cantidad_cajas": 2,
+                    "presentacion": "caja_jumbo_c",
+                    "talla": "6",
+                    "calidad": "wallys",
+                }
+            ],
+        },
+    )
+    check(emb2.status_code == 200, f"embarque resultado {emb2.status_code} {emb2.text[:160]}")
+    blk_ship = client.delete(f"/api/empaque/{r_new.json()['id']}", headers=h)
+    check(blk_ship.status_code == 409, f"reempaque embarcado no se borra {blk_ship.status_code} {blk_ship.text[:220]}")
+    blk_proc = client.delete(
+        f"/api/empaque/{proc_c['id']}?confirmar_reempaques=true", headers=h
+    )
+    check(blk_proc.status_code == 409, f"el proceso tampoco se borra si el resultado ya se embarcó {blk_proc.status_code} {blk_proc.text[:220]}")
+    check(any(e["id"] == proc_c["id"] for e in snap()["emps"]), "el proceso de la cadena sigue")
+    check(bins_de(lote_c) == 0, f"bins de la cadena siguen empacados ({bins_de(lote_c)})")
 
     print("\nFALLOS", len(FAILS))
     for f in FAILS:

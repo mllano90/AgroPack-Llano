@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
 import {
   crearReempaqueMelon,
+  eliminarEmpaqueAnulado,
   getReempaqueMelonDisponibles,
   getReempaqueMelonHistorial,
   type ReempaqueMelonLinea,
@@ -185,6 +186,49 @@ export default function MelonReempaque({ token, onDone }: Props) {
   useEffect(() => {
     cargarDisponibles();
   }, [cargarDisponibles]);
+
+  const eliminarReempaque = async (h: {
+    id: number;
+    fecha_reempaque?: string | null;
+    fecha_origen?: string | null;
+    cajas_salidas?: number;
+    cajas_resultado?: number;
+    merma_cajas?: number;
+  }) => {
+    if (
+      !confirm(
+        `¿Eliminar el reempaque #${h.id}?\n\n` +
+          `Se deshace solo este reempaque:\n` +
+          `• Se quitan las ${h.cajas_resultado ?? 0} cajas recuperadas\n` +
+          `• Vuelven las ${h.cajas_salidas ?? 0} cajas originales al día ${h.fecha_origen || 'de empaque'}\n` +
+          `• La merma (${h.merma_cajas ?? 0}) se deshace\n` +
+          `• Los bins no se mueven\n\n` +
+          `Si esas cajas ya se embarcaron o se volvieron a reempacar, no se cambia nada.`
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setOkMsg('');
+    try {
+      const res = await eliminarEmpaqueAnulado(token, h.id);
+      setOkMsg(res.message || `Reempaque #${h.id} eliminado`);
+      await Promise.all([cargarHistorial(), cargarDisponibles()]);
+      onDone?.();
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail;
+      const texto =
+        typeof detail === 'string'
+          ? detail
+          : detail && typeof detail === 'object' && 'message' in detail
+            ? String(detail.message)
+            : 'No se pudo eliminar el reempaque';
+      setError(texto);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const lineasVisibles = useMemo(() => {
     if (filtroProceso === 'todos') return lineas;
@@ -753,6 +797,7 @@ export default function MelonReempaque({ token, onDone }: Props) {
                   <th style={th}>Resultado</th>
                   <th style={th}>Merma</th>
                   <th style={th}>Usuario</th>
+                  <th style={th}></th>
                 </tr>
               </thead>
               <tbody>
@@ -770,6 +815,25 @@ export default function MelonReempaque({ token, onDone }: Props) {
                       {h.merma_cajas}
                     </td>
                     <td style={td}>{h.registrado_por || h.empacador || '—'}</td>
+                    <td style={td}>
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() => eliminarReempaque(h)}
+                        style={{
+                          padding: '5px 10px',
+                          background: '#b91c1c',
+                          color: 'white',
+                          border: 'none',
+                          borderRadius: 6,
+                          cursor: busy ? 'wait' : 'pointer',
+                          fontWeight: 700,
+                          fontSize: 12,
+                        }}
+                      >
+                        Eliminar
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>

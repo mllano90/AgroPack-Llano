@@ -9,6 +9,9 @@ Flujo:
    vuelven al mismo proceso/fecha de origen (trazabilidad).
 5) El registro de auditoría (tipo=reempaque_melon) NO cuenta en KPIs
    del día del reproceso.
+6) Eliminar el reempaque deshace exactamente eso: quita el resultado,
+   devuelve las cajas originales al día de empaque y borra la auditoría.
+   No mueve bins.
 """
 from __future__ import annotations
 
@@ -28,6 +31,7 @@ from app.routers.empaque import (
     _ajustar_inventario_final,
     _detalle_as_dict,
     _parse_fecha_empaque,
+    _problemas_stock_cajas_melon,
     _sync_legacy_empaque_fields,
 )
 
@@ -530,4 +534,270 @@ def crear_reempaque_melon(
         "merma_cajas": merma,
         "proceso_destino_id": primary_id,
         "procesos_origen": sorted({s.empaque_id for s in body.salidas}),
+    }
+
+
+def _sku_reempaque(row: dict) -> tuple:
+    return (
+        str(row.get("presentacion") or "").strip(),
+        str(row.get("talla") or "").strip(),
+        str(row.get("calidad") or "llano").strip().lower() or "llano",
+        str(row.get("lote") or "").strip(),
+        str(row.get("fecha_empaque") or "")[:10],
+    )
+
+
+def _ids_reempaque(det: dict) -> set[int]:
+    ids: set[int] = set()
+    for raw in det.get("procesos_origen") or []:
+        try:
+            ids.add(int(raw))
+        except (TypeError, ValueError):
+            continue
+    if det.get("proceso_destino_id") is not None:
+        try:
+            ids.add(int(det.get("proceso_destino_id")))
+        except (TypeError, ValueError):
+            pass
+    for s in det.get("salidas") or det.get("consumos_cajas") or []:
+        if isinstance(s, dict) and s.get("empaque_id") is not None:
+            try:
+                ids.add(int(s.get("empaque_id")))
+            except (TypeError, ValueError):
+                continue
+    return ids
+
+
+def reempaques_posteriores_sobre_resultado(db: Session, audit: Empaque) -> list[Empaque]:
+    """
+    Reempaques más nuevos que usaron las cajas recuperadas de este.
+    No se deshace la cadena sola: hay que borrar el más nuevo primero.
+    """
+    det = _detalle_as_dict(audit.detalle_corrida)
+    skus = {
+        _sku_reempaque(p)
+        for p in (det.get("produccion") or [])
+        if isinstance(p, dict) and int(p.get("cantidad") or 0) > 0
+    }
+    if not skus:
+        return []
+    origenes = _ids_reempaque(det)
+    hits: list[Empaque] = []
+    rows = (
+        db.query(Empaque)
+        .filter(Empaque.producto == Producto.MELON, Empaque.id != audit.id)
+        .all()
+    )
+    for e in rows:
+        if (e.id or 0) < (audit.id or 0):
+            continue
+        odet = _detalle_as_dict(e.detalle_corrida)
+        if odet.get("anulado") or (odet.get("tipo") or "") != TIPO_REEMPAQUE:
+            continue
+        if origenes and _ids_reempaque(odet) and not (origenes & _ids_reempaque(odet)):
+            continue
+        salidas = odet.get("salidas") or odet.get("consumos_cajas") or []
+        if any(isinstance(s, dict) and _sku_reempaque(s) in skus for s in salidas):
+            hits.append(e)
+    return hits
+
+
+def _lineas_resultado(det: dict) -> list[dict]:
+    out = []
+    for p in det.get("produccion") or []:
+        if not isinstance(p, dict):
+            continue
+        if int(p.get("cantidad") or 0) <= 0:
+            continue
+        out.append(p)
+    return out
+
+
+def _lineas_salida(det: dict) -> list[dict]:
+    raw = det.get("salidas") or det.get("consumos_cajas") or []
+    return [s for s in raw if isinstance(s, dict) and int(s.get("cantidad") or 0) > 0]
+
+
+def revertir_reempaque_melon(
+    db: Session, audit: Empaque, *, commit: bool = True
+) -> dict:
+    """
+    Deshace un reempaque de melón sin tocar bins.
+
+    Quita del día de origen las cajas recuperadas y devuelve las cajas
+    que se habían sacado (la merma vuelve como cajas originales).
+    Si esas cajas ya se embarcaron o un reempaque posterior las volvió
+    a usar, no cambia nada.
+    """
+    det = _detalle_as_dict(audit.detalle_corrida)
+    if (det.get("tipo") or "") != TIPO_REEMPAQUE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"El registro #{audit.id} no es un reempaque de melón.",
+        )
+    if det.get("anulado"):
+        db.delete(audit)
+        if commit:
+            db.commit()
+        return {
+            "message": (
+                f"Reempaque #{audit.id} borrado del historial. "
+                f"Los inventarios no se movieron (el registro ya estaba anulado)."
+            ),
+            "id": audit.id,
+            "cajas_devueltas": 0,
+            "cajas_quitadas": 0,
+        }
+
+    posteriores = reempaques_posteriores_sobre_resultado(db, audit)
+    if posteriores:
+        refs = ", ".join(f"#{e.id}" for e in posteriores[:6])
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No se puede eliminar el reempaque #{audit.id}: "
+                f"sus cajas recuperadas se volvieron a reempacar ({refs}). "
+                f"Elimina primero ese reempaque más nuevo. No se cambió nada."
+            ),
+        )
+
+    resultados = _lineas_resultado(det)
+    salidas = _lineas_salida(det)
+    problemas = _problemas_stock_cajas_melon(db, audit.mercado, resultados)
+    if problemas:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No se puede eliminar el reempaque #{audit.id}. "
+                + " | ".join(problemas)
+                + " No se cambió nada."
+            ),
+        )
+
+    dest_id = det.get("proceso_destino_id")
+    try:
+        dest_id_i = int(dest_id) if dest_id is not None else None
+    except (TypeError, ValueError):
+        dest_id_i = None
+    if dest_id_i is None and salidas:
+        try:
+            dest_id_i = int(salidas[0].get("empaque_id"))
+        except (TypeError, ValueError):
+            dest_id_i = None
+
+    origen_ids = _ids_reempaque(det)
+    if dest_id_i is not None:
+        origen_ids.add(dest_id_i)
+    origenes: dict[int, Empaque] = {}
+    for oid in origen_ids:
+        emp = db.query(Empaque).filter(Empaque.id == oid).first()
+        if not emp or emp.producto != Producto.MELON:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se puede eliminar el reempaque #{audit.id}: "
+                    f"el proceso de origen #{oid} ya no existe. No se cambió nada."
+                ),
+            )
+        odet = _detalle_as_dict(emp.detalle_corrida)
+        if odet.get("anulado"):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se puede eliminar el reempaque #{audit.id}: "
+                    f"el proceso de origen #{oid} está anulado. "
+                    f"Deshacerlo duplicaría cajas. No se cambió nada."
+                ),
+            )
+        if (odet.get("tipo") or "") == TIPO_REEMPAQUE:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"No se puede eliminar el reempaque #{audit.id}: "
+                    f"#{oid} también es un reempaque. No se cambió nada."
+                ),
+            )
+        origenes[oid] = emp
+
+    if dest_id_i is None or dest_id_i not in origenes:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"No se puede eliminar el reempaque #{audit.id}: "
+                f"no tiene proceso de origen. No se cambió nada."
+            ),
+        )
+    destino = origenes[dest_id_i]
+    fecha_origen = str(det.get("fecha_origen") or destino.fecha or "")[:10]
+
+    for r in resultados:
+        _restar_de_produccion_empaque(
+            destino,
+            presentacion=str(r.get("presentacion") or "").strip(),
+            talla=r.get("talla"),
+            calidad=str(r.get("calidad") or "llano"),
+            lote=(str(r.get("lote") or "").strip() or None),
+            cantidad=int(r.get("cantidad") or 0),
+        )
+    if resultados:
+        _ajustar_inventario_final(
+            db,
+            Producto.MELON,
+            audit.mercado,
+            resultados,
+            signo=-1,
+            best_effort=False,
+            ignorar_reclamo_empaque_id=dest_id_i,
+        )
+
+    credit: list[dict] = []
+    for s in salidas:
+        try:
+            eid = int(s.get("empaque_id"))
+        except (TypeError, ValueError):
+            eid = dest_id_i
+        emp = origenes.get(eid) or destino
+        lote = str(s.get("lote") or "").strip() or None
+        fecha = str(s.get("fecha_empaque") or fecha_origen)[:10]
+        cal = str(s.get("calidad") or "llano").strip().lower() or "llano"
+        _sumar_a_produccion_empaque(
+            emp,
+            presentacion=str(s.get("presentacion") or "").strip(),
+            talla=s.get("talla"),
+            calidad=cal,
+            lote=lote,
+            cantidad=int(s.get("cantidad") or 0),
+            fecha_empaque=fecha,
+        )
+        credit.append(
+            {
+                "presentacion": str(s.get("presentacion") or "").strip(),
+                "talla": s.get("talla"),
+                "calidad": cal,
+                "lote": lote,
+                "fecha_empaque": fecha,
+                "cantidad": int(s.get("cantidad") or 0),
+            }
+        )
+    if credit:
+        _ajustar_inventario_final(
+            db, Producto.MELON, audit.mercado, credit, signo=+1
+        )
+
+    cajas_devueltas = sum(int(s.get("cantidad") or 0) for s in salidas)
+    cajas_quitadas = sum(int(r.get("cantidad") or 0) for r in resultados)
+    db.delete(audit)
+    db.flush()
+    if commit:
+        db.commit()
+    return {
+        "message": (
+            f"Reempaque #{audit.id} eliminado. "
+            f"Volvieron {cajas_devueltas} cajas al día de empaque "
+            f"y se quitaron {cajas_quitadas} cajas recuperadas. "
+            f"Los bins no se movieron."
+        ),
+        "id": audit.id,
+        "cajas_devueltas": cajas_devueltas,
+        "cajas_quitadas": cajas_quitadas,
     }

@@ -721,21 +721,36 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     return { ok: false, message: `Módulo no soportado: ${m.modulo}` };
   };
 
-  const handleEliminarProcesoMelon = async (empaqueId?: number) => {
+  const handleEliminarProcesoMelon = async (
+    empaqueId?: number,
+    opts?: { esReempaque?: boolean }
+  ) => {
     const id = empaqueId ?? selectedId;
     if (!id) return;
     const reg = empaques.find((e) => e.id === id);
     const yaAnulado = Boolean(reg?.detalle_corrida?.anulado);
+    const esReempaque =
+      Boolean(opts?.esReempaque) ||
+      String(reg?.detalle_corrida?.tipo || '').toLowerCase() === 'reempaque_melon';
     if (
       !confirm(
-        yaAnulado
-          ? `¿Borrar el registro anulado de melón #${id}?\n\n` +
-              `Solo se quita del historial. No mueve bins ni cajas (ya se revirtieron al anular).`
-          : `¿Eliminar el proceso de empaque de melón #${id}?\n\n` +
-              `• Devuelve al inventario los bins que usó este proceso\n` +
-              `• Quita solo las cajas que produjo\n` +
-              `• Borra el proceso por completo\n\n` +
-              `Si esas cajas ya se embarcaron o se reempacaron, no se cambia nada.`
+        esReempaque
+          ? `¿Eliminar el reempaque #${id}?\n\n` +
+              `Se deshace solo este reempaque:\n` +
+              `• Se quitan las cajas que produjo\n` +
+              `• Vuelven las cajas originales al día en que se empacaron\n` +
+              `• La merma de ese reempaque se deshace\n` +
+              `• Los bins no se mueven\n\n` +
+              `Si esas cajas ya se embarcaron o se volvieron a reempacar, no se cambia nada.`
+          : yaAnulado
+            ? `¿Borrar el registro anulado de melón #${id}?\n\n` +
+                `Solo se quita del historial. No mueve bins ni cajas (ya se revirtieron al anular).`
+            : `¿Eliminar el proceso de empaque de melón #${id}?\n\n` +
+                `• Devuelve al inventario los bins que usó este proceso\n` +
+                `• Quita solo las cajas que produjo\n` +
+                `• Borra el proceso por completo\n\n` +
+                `Si tiene reempaques, se avisará antes de eliminarlos también.\n` +
+                `Si las cajas ya se embarcaron, no se cambia nada.`
       )
     ) {
       return;
@@ -744,7 +759,24 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     setError('');
     setOkMsg('');
     try {
-      const res = await eliminarEmpaqueAnulado(token, id);
+      let res: { message: string; id: number };
+      try {
+        res = await eliminarEmpaqueAnulado(token, id, false);
+      } catch (err: any) {
+        const detail = err?.response?.data?.detail;
+        const pideConfirmar =
+          err?.response?.status === 409 &&
+          detail &&
+          typeof detail === 'object' &&
+          (detail as { code?: string }).code === 'confirmar_reempaques';
+        if (!pideConfirmar) throw err;
+        const texto = String((detail as { message?: string }).message || '');
+        if (!confirm(texto)) {
+          setError('No se eliminó el proceso ni sus reempaques.');
+          return;
+        }
+        res = await eliminarEmpaqueAnulado(token, id, true);
+      }
       setOkMsg(res.message || `Proceso de melón #${id} eliminado`);
       if (selectedId === id) setSelectedId(null);
       await load();
@@ -761,7 +793,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
   const handleHistorialEliminar = async (m: HistorialMovimiento) => {
     if (m.modulo === 'empaque') {
       if (esEmpaqueMelon(m)) {
-        await handleEliminarProcesoMelon(m.id);
+        const tipo = String(
+          (m.meta?.detalle_corrida as { tipo?: string } | undefined)?.tipo || ''
+        ).toLowerCase();
+        await handleEliminarProcesoMelon(m.id, { esReempaque: tipo === 'reempaque_melon' });
         return;
       }
       const yaAnulado = Boolean(m.meta?.anulado);
@@ -926,6 +961,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
           `Incluye:\n${preview}${extra}\n\n` +
           `• Recepciones: borra también desverdizado ligado\n` +
           `• Empaque de melón: devuelve sus bins, quita sus cajas y borra el proceso\n` +
+          `• Si ese proceso tiene reempaques, elimínalo desde su fila para confirmarlos\n` +
+          `• Reempaque de melón: se deshace (las cajas originales vuelven a su día; los bins no se mueven)\n` +
           `• Empaque de limón activo: se ANULA (revierte stock)\n` +
           `• Empaques ya anulados: se borran del historial\n` +
           `• Embarques: devuelven inventario final\n\n` +
@@ -955,9 +992,11 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         okMsgs.push(r.message);
       } catch (err: any) {
         const detail = err?.response?.data?.detail;
-        errMsgs.push(
-          `${m.titulo}: ${typeof detail === 'string' ? detail : err?.message || 'error'}`
-        );
+        const texto =
+          detail && typeof detail === 'object' && 'message' in detail
+            ? String((detail as { message?: string }).message || '')
+            : formatApiDetail(detail, err?.message || 'error');
+        errMsgs.push(`${m.titulo}: ${texto}`);
       }
     }
 
