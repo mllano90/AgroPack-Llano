@@ -59,39 +59,47 @@ type ProcesoMelon = {
 };
 
 const cardPrimary: CSSProperties = {
-  width: 180,
-  minWidth: 160,
-  maxWidth: 200,
-  padding: '14px 14px 12px',
+  width: '100%',
+  minWidth: 0,
+  padding: '10px 8px 8px',
   borderRadius: 12,
   border: '1px solid #e2e8f0',
   boxSizing: 'border-box',
-  flex: '0 0 auto',
 };
 
 const cardLabel: CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 700,
   letterSpacing: 0.2,
   marginBottom: 4,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 };
 
 const cardValue: CSSProperties = {
-  fontSize: 28,
+  fontSize: 22,
   fontWeight: 800,
   lineHeight: 1.1,
+  whiteSpace: 'nowrap',
 };
 
 const chip: CSSProperties = {
   flex: 1,
   background: 'rgba(255,255,255,0.55)',
   borderRadius: 8,
-  padding: '6px 8px',
+  padding: '5px 6px',
   minWidth: 0,
 };
 
 const chipLabel: CSSProperties = { fontSize: 10, color: '#64748b', fontWeight: 600 };
-const chipValue: CSSProperties = { fontSize: 13, fontWeight: 800 };
+const chipValue: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
 
 const th: CSSProperties = { padding: '8px 10px', fontWeight: 700, fontSize: 12 };
 const td: CSSProperties = { padding: '8px 10px', verticalAlign: 'top' };
@@ -153,15 +161,15 @@ type MelonKpiData = {
 /** Tarjetas KPI: LLANO · Wallys · ton/ha · cajas/ha · bins/parrilla */
 function MelonKpiCards({ data }: { data: MelonKpiData }) {
   return (
+    <div style={{ overflowX: 'auto', width: '100%', marginBottom: 16 }}>
     <div
       style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        justifyContent: 'center',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+        gap: 10,
         alignItems: 'stretch',
-        gap: 14,
-        marginBottom: 16,
         width: '100%',
+        minWidth: 860,
       }}
     >
       <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
@@ -278,6 +286,7 @@ function MelonKpiCards({ data }: { data: MelonKpiData }) {
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }
