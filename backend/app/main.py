@@ -97,6 +97,16 @@ app.include_router(clientes_router, prefix="/api/clientes", tags=["Clientes"])  
 app.include_router(correcciones_router, prefix="/api/correcciones", tags=["Correcciones"])
 app.include_router(reempaque_melon_router, prefix="/api/correcciones", tags=["Correcciones"])
 
+# Módulo estación climática. Si falla el import o sus tablas, AgroPack sigue.
+try:
+    from estacion.integracion import registrar_estacion
+    registrar_estacion(app)
+except Exception:
+    import logging
+    logging.getLogger("estacion").exception(
+        "No se pudo montar el módulo estación; el empaque sigue"
+    )
+
 @app.get("/")
 async def root():
     return {
