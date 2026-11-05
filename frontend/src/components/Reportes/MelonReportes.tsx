@@ -26,6 +26,7 @@ import {
   useMelonPesos,
   type MelonPesosConfig,
 } from '../../lib/melonPesos';
+import { filaKgPorBin, kgPorBin, porcentajesQueSuman100 } from './melonKpi';
 
 type Props = {
   empaques: EmpaqueRecord[];
@@ -58,39 +59,47 @@ type ProcesoMelon = {
 };
 
 const cardPrimary: CSSProperties = {
-  width: 180,
-  minWidth: 160,
-  maxWidth: 200,
-  padding: '14px 14px 12px',
+  width: '100%',
+  minWidth: 0,
+  padding: '10px 8px 8px',
   borderRadius: 12,
   border: '1px solid #e2e8f0',
   boxSizing: 'border-box',
-  flex: '0 0 auto',
 };
 
 const cardLabel: CSSProperties = {
-  fontSize: 12,
+  fontSize: 11,
   fontWeight: 700,
   letterSpacing: 0.2,
   marginBottom: 4,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
 };
 
 const cardValue: CSSProperties = {
-  fontSize: 28,
+  fontSize: 22,
   fontWeight: 800,
   lineHeight: 1.1,
+  whiteSpace: 'nowrap',
 };
 
 const chip: CSSProperties = {
   flex: 1,
   background: 'rgba(255,255,255,0.55)',
   borderRadius: 8,
-  padding: '6px 8px',
+  padding: '5px 6px',
   minWidth: 0,
 };
 
 const chipLabel: CSSProperties = { fontSize: 10, color: '#64748b', fontWeight: 600 };
-const chipValue: CSSProperties = { fontSize: 13, fontWeight: 800 };
+const chipValue: CSSProperties = {
+  fontSize: 12,
+  fontWeight: 800,
+  whiteSpace: 'nowrap',
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+};
 
 const th: CSSProperties = { padding: '8px 10px', fontWeight: 700, fontSize: 12 };
 const td: CSSProperties = { padding: '8px 10px', verticalAlign: 'top' };
@@ -102,6 +111,11 @@ function fmtNum(n: number | null | undefined, digits = 1): string {
 
 function fmtKg(n: number): string {
   return `${fmtNum(n, 0)} kg`;
+}
+
+function fmtKgBin(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return fmtNum(n, 1);
 }
 
 function parseDetalle(raw: unknown): {
@@ -138,20 +152,24 @@ type MelonKpiData = {
   binsPorParr: number | null;
   bins: number;
   parrillas: number;
+  /** Promedio real empacado. null si no hay bins. */
+  kgBinLlano: number | null;
+  kgBinWallys: number | null;
+  kgBinTotal: number | null;
 };
 
 /** Tarjetas KPI: LLANO · Wallys · ton/ha · cajas/ha · bins/parrilla */
 function MelonKpiCards({ data }: { data: MelonKpiData }) {
   return (
+    <div style={{ overflowX: 'auto', width: '100%', marginBottom: 16 }}>
     <div
       style={{
-        display: 'flex',
-        flexWrap: 'wrap',
-        justifyContent: 'center',
+        display: 'grid',
+        gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
+        gap: 10,
         alignItems: 'stretch',
-        gap: 14,
-        marginBottom: 16,
         width: '100%',
+        minWidth: 860,
       }}
     >
       <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
@@ -232,6 +250,26 @@ function MelonKpiCards({ data }: { data: MelonKpiData }) {
         </div>
       </div>
 
+      <div style={{ ...cardPrimary, background: '#fff7ed' }}>
+        <div style={{ ...cardLabel, color: '#9a3412' }}>Kg / bin</div>
+        <div style={{ ...cardValue, color: '#7c2d12' }}>
+          {fmtKgBin(data.kgBinTotal)}
+          {data.kgBinTotal != null && (
+            <span style={{ fontSize: 15, fontWeight: 700 }}> kg</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          <div style={chip}>
+            <div style={chipLabel}>LLANO</div>
+            <div style={{ ...chipValue, color: '#9a3412' }}>{fmtKgBin(data.kgBinLlano)}</div>
+          </div>
+          <div style={chip}>
+            <div style={chipLabel}>Wallys</div>
+            <div style={{ ...chipValue, color: '#9a3412' }}>{fmtKgBin(data.kgBinWallys)}</div>
+          </div>
+        </div>
+      </div>
+
       <div style={{ ...cardPrimary, background: '#ecfeff' }}>
         <div style={{ ...cardLabel, color: '#0e7490' }}>Bins / parrilla</div>
         <div style={{ ...cardValue, color: '#155e75' }}>
@@ -248,6 +286,7 @@ function MelonKpiCards({ data }: { data: MelonKpiData }) {
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }
@@ -330,8 +369,7 @@ function lotesDeProceso(p: ProcesoMelon, empaques: EmpaqueRecord[]): string[] {
 
 function buildKpiFromProcesos(
   procs: ProcesoMelon[],
-  ha: number,
-  binCampoKg: number
+  ha: number
 ): MelonKpiData & { hectareas: number; kgTotal: number; cajasTotal: number } {
   const bins = procs.reduce((s, p) => s + p.bins, 0);
   const cajasLlano = procs.reduce((s, p) => s + p.cajasLlano, 0);
@@ -340,12 +378,9 @@ function buildKpiFromProcesos(
   const kgWallys = procs.reduce((s, p) => s + p.kgWallys, 0);
   const kgTotal = kgLlano + kgWallys;
   const cajasTotal = cajasLlano + cajasWallys;
-  const kgEntrada = bins * binCampoKg;
   const parrillas = procs.reduce((s, p) => s + p.parrillas, 0);
-  const pctLlano =
-    kgEntrada > 0 ? (kgLlano / kgEntrada) * 100 : kgTotal > 0 ? (kgLlano / kgTotal) * 100 : 0;
-  const pctWallys =
-    kgEntrada > 0 ? (kgWallys / kgEntrada) * 100 : kgTotal > 0 ? (kgWallys / kgTotal) * 100 : 0;
+  // % del kilo empacado, no del peso teórico del bin. 2da = 100 − 1ra para que sumen 100.
+  const pct = porcentajesQueSuman100(kgLlano, kgWallys);
   const haSafe = ha > 0 ? ha : 0;
   const binsPorParr =
     parrillas > 0 && bins > 0 ? Math.round((bins / parrillas) * 100) / 100 : null;
@@ -358,8 +393,8 @@ function buildKpiFromProcesos(
     kgWallys,
     kgTotal,
     parrillas: Math.round(parrillas * 100) / 100,
-    pctLlano: Math.round(pctLlano * 10) / 10,
-    pctWallys: Math.round(pctWallys * 10) / 10,
+    pctLlano: pct.primera,
+    pctWallys: pct.segunda,
     tonHa: haSafe > 0 ? kgTotal / 1000 / haSafe : 0,
     cajasHa: haSafe > 0 ? cajasTotal / haSafe : 0,
     cajasLlanoHa: haSafe > 0 ? cajasLlano / haSafe : 0,
@@ -367,6 +402,9 @@ function buildKpiFromProcesos(
     kgLlanoHa: haSafe > 0 ? kgLlano / haSafe : 0,
     kgWallysHa: haSafe > 0 ? kgWallys / haSafe : 0,
     binsPorParr,
+    kgBinLlano: kgPorBin(kgLlano, bins),
+    kgBinWallys: kgPorBin(kgWallys, bins),
+    kgBinTotal: kgPorBin(kgTotal, bins),
     hectareas: haSafe,
   };
 }
@@ -496,9 +534,40 @@ export default function MelonReportes({ empaques, token }: Props) {
   }, [filtroTipo, filtroValor, filtroCorridas, haTotalCatalogo, haPorLote, procesosKpi, empaques]);
 
   const acumulado = useMemo(
-    () => buildKpiFromProcesos(procesosKpi, haParaKpi, pesos.bin_campo_kg),
-    [procesosKpi, haParaKpi, pesos.bin_campo_kg]
+    () => buildKpiFromProcesos(procesosKpi, haParaKpi),
+    [procesosKpi, haParaKpi]
   );
+
+  /** Mismas corridas que las tarjetas. Cada proceso cuenta una vez. */
+  const kgBinPorVariedad = useMemo(() => {
+    const map = new Map<string, { bins: number; kgLlano: number; kgWallys: number }>();
+    for (const p of procesosKpi) {
+      const variedades = [
+        ...new Set(lotesDeProceso(p, empaques).map((l) => variedadDesdeLoteMelon(l))),
+      ];
+      const nombre =
+        variedades.length === 0
+          ? 'Sin variedad'
+          : variedades.length === 1
+            ? variedades[0]
+            : variedades.join(' + ');
+      const row = map.get(nombre) || { bins: 0, kgLlano: 0, kgWallys: 0 };
+      row.bins += p.bins;
+      row.kgLlano += p.kgLlano;
+      row.kgWallys += p.kgWallys;
+      map.set(nombre, row);
+    }
+    const filas = [...map.entries()]
+      .map(([variedad, r]) => filaKgPorBin(variedad, r.bins, r.kgLlano, r.kgWallys))
+      .sort((a, b) => a.variedad.localeCompare(b.variedad, 'es'));
+    const total = filaKgPorBin(
+      'Total',
+      filas.reduce((s, f) => s + f.bins, 0),
+      filas.reduce((s, f) => s + f.kgLlano, 0),
+      filas.reduce((s, f) => s + f.kgWallys, 0)
+    );
+    return { filas, total };
+  }, [procesosKpi, empaques]);
 
   /** Vista del pastel/tabla de tallas: simple (#6s…) o tipos de caja (#6s Jumbo…). */
   const [vistaTallas, setVistaTallas] = useState<'simple' | 'tipos_caja'>('simple');
@@ -919,7 +988,61 @@ export default function MelonReportes({ empaques, token }: Props) {
               No hay datos para este filtro.
             </p>
           ) : (
-            <MelonKpiCards data={acumulado} />
+            <>
+              <MelonKpiCards data={acumulado} />
+              <h3 style={{ margin: '8px 0 6px', textAlign: 'center' }}>
+                Kg promedio por bin por variedad
+              </h3>
+              <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, textAlign: 'center' }}>
+                Kilos empacados de verdad ÷ bins de este filtro (no el peso teórico del bin).
+                Los % de las tarjetas son de ese kilo: 1ra + 2da = 100.
+              </p>
+              <div style={{ overflowX: 'auto', marginBottom: 16, display: 'flex', justifyContent: 'center' }}>
+                <table
+                  style={{
+                    width: '100%',
+                    maxWidth: 720,
+                    borderCollapse: 'collapse',
+                    fontSize: 13,
+                    minWidth: 520,
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: '#fff7ed', textAlign: 'left' }}>
+                      <th style={th}>Variedad</th>
+                      <th style={th}>Bins</th>
+                      <th style={th}>Kg 1ra / bin</th>
+                      <th style={th}>Kg 2da / bin</th>
+                      <th style={th}>Kg total / bin</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {kgBinPorVariedad.filas.map((f) => (
+                      <tr key={f.variedad} style={{ borderBottom: '1px solid #e2e8f0' }}>
+                        <td style={td}>
+                          <strong>{f.variedad}</strong>
+                        </td>
+                        <td style={td}>{fmtNum(f.bins, 0)}</td>
+                        <td style={td}>{fmtKgBin(f.kgBinLlano)}</td>
+                        <td style={td}>{fmtKgBin(f.kgBinWallys)}</td>
+                        <td style={td}>
+                          <strong>{fmtKgBin(f.kgBinTotal)}</strong>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr style={{ background: '#f8fafc', fontWeight: 700 }}>
+                      <td style={td}>Total</td>
+                      <td style={td}>{fmtNum(kgBinPorVariedad.total.bins, 0)}</td>
+                      <td style={td}>{fmtKgBin(kgBinPorVariedad.total.kgBinLlano)}</td>
+                      <td style={td}>{fmtKgBin(kgBinPorVariedad.total.kgBinWallys)}</td>
+                      <td style={td}>{fmtKgBin(kgBinPorVariedad.total.kgBinTotal)}</td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </>
           )}
 
           {/* Distribución por tallas melón */}
@@ -1517,9 +1640,9 @@ function MelonVariedadBarras({ variedades }: { variedades: VariedadBarRow[] }) {
   const hoveredBar = hover ? bars.find((b) => b.variedad === hover.variedad) : null;
   const tip = hoveredBar
     ? (() => {
-        const total = hoveredBar.total || 0.0001;
-        const pct1 = (hoveredBar.a / total) * 100;
-        const pct2 = (hoveredBar.b / total) * 100;
+        const pct = porcentajesQueSuman100(hoveredBar.a, hoveredBar.b);
+        const pct1 = pct.primera;
+        const pct2 = pct.segunda;
         const haLabel =
           hoveredBar.hectareas != null
             ? ` · ${hoveredBar.hectareas} ha`
