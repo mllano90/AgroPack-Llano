@@ -1043,10 +1043,19 @@ export interface ManifiestoParseResult {
   cliente_sugerido_nombre?: string | null;
 }
 
-/** Parsea PDF de manifiesto y cruza con inventario (sin descontar) */
-export async function parseManifiesto(token: string, file: File): Promise<ManifiestoParseResult> {
+/** Parsea PDF de manifiesto y cruza con inventario (sin descontar).
+ *  Sin producto, el backend lo lee como limón. `melon` usa caja, talla y calidad.
+ */
+export async function parseManifiesto(
+  token: string,
+  file: File,
+  producto?: 'melon'
+): Promise<ManifiestoParseResult> {
   const form = new FormData();
   form.append('file', file);
+  if (producto === 'melon') {
+    form.append('producto', 'melon');
+  }
   // FormData: dejar que el browser/axios pongan multipart + boundary
   // (no usar el Content-Type: application/json del cliente api)
   const res = await api.post<ManifiestoParseResult>('/api/embarques/parse-manifiesto', form, {
