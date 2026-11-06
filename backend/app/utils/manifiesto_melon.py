@@ -22,15 +22,17 @@ Ejemplo (texto; en el PDF cada renglón es una línea):
     189 Bultos Manifestados
 
 Caja:
-    CAJA CHICA / TIPO A / CAJA A     → caja_chica_a   (tallas 9, 12, 15; 56 cajas/parrilla)
-    CAJA NORMAL / TIPO B / CAJA B    → caja_normal_b  (tallas 9, 12, 15; 56 cajas/parrilla)
-    JUMBO / TIPO C / CAJA C          → caja_jumbo_c   (tallas 6, 9, 12; 49 cajas/parrilla)
+    CAJA CHICA / TIPO A / CAJA A     → caja_chica_a   (tallas 9, 12, 15, 18; 56 cajas/parrilla)
+    CAJA NORMAL / TIPO B / CAJA B    → caja_normal_b  (tallas 9, 12, 15, 18; 56 cajas/parrilla)
+    JUMBO / TIPO C / CAJA C          → caja_jumbo_c   (tallas 6, 9, 12, 18; 49 cajas/parrilla)
+
+La talla #18 es solo 1ra LLANO. En 2da Wallys se rechaza el manifiesto entero.
 
 Calidad (la marca "LLANO BRAND" no cuenta como calidad):
     1RA / PRIMERA / LLANO            → llano   (1ra LLANO)
     2DA / SEGUNDA / WALLY'S          → wallys  (2da Wallys)
 
-Talla: 9S, #12, TALLA 15, etc.
+Talla: 18S, 9S, #12, TALLA 15, etc. #18 solo con 1ra LLANO.
 Los bultos de la línea son cajas a embarcar (igual que en limón).
 """
 from __future__ import annotations
@@ -46,9 +48,14 @@ from app.utils.manifiesto_parser import (
 )
 from app.utils.melon_inv import (
     CAJAS_POR_PARRILLA_MELON,
+    MENSAJE_TALLA_18_WALLYS,
     TALLAS_POR_PRESENTACION_MELON,
     norm_talla_melon,
+    talla_18_prohibida_en_calidad,
 )
+
+# 18 va primero para que 18S / #18 / TALLA 18 no se partan en un calibre más corto.
+_TALLA_MELON = r"(18|6|9|12|15)"
 
 _LINE_RE = re.compile(
     r"^\s*(\d{1,3})\s+(\d+)\s+(\d{4})\s+(\d{2})\s+(.+?)\s+(\d{7,})\s*$"
@@ -76,13 +83,13 @@ def _fold(text: str) -> str:
 
 
 def _extract_talla(u: str) -> str | None:
-    m = re.search(r"#\s*(6|9|12|15)\s*S?\b", u)
+    m = re.search(rf"#\s*{_TALLA_MELON}\s*S?\b", u)
     if m:
         return m.group(1)
-    m = re.search(r"\b(6|9|12|15)\s*S\b", u)
+    m = re.search(rf"\b{_TALLA_MELON}\s*S\b", u)
     if m:
         return m.group(1)
-    m = re.search(r"\bTALLA\s*(6|9|12|15)\b", u)
+    m = re.search(rf"\bTALLA\s*{_TALLA_MELON}\b", u)
     if m:
         return m.group(1)
     return None
@@ -160,6 +167,8 @@ def _map_descripcion(desc: str) -> tuple[str | None, str | None, str | None, str
             f"No se reconoció la calidad (1ra LLANO o 2da Wallys): {desc[:80]}",
             None,
         )
+    if talla_18_prohibida_en_calidad(talla, calidad):
+        return None, None, None, MENSAJE_TALLA_18_WALLYS, None
 
     return pres, talla, calidad, None, CAJAS_POR_PARRILLA_MELON[pres]
 

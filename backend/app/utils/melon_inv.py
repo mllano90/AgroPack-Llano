@@ -23,11 +23,17 @@ CAJAS_POR_PARRILLA_MELON = {
     "caja_jumbo_c": 49,
 }
 
-TALLAS_POR_PRESENTACION_MELON = {
-    "caja_chica_a": ("9", "12", "15"),
-    "caja_normal_b": ("9", "12", "15"),
-    "caja_jumbo_c": ("6", "9", "12"),
+# Respaldo si todavía no está el catálogo de PR #12 (melon_tallas.py).
+# #18 es solo 1ra LLANO, en las tres cajas. Wallys no la usa.
+_TALLAS_MELON_LOCAL = {
+    "caja_chica_a": ("9", "12", "15", "18"),
+    "caja_normal_b": ("9", "12", "15", "18"),
+    "caja_jumbo_c": ("6", "9", "12", "18"),
 }
+_MENSAJE_TALLA_18_WALLYS_LOCAL = (
+    "La talla #18 solo está disponible para primera calidad LLANO, "
+    "no para segunda Wallys."
+)
 
 _NOMBRE_CAJA = {
     "caja_chica_a": "Caja chica A",
@@ -103,12 +109,47 @@ def norm_calidad_melon(calidad) -> str | None:
     return None
 
 
-def talla_valida_melon(presentacion: str | None, talla: str | None) -> bool:
+def _catalogo_tallas_melon():
+    """
+    Usa melon_tallas.py (PR #12) cuando ese módulo ya está en el árbol.
+    Si no, el respaldo local. Así no hay dos listas vivas a la vez.
+    """
+    try:
+        from app.utils.melon_tallas import (
+            MENSAJE_TALLA_18_WALLYS as mensaje,
+            TALLAS_POR_PRESENTACION_MELON as catalogo,
+            talla_18_prohibida_en_calidad as prohibida,
+        )
+    except ImportError:
+        return None
+    return catalogo, mensaje, prohibida
+
+
+_cat = _catalogo_tallas_melon()
+if _cat is not None:
+    TALLAS_POR_PRESENTACION_MELON, MENSAJE_TALLA_18_WALLYS, talla_18_prohibida_en_calidad = _cat
+else:
+    TALLAS_POR_PRESENTACION_MELON = _TALLAS_MELON_LOCAL
+    MENSAJE_TALLA_18_WALLYS = _MENSAJE_TALLA_18_WALLYS_LOCAL
+
+    def talla_18_prohibida_en_calidad(talla, calidad) -> bool:
+        tal = norm_talla_melon(talla)
+        if tal != "18":
+            return False
+        return norm_calidad_melon(calidad) != "llano"
+
+
+def talla_valida_melon(presentacion: str | None, talla: str | None, calidad=None) -> bool:
     pres = norm_presentacion_melon(presentacion)
     tal = norm_talla_melon(talla)
     if not pres or not tal:
         return False
-    return tal in TALLAS_POR_PRESENTACION_MELON.get(pres, ())
+    if tal not in TALLAS_POR_PRESENTACION_MELON.get(pres, ()):
+        return False
+    # #18 solo existe en 1ra LLANO. Sin calidad tampoco se acepta.
+    if talla_18_prohibida_en_calidad(tal, calidad):
+        return False
+    return True
 
 
 def etiqueta_sku_melon(presentacion, talla, calidad) -> str:

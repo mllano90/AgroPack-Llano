@@ -36,6 +36,7 @@ from app.models.enums import Producto, TipoCultivo, TipoMercado, VariedadUva
 from app.models.inventory import Embarque, InventarioFinal
 from app.utils.manifiesto_melon import parse_manifiesto_melon_text
 from app.utils.manifiesto_parser import parse_manifiesto_text
+from app.utils.melon_inv import MENSAJE_TALLA_18_WALLYS
 
 client = TestClient(app)
 FAILS: list[str] = []
@@ -202,6 +203,45 @@ def test_parsers() -> None:
     )
     check(cruzada.detalles == [], "talla 6 no entra en caja normal")
 
+    t18 = parse_manifiesto_melon_text(
+        "1 10 0801 05 MELON 1RA LLANO CAJA NORMAL B 18S ORG LLANO BRAND 10000021\n"
+        "2 8 0802 05 MELON 1RA LLANO CAJA CHICA A #18 ORG LLANO BRAND 10000022\n"
+        "3 6 0803 05 MELON 1RA LLANO JUMBO C TALLA 18 ORG LLANO BRAND 10000023\n"
+    )
+    check(t18.warnings == [], f"#18 llano warnings {t18.warnings}")
+    check(
+        [(d["presentacion"], d["talla"], d["calidad"], d["cantidad_cajas"]) for d in t18.detalles]
+        == [
+            ("caja_chica_a", "18", "llano", 8),
+            ("caja_jumbo_c", "18", "llano", 6),
+            ("caja_normal_b", "18", "llano", 10),
+        ],
+        f"#18 llano detalles {t18.detalles}",
+    )
+
+    w18 = parse_manifiesto_melon_text(
+        "1 4 0802 05 MELON 2DA WALLY'S CAJA NORMAL B 18S ORG LLANO BRAND 10000022\n"
+        "2 4 0803 05 MELON 2DA WALLY'S CAJA CHICA A 18S ORG LLANO BRAND 10000023\n"
+        "3 4 0804 05 MELON 2DA WALLY'S JUMBO C 18S ORG LLANO BRAND 10000024\n"
+    )
+    check(w18.detalles == [], f"#18 wallys no arma detalle {w18.detalles}")
+    check(
+        all(MENSAJE_TALLA_18_WALLYS in w for w in w18.warnings[:3]),
+        f"#18 wallys nota {w18.warnings}",
+    )
+    mix18 = parse_manifiesto_melon_text(
+        "1 10 0801 05 MELON 1RA LLANO CAJA NORMAL B 9S ORG LLANO BRAND 10000021\n"
+        "2 4 0802 05 MELON 2DA WALLY'S CAJA JUMBO C #18 ORG LLANO BRAND 10000022\n"
+    )
+    check(
+        any(MENSAJE_TALLA_18_WALLYS in w for w in mix18.warnings),
+        f"mixto avisa #18 wallys {mix18.warnings}",
+    )
+    check(
+        all(d["talla"] != "18" or d["calidad"] != "wallys" for d in mix18.detalles),
+        "#18 wallys no entra al resumen",
+    )
+
 
 def auth() -> dict:
     r = client.post(
@@ -342,6 +382,18 @@ def main() -> int:
         mercado=TipoMercado.EXPORTACION,
         cantidad_stock=80,
         atributos_extra={"presentacion": "rpc_18", "talla": "140", "calidad": "primera"},
+    )
+    agregar_stock(
+        producto=Producto.MELON,
+        mercado=TipoMercado.EXPORTACION,
+        cantidad_stock=20,
+        atributos_extra={
+            "presentacion": "caja_normal_b",
+            "talla": "18",
+            "calidad": "llano",
+            "lote": "Rancho S5 Diputado",
+            "fecha_empaque": "2026-10-23",
+        },
     )
     agregar_stock(
         producto=Producto.UVA,
@@ -578,6 +630,114 @@ def main() -> int:
             "borrar no infló wallys",
         )
         check(stock_de(dev, producto="limon_amarillo", presentacion="rpc_18", talla="140") == 35, "borrar melón no tocó limón")
+
+    # #18 solo 1ra LLANO. Wallys rechaza el cargamento entero y no mueve stock.
+    antes18 = foto()
+    pdf_w = pdf_con_texto(
+        "Fecha Embarque: 02/11/2026\n"
+        "Manifiesto N° 19\n"
+        "Distribuidor: GAME CITRUS\n"
+        "Mercado: Extranjero\n"
+        "1 10 0801 05 MELON 1RA LLANO CAJA NORMAL B 9S ORG LLANO BRAND 10000031\n"
+        "2 4 0802 05 MELON 2DA WALLY'S CAJA NORMAL B 18S ORG LLANO BRAND 10000032\n"
+        "14 Bultos Manifestados\n"
+    )
+    r = client.post(
+        "/api/embarques/parse-manifiesto",
+        headers=h,
+        files={"file": ("manifiesto-melon-18-wallys.pdf", BytesIO(pdf_w), "application/pdf")},
+        data={"producto": "melon"},
+    )
+    check(r.status_code == 400, f"parse #18 wallys {r.status_code} {r.text[:240]}")
+    check(MENSAJE_TALLA_18_WALLYS in r.text, f"nota #18 wallys {r.text[:240]}")
+    check(foto() == antes18, "parse #18 wallys no movió stock")
+
+    r = client.post(
+        "/api/embarques/desde-manifiesto",
+        headers=h,
+        json={
+            "cliente_id": cliente_id,
+            "notas": "TEST talla 18 wallys",
+            "fecha_embarque": "02/11/2026",
+            "detalles": [
+                {
+                    "producto": "melon",
+                    "mercado": "exportacion",
+                    "presentacion": "caja_normal_b",
+                    "talla": "9",
+                    "calidad": "llano",
+                    "cantidad_cajas": 5,
+                    "cajas_por_parrilla": 56,
+                },
+                {
+                    "producto": "melon",
+                    "mercado": "exportacion",
+                    "presentacion": "caja_normal_b",
+                    "talla": "18",
+                    "calidad": "wallys",
+                    "cantidad_cajas": 4,
+                    "cajas_por_parrilla": 56,
+                },
+            ],
+        },
+    )
+    check(r.status_code == 400, f"confirma #18 wallys {r.status_code} {r.text[:240]}")
+    check(MENSAJE_TALLA_18_WALLYS in r.text, f"nota confirma {r.text[:240]}")
+    check(foto() == antes18, "confirma #18 wallys no movió nada")
+
+    r = client.post(
+        "/api/embarques/desde-manifiesto",
+        headers=h,
+        json={
+            "cliente_id": cliente_id,
+            "notas": "TEST talla 18 llano",
+            "fecha_embarque": "02/11/2026",
+            "detalles": [
+                {
+                    "producto": "melon",
+                    "mercado": "exportacion",
+                    "presentacion": "caja_normal_b",
+                    "talla": "18",
+                    "calidad": "llano",
+                    "cantidad_cajas": 12,
+                    "cajas_por_parrilla": 56,
+                }
+            ],
+        },
+    )
+    check(r.status_code == 200, f"confirma #18 llano {r.status_code} {r.text[:240]}")
+    emb18 = r.json() if r.status_code == 200 else {}
+    check(
+        any(
+            str(d.get("talla")) == "18" and d.get("calidad") == "llano" and d.get("producto") == "melon"
+            for d in emb18.get("detalles") or []
+        ),
+        f"línea #18 llano {emb18.get('detalles')}",
+    )
+    fin18 = foto()
+    check(
+        stock_de(fin18, producto="melon", presentacion="caja_normal_b", talla="18", calidad="llano") == 8,
+        "normal #18 llano 20-12=8",
+    )
+    check(
+        stock_de(fin18, producto="melon", presentacion="caja_normal_b", talla="9", calidad="llano")
+        == stock_de(antes18, producto="melon", presentacion="caja_normal_b", talla="9", calidad="llano"),
+        "#18 llano no tocó #9",
+    )
+    check(
+        stock_de(fin18, producto="melon", presentacion="caja_chica_a", talla="12", calidad="wallys") == 8,
+        "#18 llano no tocó wallys",
+    )
+    check(
+        stock_de(fin18, producto="limon_amarillo", presentacion="rpc_18", talla="140")
+        == stock_de(antes18, producto="limon_amarillo", presentacion="rpc_18", talla="140"),
+        "#18 no tocó limón",
+    )
+    check(
+        stock_de(fin18, producto="uva", variedad="early_sweet")
+        == stock_de(antes18, producto="uva", variedad="early_sweet"),
+        "#18 no tocó uva",
+    )
 
     print()
     if FAILS:

@@ -24,6 +24,7 @@ from app.utils.limon_inv import (
 )
 from app.utils.melon_inv import (
     CAJAS_POR_PARRILLA_MELON,
+    MENSAJE_TALLA_18_WALLYS,
     TALLAS_POR_PRESENTACION_MELON,
     etiqueta_sku_melon,
     norm_calidad_melon,
@@ -31,6 +32,7 @@ from app.utils.melon_inv import (
     norm_talla_melon,
     rows_inv_melon,
     stock_melon,
+    talla_18_prohibida_en_calidad,
     talla_valida_melon,
 )
 
@@ -136,15 +138,6 @@ def _clave_melon(detalle: EmbarqueDetalleCreate) -> tuple[str, str, str]:
             ),
         )
     talla_n = norm_talla_melon(detalle.talla)
-    if not talla_n or not talla_valida_melon(pres, talla_n):
-        validas = ", ".join(TALLAS_POR_PRESENTACION_MELON.get(pres, ()))
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Talla de melón no válida para {pres}: {detalle.talla!s}. "
-                f"Válidas: {validas}"
-            ),
-        )
     cal = norm_calidad_melon(detalle.calidad)
     if not cal:
         raise HTTPException(
@@ -152,6 +145,17 @@ def _clave_melon(detalle: EmbarqueDetalleCreate) -> tuple[str, str, str]:
             detail=(
                 "Embarque melón requiere calidad llano (1ra LLANO) "
                 "o wallys (2da Wallys)"
+            ),
+        )
+    if talla_18_prohibida_en_calidad(talla_n, cal):
+        raise HTTPException(status_code=400, detail=MENSAJE_TALLA_18_WALLYS)
+    if not talla_n or not talla_valida_melon(pres, talla_n, cal):
+        validas = ", ".join(TALLAS_POR_PRESENTACION_MELON.get(pres, ()))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Talla de melón no válida para {pres}: {detalle.talla!s}. "
+                f"Válidas: {validas}"
             ),
         )
     return pres, talla_n, cal
@@ -409,6 +413,14 @@ def _pedido_es_melon(producto: str | None) -> bool:
 def _respuesta_manifiesto_melon(db: Session, text: str) -> ManifiestoParseResponse:
     """Vista previa de un manifiesto de melón. No descuenta inventario."""
     parsed = parse_manifiesto_melon_text(text)
+    for ln in parsed.lineas_raw:
+        nota = ln.parse_note or ""
+        if nota == MENSAJE_TALLA_18_WALLYS or talla_18_prohibida_en_calidad(
+            ln.talla, ln.calidad
+        ):
+            raise HTTPException(status_code=400, detail=MENSAJE_TALLA_18_WALLYS)
+    if any(MENSAJE_TALLA_18_WALLYS in w for w in parsed.warnings):
+        raise HTTPException(status_code=400, detail=MENSAJE_TALLA_18_WALLYS)
     if not parsed.lineas_raw and not parsed.detalles:
         raise HTTPException(
             status_code=400,
