@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import require_roles
 from app.core.constants import DIAS_DESVERDIZADO
+from app.utils.melon_tallas import norm_talla_melon, rechazar_talla_18_si_no_es_llano
 from app.models.enums import Rol, Producto, TipoMercado
 from app.models.inventory import (
     RecepcionCampo,
@@ -1256,6 +1257,31 @@ def crear_inventario_final_admin(
     if body.cantidad_stock < 0:
         raise HTTPException(status_code=400, detail="cantidad_stock no puede ser negativa")
 
+    # Melón trae presentación, igual que el limón. No reclasificarlo como limón.
+    es_melon = body.producto == Producto.MELON
+    if es_melon:
+        rechazar_talla_18_si_no_es_llano(body.talla, body.calidad)
+        extra_m: dict = {}
+        if body.presentacion:
+            extra_m["presentacion"] = str(body.presentacion).strip()
+        if body.calidad:
+            extra_m["calidad"] = str(body.calidad).strip().lower()
+        if body.talla:
+            extra_m["talla"] = norm_talla_melon(body.talla)
+        inv = InventarioFinal(
+            producto=Producto.MELON,
+            variedad=None,
+            tipo_cultivo=None,
+            mercado=body.mercado,
+            cantidad_stock=int(body.cantidad_stock),
+            atributos_extra=extra_m or None,
+            fecha_actualizacion=datetime.utcnow(),
+        )
+        db.add(inv)
+        db.commit()
+        db.refresh(inv)
+        return _inv_final_to_item(inv)
+
     es_limon = body.producto == Producto.LIMON_AMARILLO or bool(body.presentacion)
     extra = None
     if es_limon:
@@ -1296,6 +1322,17 @@ def editar_inventario_final_admin(
     inv = db.query(InventarioFinal).filter(InventarioFinal.id == inv_id).first()
     if not inv:
         raise HTTPException(status_code=404, detail="Inventario final no encontrado")
+
+    if _es_melon(inv.producto):
+        extra0 = dict(inv.atributos_extra) if isinstance(inv.atributos_extra, dict) else {}
+        talla_res = extra0.get("talla")
+        cal_res = extra0.get("calidad")
+        if body.reemplazar_atributos:
+            if body.talla is not None:
+                talla_res = None if body.talla == "" else body.talla
+            if body.calidad is not None:
+                cal_res = None if body.calidad == "" else body.calidad
+        rechazar_talla_18_si_no_es_llano(talla_res, cal_res)
 
     if body.cantidad_stock is not None:
         if body.cantidad_stock < 0:

@@ -27,6 +27,7 @@ from app.core.database import get_db
 from app.core.security import require_roles
 from app.models.enums import Rol, Producto, TipoMercado
 from app.models.inventory import Embarque, EmbarqueDetalle, Empaque
+from app.utils.melon_tallas import rechazar_talla_18_si_no_es_llano
 from app.routers.empaque import (
     _ajustar_inventario_final,
     _detalle_as_dict,
@@ -373,6 +374,8 @@ def crear_reempaque_melon(
 
     total_out = sum(int(s.cantidad) for s in body.salidas)
     total_in = sum(int(r.cantidad) for r in body.resultados)
+    for r in body.resultados:
+        rechazar_talla_18_si_no_es_llano(r.talla, r.calidad)
     if total_in > total_out:
         raise HTTPException(
             status_code=400,

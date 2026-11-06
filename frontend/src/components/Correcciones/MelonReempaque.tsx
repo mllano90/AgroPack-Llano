@@ -584,7 +584,7 @@ export default function MelonReempaque({ token, onDone }: Props) {
             Cajas recuperadas (vuelven al proceso del día de origen).
           </p>
           {resultados.map((r, i) => {
-            const tallas = tallasParaPresentacionMelon(r.presentacion);
+            const tallas = tallasParaPresentacionMelon(r.presentacion, r.calidad);
             return (
               <div
                 key={i}
@@ -602,12 +602,13 @@ export default function MelonReempaque({ token, onDone }: Props) {
                     value={r.presentacion}
                     onChange={(e) => {
                       const presentacion = e.target.value;
-                      const ts = tallasParaPresentacionMelon(presentacion);
+                      const ts = tallasParaPresentacionMelon(presentacion, r.calidad);
                       const next = [...resultados];
+                      const tallaOk = ts.includes(next[i].talla);
                       next[i] = {
                         ...next[i],
                         presentacion,
-                        talla: ts[0] || next[i].talla,
+                        talla: tallaOk ? next[i].talla : ts[0] || next[i].talla,
                       };
                       setResultados(next);
                     }}
@@ -643,8 +644,14 @@ export default function MelonReempaque({ token, onDone }: Props) {
                   <select
                     value={r.calidad}
                     onChange={(e) => {
+                      const calidad = e.target.value;
+                      const ts = tallasParaPresentacionMelon(r.presentacion, calidad);
                       const next = [...resultados];
-                      next[i] = { ...next[i], calidad: e.target.value };
+                      next[i] = {
+                        ...next[i],
+                        calidad,
+                        talla: ts.includes(r.talla) ? r.talla : ts[0] || r.talla,
+                      };
                       setResultados(next);
                     }}
                     style={estiloCalidadControl(r.calidad)}

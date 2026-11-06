@@ -1,4 +1,7 @@
 import type { InventarioFinalItem } from '../../types';
+import { cmpTallaMelon } from '../../lib/constants';
+
+const PRESENTACIONES_MELON = new Set(['caja_chica_a', 'caja_normal_b', 'caja_jumbo_c']);
 
 interface InventarioFinalSelectorProps {
   inventario: InventarioFinalItem[];
@@ -67,6 +70,8 @@ export default function InventarioFinalSelector({
         const pa = a.presentacion || '';
         const pb = b.presentacion || '';
         if (pa !== pb) return pa.localeCompare(pb);
+        // Melón: #6 #9 #12 #15 #18. Limón sigue en orden de texto (75, 95, 115…).
+        if (PRESENTACIONES_MELON.has(pa)) return cmpTallaMelon(a.talla, b.talla);
         return (a.talla || '').localeCompare(b.talla || '');
       }
       const va = a.variedad || '';

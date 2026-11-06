@@ -10,6 +10,7 @@ import { formatFechaCorta } from '../../lib/dates';
 import {
   DIAS_DESVERDIZADO,
   KG_POR_PRESENTACION,
+  cmpTallaMelon,
   labelCalidadMelon,
   labelPresentacionMelon,
 } from '../../lib/constants';
@@ -1100,7 +1101,16 @@ export default function InventariosReporte({
                   acc[key].total += item.cantidad_stock || 0;
                   return acc;
                 }, {})
-              ).map(([key, { label, total }]) => (
+              )
+                .sort(([ka], [kb]) => {
+                  const [pa, ca, ta = ''] = ka.split('|');
+                  const [pb, cb, tb = ''] = kb.split('|');
+                  if (pa !== pb) return pa.localeCompare(pb);
+                  const dt = cmpTallaMelon(ta, tb);
+                  if (dt !== 0) return dt;
+                  return ca.localeCompare(cb);
+                })
+                .map(([key, { label, total }]) => (
                 <div
                   key={key}
                   style={{
