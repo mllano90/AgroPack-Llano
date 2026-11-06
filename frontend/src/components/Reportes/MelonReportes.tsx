@@ -1097,8 +1097,8 @@ export default function MelonReportes({ empaques, token }: Props) {
           </div>
           <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, textAlign: 'center' }}>
             {vistaTallas === 'simple'
-              ? 'Solo tallas (#6s, #9s, #12s…). Suma todos los tipos de caja. Kg = LLANO + Wallys.'
-              : 'Talla × tipo de caja (ej. #6s Jumbo, #9s Chica, #12s Normal). Kg = LLANO + Wallys.'}
+              ? 'Solo tallas (#6s, #9s, #12s, #15s, #18s). Suma todos los tipos de caja. Kg = LLANO + Wallys. #18s es solo LLANO.'
+              : 'Talla × tipo de caja (ej. #6s Jumbo, #9s Chica, #12s Normal, #18s Chica). Kg = LLANO + Wallys. #18s es solo LLANO.'}
             {' '}
             {filtroTipo === 'todos'
               ? 'Todo el acumulado.'

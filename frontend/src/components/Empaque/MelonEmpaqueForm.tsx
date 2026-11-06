@@ -6,6 +6,7 @@ import {
   labelEquivalenteParrillasMelon,
   labelPresentacionMelon,
   parrillasEquivalentesMelon,
+  tallasParaPresentacionMelon,
   type CalidadMelon,
   type TipoCajaMelon,
 } from '../../lib/constants';
@@ -164,7 +165,7 @@ export default function MelonEmpaqueForm({
   const agregarGrupo = (calidad: CalidadMelon) => {
     const nuevas: LineaMelon[] = [];
     for (const fila of FILAS_CAJA_MELON) {
-      for (const t of fila.tallas) {
+      for (const t of tallasParaPresentacionMelon(fila.presentacion, calidad)) {
         const n = parseInt(qty[keyOf(calidad, fila.presentacion, t)] || '', 10) || 0;
         if (n > 0) {
           nuevas.push({
@@ -186,7 +187,7 @@ export default function MelonEmpaqueForm({
     setQty((prev) => {
       const next = { ...prev };
       for (const fila of FILAS_CAJA_MELON) {
-        for (const t of fila.tallas) {
+        for (const t of tallasParaPresentacionMelon(fila.presentacion, calidad)) {
           delete next[keyOf(calidad, fila.presentacion, t)];
         }
       }
@@ -237,8 +238,8 @@ export default function MelonEmpaqueForm({
             </div>
             <div style={{ fontSize: 12, color: '#64748b' }}>
               {esLlano
-                ? '1ra calidad — Chica A → Normal B → Jumbo C (en horizontal)'
-                : '2da calidad — mismas cajas en horizontal (tonos café lavados)'}
+                ? '1ra calidad — Chica A → Normal B → Jumbo C. Incluye #18s.'
+                : '2da calidad — mismas cajas, sin #18s (solo primera LLANO)'}
             </div>
           </div>
           <button
@@ -268,6 +269,7 @@ export default function MelonEmpaqueForm({
         >
           {FILAS_CAJA_MELON.map((fila) => {
             const pal = esLlano ? fila.llano : fila.wallys;
+            const tallas = tallasParaPresentacionMelon(fila.presentacion, calidad);
             return (
               <div
                 key={`${calidad}-${fila.presentacion}`}
@@ -304,11 +306,11 @@ export default function MelonEmpaqueForm({
                 <div
                   style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
+                    gridTemplateColumns: `repeat(${Math.max(tallas.length, 1)}, minmax(0, 1fr))`,
                     gap: 8,
                   }}
                 >
-                  {fila.tallas.map((t) => {
+                  {tallas.map((t) => {
                     const k = keyOf(calidad, fila.presentacion, t);
                     return (
                       <label

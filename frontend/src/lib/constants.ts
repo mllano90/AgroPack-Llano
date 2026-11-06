@@ -195,10 +195,17 @@ export type CalidadMelon = 'llano' | 'wallys';
 /** Tipo de caja melón */
 export type TipoCajaMelon = 'caja_chica_a' | 'caja_normal_b' | 'caja_jumbo_c';
 
-/** Tallas por tipo de caja (calibre / piezas por caja, notación #9s) */
-export const TALLAS_MELON_CAJA_A = ['9', '12', '15'] as const; // caja chica
-export const TALLAS_MELON_CAJA_B = ['9', '12', '15'] as const; // caja normal
-export const TALLAS_MELON_CAJA_C = ['6', '9', '12'] as const; // jumbo
+/**
+ * Tallas por tipo de caja (calibre / piezas por caja, notación #9s).
+ * Orden numérico. #18 es la más chica y solo existe en primera LLANO
+ * (el selector de Wallys la oculta; el backend la rechaza).
+ */
+export const TALLAS_MELON_CAJA_A = ['9', '12', '15', '18'] as const; // caja chica
+export const TALLAS_MELON_CAJA_B = ['9', '12', '15', '18'] as const; // caja normal
+export const TALLAS_MELON_CAJA_C = ['6', '9', '12', '18'] as const; // jumbo
+
+/** Tallas que no se capturan ni guardan en segunda Wallys. */
+export const TALLAS_MELON_SOLO_LLANO = ['18'] as const;
 
 /**
  * Cajas que caben en una parrilla/pallet completo.
@@ -345,9 +352,53 @@ export function labelCalidadMelon(c: string): string {
   return c;
 }
 
-export function tallasParaPresentacionMelon(presentacion: string): readonly string[] {
+/** true si la calidad es 2da Wallys (oculta las tallas solo-LLANO). */
+export function esCalidadWallysMelon(calidad: string | null | undefined): boolean {
+  const c = String(calidad || '')
+    .trim()
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '');
+  if (!c) return false;
+  return c === 'wallys' || c === 'wally' || c === '2da' || c === '2a' || c === 'segunda' || c.includes('wally');
+}
+
+/**
+ * Tallas de esa caja. En Wallys se quita #18 (solo primera LLANO).
+ * Sin calidad (pesos, catálogo) devuelve la lista completa, #18 incluida.
+ */
+export function tallasParaPresentacionMelon(
+  presentacion: string,
+  calidad?: string | null
+): readonly string[] {
   const row = FILAS_CAJA_MELON.find((r) => r.presentacion === presentacion);
-  return row?.tallas ?? [];
+  const tallas = row?.tallas ?? [];
+  if (!esCalidadWallysMelon(calidad)) return tallas;
+  const soloLlano = new Set<string>(TALLAS_MELON_SOLO_LLANO);
+  return tallas.filter((t) => !soloLlano.has(t));
+}
+
+/** Unión de tallas de todas las cajas, en orden numérico, según la calidad. */
+export function tallasMelonPorCalidad(calidad?: string | null): string[] {
+  const seen = new Set<string>();
+  for (const fila of FILAS_CAJA_MELON) {
+    for (const t of tallasParaPresentacionMelon(fila.presentacion, calidad)) {
+      seen.add(t);
+    }
+  }
+  return [...seen].sort((a, b) => cmpTallaMelon(a, b));
+}
+
+/** Orden numérico de calibre (#6, #9, #12, #15, #18). Vacías al final. */
+export function cmpTallaMelon(a: string | null | undefined, b: string | null | undefined): number {
+  const sa = String(a || '').replace(/^#/, '').replace(/s$/i, '').trim();
+  const sb = String(b || '').replace(/^#/, '').replace(/s$/i, '').trim();
+  if (!sa && sb) return 1;
+  if (sa && !sb) return -1;
+  const na = Number(sa);
+  const nb = Number(sb);
+  if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+  return sa.localeCompare(sb);
 }
 
 // ——— Melón recepción: área → sección → variedad ———

@@ -24,6 +24,7 @@ import {
   cajasPorParrillaMelon,
   labelCalidadMelon,
   labelPresentacionLimon,
+  tallasMelonPorCalidad,
   tallasParaPresentacionMelon,
 } from '../../lib/constants';
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
@@ -2225,7 +2226,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                           Wallys. Al guardar se ajusta el inventario final.
                         </p>
                         {editProduccion.map((p, i) => {
-                          const tallas = tallasParaPresentacionMelon(p.presentacion);
+                          const tallas = tallasParaPresentacionMelon(
+                            p.presentacion,
+                            p.calidad || 'llano'
+                          );
                           return (
                             <div
                               key={i}
@@ -2242,8 +2246,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                                 <select
                                   value={p.calidad || 'llano'}
                                   onChange={(e) => {
+                                    const calidad = e.target.value;
+                                    const ts = tallasParaPresentacionMelon(p.presentacion, calidad);
                                     const next = [...editProduccion];
-                                    next[i] = { ...next[i], calidad: e.target.value };
+                                    next[i] = {
+                                      ...next[i],
+                                      calidad,
+                                      talla: ts.includes(p.talla) ? p.talla : ts[0] || '',
+                                    };
                                     setEditProduccion(next);
                                   }}
                                   style={editInput}
@@ -2258,12 +2268,12 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                                   value={p.presentacion}
                                   onChange={(e) => {
                                     const val = e.target.value;
-                                    const ts = tallasParaPresentacionMelon(val);
+                                    const ts = tallasParaPresentacionMelon(val, p.calidad || 'llano');
                                     const next = [...editProduccion];
                                     next[i] = {
                                       ...next[i],
                                       presentacion: val,
-                                      talla: ts[0] || next[i].talla,
+                                      talla: ts.includes(next[i].talla) ? next[i].talla : ts[0] || '',
                                       cajas_por_parrilla: String(
                                         cajasPorParrillaMelon(val) || 56
                                       ),
@@ -2292,7 +2302,10 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
                                   style={editInput}
                                 >
                                   <option value="">—</option>
-                                  {(tallas.length ? tallas : ['6', '9', '12', '15']).map((t) => (
+                                  {(tallas.length
+                                    ? tallas
+                                    : tallasMelonPorCalidad(p.calidad || 'llano')
+                                  ).map((t) => (
                                     <option key={t} value={t}>
                                       #{t}s
                                     </option>

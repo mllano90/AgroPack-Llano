@@ -201,8 +201,13 @@ export default function InventariosAdmin({ token, onChanged, productoFiltro }: P
     const cant = parseInt(mCant, 10);
     if (isNaN(cant) || cant < 0) return alert('Cantidad inválida');
     if (!mPres) return alert('Elige presentación');
-    const tallas = tallasParaPresentacionMelon(mPres);
+    const tallas = tallasParaPresentacionMelon(mPres, mCalidad);
     if (tallas.length > 0 && !mTalla) return alert('Elige talla');
+    if (tallas.length > 0 && !tallas.includes(mTalla)) {
+      return alert(
+        'La talla #18 solo está disponible para primera calidad LLANO, no para segunda Wallys'
+      );
+    }
     setBusy(true);
     setError('');
     try {
@@ -318,7 +323,7 @@ export default function InventariosAdmin({ token, onChanged, productoFiltro }: P
   });
 
   const tallasAlta = tallasParaPresentacion(nPres);
-  const tallasAltaMelon = tallasParaPresentacionMelon(mPres);
+  const tallasAltaMelon = tallasParaPresentacionMelon(mPres, mCalidad);
 
   return (
     <div
@@ -611,8 +616,8 @@ export default function InventariosAdmin({ token, onChanged, productoFiltro }: P
                     value={mPres}
                     onChange={(e) => {
                       setMPres(e.target.value);
-                      const ts = tallasParaPresentacionMelon(e.target.value);
-                      setMTalla(ts[0] || '');
+                      const ts = tallasParaPresentacionMelon(e.target.value, mCalidad);
+                      setMTalla(ts.includes(mTalla) ? mTalla : ts[0] || '');
                     }}
                     style={inp}
                   >
@@ -639,7 +644,12 @@ export default function InventariosAdmin({ token, onChanged, productoFiltro }: P
                   Calidad
                   <select
                     value={mCalidad}
-                    onChange={(e) => setMCalidad(e.target.value)}
+                    onChange={(e) => {
+                      const cal = e.target.value;
+                      const ts = tallasParaPresentacionMelon(mPres, cal);
+                      setMCalidad(cal);
+                      if (!ts.includes(mTalla)) setMTalla(ts[0] || '');
+                    }}
                     style={inp}
                   >
                     <option value="llano">Primera LLANO</option>

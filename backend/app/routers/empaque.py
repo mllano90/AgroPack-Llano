@@ -18,6 +18,7 @@ from app.models.enums import TipoMercado
 from app.models.inventory import Empaque, InventarioCampo, InventarioFinal, InventarioDesverdizado
 from app.models.enums import Producto
 from app.models.enums import Producto as ProductoEnum
+from app.utils.melon_tallas import rechazar_lineas_talla_18
 from app.utils.limon_inv import (
     norm_talla as _talla_for_pres,
     norm_lote as _norm_lote_extra,
@@ -926,6 +927,10 @@ def _ajustar_inventario_final_melon(
     aplicadas: list[dict] = []
     problemas: list[str] = []
 
+    # #18 solo se suma en primera LLANO. Restar stock viejo no se bloquea aquí.
+    if signo > 0:
+        rechazar_lineas_talla_18(produccion)
+
     for linea in produccion or []:
         if not isinstance(linea, dict):
             continue
@@ -1562,6 +1567,8 @@ def crear_empaque(
     if empaque.producto == Producto.MELON:
         # Melón: bins de campo por sección (obligatorio) + producción LLANO/Wallys
         # A diferencia del limón: un solo lote por empaque (sin mezclar secciones).
+        # Validar antes de mover bins: #18 no se guarda en Wallys.
+        rechazar_lineas_talla_18(empaque.produccion)
         consumos_raw = empaque.consumos_desverdizado or []
         if empaque.bins_desverdizado_usados > 0 and not consumos_raw:
             consumos_raw = [
@@ -1978,6 +1985,8 @@ def editar_empaque_completo(
                     status_code=400,
                     detail="Cada línea de melón debe indicar calidad (llano o wallys)",
                 )
+        # Antes de devolver bins o mover cajas.
+        rechazar_lineas_talla_18(new_produccion)
 
     def _clave_consumo(c: dict) -> tuple:
         return (
