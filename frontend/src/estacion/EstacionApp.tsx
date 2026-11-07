@@ -10,6 +10,8 @@ import Rangos from './Rangos';
 import ConfigNodo from './ConfigNodo';
 import Alertas from './Alertas';
 import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, NODO_POR_DEFECTO } from './marca';
+import Instalar from './Instalar';
+import { ensancharLienzo, montarMetaPWA, registrarWorkerEstacion, soltarWorkerRaiz } from './pwa';
 
 type Vista = 'inicio' | 'historial' | 'rangos' | 'nodo' | 'alertas';
 type Rol = 'admin' | 'normal';
@@ -29,6 +31,11 @@ export default function EstacionApp() {
   const [errorRed, setErrorRed] = useState(false);
 
   useEffect(() => { enNoAutorizado(() => { setToken(null); setRol(null); }); }, []);
+  useEffect(() => {
+    const limpiar = [ensancharLienzo(), montarMetaPWA()];
+    soltarWorkerRaiz().finally(registrarWorkerEstacion);
+    return () => limpiar.forEach(f => f());
+  }, []);
   useEffect(() => {
     if (!token) { setRol(null); return; }
     api.yo().then(y => setRol(y.rol)).catch(() => {});
@@ -50,7 +57,13 @@ export default function EstacionApp() {
   }, [token, cargar]);
 
   if (!token) {
-    return <div className="estacion-root"><SpriteIconos /><Login alEntrar={(t, r) => { sesion.guardar(t); setToken(t); setRol(r); }} /></div>;
+    return (
+      <div className="estacion-root">
+        <SpriteIconos />
+        <Login alEntrar={(t, r) => { sesion.guardar(t); setToken(t); setRol(r); }} />
+        <div className="login-instalar"><Instalar /></div>
+      </div>
+    );
   }
 
   const admin = rol === 'admin';
@@ -76,6 +89,7 @@ export default function EstacionApp() {
         </div>
         <div className={'conexion' + (on ? '' : ' off')}><span className="punto" /><span>{on ? 'En línea' : 'Sin conexión'}</span></div>
         <Icono id={on ? 'wifi' : 'wifi-off'} className={'ico wifi' + (on ? '' : ' off')} />
+        <Instalar />
         <button className="btn" type="button" onClick={salir}>Salir</button>
       </header>
       <main>

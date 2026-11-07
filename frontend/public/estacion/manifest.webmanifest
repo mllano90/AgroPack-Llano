@@ -1,0 +1,22 @@
+{
+  "id": "/estacion/",
+  "name": "EM SIF – Estación Meteorológica SIF",
+  "short_name": "EM SIF",
+  "description": "Estación Meteorológica SIF: aire, radiación y suelo del cultivo en tiempo real.",
+  "lang": "es-MX",
+  "dir": "ltr",
+  "start_url": "/estacion/#inicio",
+  "scope": "/estacion/",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "theme_color": "#0b1f14",
+  "background_color": "#06140c",
+  "categories": ["utilities", "weather"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-maskable-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable" },
+    { "src": "icons/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
