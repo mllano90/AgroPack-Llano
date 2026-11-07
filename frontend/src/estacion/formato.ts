@@ -7,6 +7,13 @@ export const fDia = f({ day: '2-digit', month: 'short' });
 
 export const num = (v: number | null | undefined, d = 1) => (v === null || v === undefined ? '--' : Number(v).toFixed(d));
 
+/** Duración de un extremo del día: "25 min", "2 h", "2.5 h". */
+export function durTxt(seg: number): string {
+  if (seg < 3600) return `${Math.max(1, Math.round(seg / 60))} min`;
+  const h = Math.round(seg / 1800) / 2;
+  return `${Number.isInteger(h) ? h : h.toFixed(1)} h`;
+}
+
 export function edadTxt(ts: number | null | undefined, ahora: number): string {
   if (!ts) return '';
   const m = Math.max(0, Math.round((ahora - ts) / 60));

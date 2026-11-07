@@ -50,12 +50,13 @@ def validar(nuevo: dict) -> dict:
         cfg[k] = v
     cfg["bateria_min_v"] = float(nuevo.get("bateria_min_v", cfg["bateria_min_v"]))
     for k, u in (nuevo.get("umbrales") or {}).items():
-        if k not in cfg["umbrales"]:
+        if k not in cfg["umbrales"] or not isinstance(u, dict):
             continue
-        mn, mx = float(u.get("min")), float(u.get("max"))
-        if mn >= mx:
+        mn = None if u.get("min") in (None, "") else float(u.get("min"))
+        mx = None if u.get("max") in (None, "") else float(u.get("max"))
+        if mn is not None and mx is not None and mn >= mx:
             raise ValueError(f"{VARIABLES[k][0]}: el mínimo debe ser menor que el máximo")
-        cfg["umbrales"][k] = {"min": mn, "max": mx, "activo": bool(u.get("activo", True))}
+        cfg["umbrales"][k] = {"min": mn, "max": mx, "activo": bool(u.get("activo", True)) and (mn is not None or mx is not None)}
     return cfg
 
 

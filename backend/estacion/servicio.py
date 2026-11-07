@@ -20,6 +20,7 @@ TERMINALES = {"completado", "expirado", "fallido", "cancelado"}
 REPORTABLES = {"enviado_emisora", "activo", "completado", "expirado", "fallido"}
 ORDEN = {e: i for i, e in enumerate(ESTADOS_CMD)}
 EXPIRA_SIN_ACTIVO_S = 3600
+EXPIRA_WIFI_S = 1800          # el sobre WiFi no vive más de 30 min
 REENTREGA_S = 300
 TEXTO_CMD = {
     "pendiente": "pendiente (esperando a la receptora)",
@@ -109,10 +110,13 @@ def evaluar_registro(cx, cfg, nodo, r, ev, t_servidor):
         if val is None or not u:
             continue
         nombre, unidad = cfgmod.VARIABLES[var][0], cfgmod.VARIABLES[var][1]
-        if u.get("activo", True) and (val < u["min"] or val > u["max"]):
-            lado = "bajo" if val < u["min"] else "alto"
+        lo, hi = u.get("min"), u.get("max")
+        if u.get("activo", True) and ((lo is not None and val < lo) or (hi is not None and val > hi)):
+            lado = "bajo" if lo is not None and val < lo else "alto"
+            lo_txt = f"{lo:g}" if lo is not None else "—"
+            hi_txt = f"{hi:g}" if hi is not None else "—"
             alerta_abrir(cx, nodo, f"rango:{var}", "fuera_rango",
-                         f"{nombre} {lado}: {val:g} {unidad} (rango {u['min']:g}–{u['max']:g})", val, ts)
+                         f"{nombre} {lado}: {val:g} {unidad} (rango {lo_txt}–{hi_txt})", val, ts)
         else:
             alerta_resolver(cx, nodo, f"rango:{var}", ts)
 
@@ -260,6 +264,19 @@ def registrar_estado(cx, cuerpo, t_servidor=None):
             raise PaqueteInvalido("bateria_v inválido")
         rw = _entero(cuerpo.get("rssi_wifi"), "rssi_wifi", -150, 10)
         ts = _entero(cuerpo.get("ts", 0), "ts", 0, 4102444800) or t_servidor
+        wifi = None
+        if "wifi_ssid" in cuerpo:
+            ssid = cuerpo.get("wifi_ssid")
+            if not isinstance(ssid, str) or len(ssid.encode()) > 32 or "\x00" in ssid:
+                raise PaqueteInvalido("wifi_ssid inválido")
+            fuente = cuerpo.get("wifi_fuente")
+            if fuente is not None and fuente not in ("nvs", "fabrica", "prueba"):
+                raise PaqueteInvalido("wifi_fuente inválida")
+            con = cuerpo.get("wifi_con_clave")
+            if con is not None and not isinstance(con, bool):
+                raise PaqueteInvalido("wifi_con_clave inválido")
+            wifi = {"ssid": ssid, "fuente": fuente, "clave": "configurada" if con else "vacía",
+                    "firmware": fw, "ts": t_servidor}
     except PaqueteInvalido as e:
         return 400, {"ok": False, "error": str(e)}
     cx.ejecutar("INSERT INTO estacion_estado_receptora (nodo, ts, recibidos, perdidos, duplicados, reinicios_emisora, err_crc, "
@@ -268,6 +285,10 @@ def registrar_estado(cx, cuerpo, t_servidor=None):
                 (nodo, ts, vals["recibidos"], vals["perdidos"], vals["duplicados"], vals["reinicios_emisora"],
                  vals["err_crc"], vals["err_formato"], vals["radio_reinit"], vals["heap"], vals["heap_min"],
                  vals["cola_pendiente"], fw, vals["uptime_s"], bat, rw))
+    if wifi is not None:
+        bruto = json.dumps(wifi)
+        if cx.ejecutar("UPDATE estacion_config SET valor = ? WHERE clave = ?", (bruto, f"wifi:{nodo}")) == 0:
+            cx.ejecutar("INSERT INTO estacion_config (clave, valor) VALUES (?, ?)", (f"wifi:{nodo}", bruto))
     if bat is not None:   # placeholder batería (futuro)
         cfg = cfgmod.leer(cx)
         if bat < cfg["bateria_min_v"]:
@@ -280,17 +301,32 @@ def registrar_estado(cx, cuerpo, t_servidor=None):
 
 
 # ============================================================ comandos remotos
-def _cmd_publico(c):
+def _parametros_publicos(c):
+    """La interfaz nunca ve el sobre cifrado ni una contraseña."""
     par = json.loads(c["parametros"])
+    par.pop("sobre", None)
+    return par
+
+
+def _cmd_publico(c):
+    par = _parametros_publicos(c)
+    if c["tipo"] == "wifi" and c["estado"] == "completado":
+        texto = "completado: la receptora ya usa la red nueva"
+    else:
+        texto = TEXTO_CMD.get(c["estado"], c["estado"])
+    expira_base = EXPIRA_WIFI_S if c["tipo"] == "wifi" else EXPIRA_SIN_ACTIVO_S
     return {"id": c["id"], "nodo": c["nodo"], "tipo": c["tipo"], "parametros": par, "estado": c["estado"],
-            "estado_texto": TEXTO_CMD.get(c["estado"], c["estado"]), "creado": c["creado"],
+            "estado_texto": texto, "creado": c["creado"],
             "actualizado": c["actualizado"], "detalle": c["detalle"], "usuario": c["usuario"],
-            "expira": c["creado"] + EXPIRA_SIN_ACTIVO_S if ORDEN[c["estado"]] < ORDEN["activo"] else None}
+            "expira": c["creado"] + expira_base if ORDEN[c["estado"]] < ORDEN["activo"] else None}
 
 
 def _cmd_alerta(cx, c, t):
-    par = json.loads(c["parametros"])
-    msg = f"Comando #{c['id']} modo programación ({par.get('duracion_min')} min): {TEXTO_CMD[c['estado']]}"
+    par = _parametros_publicos(c)
+    if c["tipo"] == "wifi":
+        msg = f"Comando #{c['id']} WiFi «{par.get('ssid') or '?'}»: {TEXTO_CMD[c['estado']]}"
+    else:
+        msg = f"Comando #{c['id']} modo programación ({par.get('duracion_min')} min): {TEXTO_CMD[c['estado']]}"
     if c.get("detalle"):
         msg += f" — {c['detalle']}"
     if c["estado"] in TERMINALES:
@@ -301,9 +337,17 @@ def _cmd_alerta(cx, c, t):
 
 
 def _cmd_cambiar(cx, c, estado, detalle, t):
-    cx.ejecutar("UPDATE estacion_comandos SET estado = ?, detalle = ?, actualizado = ? WHERE id = ?",
-                (estado, detalle, t, c["id"]))
-    c = dict(c, estado=estado, detalle=detalle, actualizado=t)
+    par = json.loads(c["parametros"])
+    if c["tipo"] == "wifi" and estado in ("activo", "completado", "fallido", "expirado", "cancelado"):
+        par.pop("sobre", None)
+        parametros = json.dumps(par)
+        cx.ejecutar("UPDATE estacion_comandos SET estado = ?, detalle = ?, actualizado = ?, parametros = ? WHERE id = ?",
+                    (estado, detalle, t, parametros, c["id"]))
+        c = dict(c, estado=estado, detalle=detalle, actualizado=t, parametros=parametros)
+    else:
+        cx.ejecutar("UPDATE estacion_comandos SET estado = ?, detalle = ?, actualizado = ? WHERE id = ?",
+                    (estado, detalle, t, c["id"]))
+        c = dict(c, estado=estado, detalle=detalle, actualizado=t)
     _cmd_alerta(cx, c, t)
     return c
 
@@ -318,7 +362,7 @@ def crear_comando(cx, nodo, tipo, parametros, usuario, t=None):
     if not isinstance(nodo, str) or not RE_NODO.match(nodo):
         raise ValueError("nodo inválido")
     expirar_comandos(cx, t)
-    abiertos = cx.todos("SELECT id FROM estacion_comandos WHERE nodo = ? AND estado NOT IN "
+    abiertos = cx.todos("SELECT id FROM estacion_comandos WHERE nodo = ? AND tipo = 'ota' AND estado NOT IN "
                         "('completado','expirado','fallido','cancelado')", (nodo,))
     if abiertos:
         raise LookupError(f"ya hay un comando en curso (#{abiertos[0]['id']})")
@@ -326,6 +370,35 @@ def crear_comando(cx, nodo, tipo, parametros, usuario, t=None):
     cx.ejecutar("INSERT INTO estacion_comandos (nodo, tipo, parametros, estado, creado, actualizado, usuario) "
                 "VALUES (?, ?, ?, 'pendiente', ?, ?, ?)", (nodo, tipo, par, t, t, usuario))
     c = cx.uno("SELECT * FROM estacion_comandos WHERE id = (SELECT MAX(id) FROM estacion_comandos WHERE nodo = ?)", (nodo,))
+    aid = alerta_evento(cx, nodo, f"cmd:{c['id']}", "comando", "…", t)
+    cx.ejecutar("UPDATE estacion_comandos SET alerta_id = ? WHERE id = ?", (aid, c["id"]))
+    c["alerta_id"] = aid
+    _cmd_alerta(cx, c, t)
+    return _cmd_publico(c)
+
+
+def crear_comando_wifi(cx, nodo, ssid, clave, url, usuario, conservar=False, red_abierta=False, t=None):
+    """Comando wifi cifrado con ESTACION_INGEST_TOKEN. La clave en claro no se guarda."""
+    from . import wifi_cmd
+    t = t or ahora()
+    if not ajustes.ingest_token:
+        raise LookupError("falta ESTACION_INGEST_TOKEN: no se puede cifrar la contraseña")
+    if not isinstance(nodo, str) or not RE_NODO.match(nodo):
+        raise ValueError("nodo inválido")
+    ssid, clave, url = wifi_cmd.validar(ssid, clave, url, conservar, red_abierta)
+    expirar_comandos(cx, t)
+    abiertos = cx.todos("SELECT id FROM estacion_comandos WHERE nodo = ? AND tipo = 'wifi' AND estado NOT IN "
+                        "('completado','expirado','fallido','cancelado')", (nodo,))
+    if abiertos:
+        raise LookupError(f"ya hay un cambio de WiFi en curso (#{abiertos[0]['id']})")
+    marca = "conservar" if conservar else ("vacía" if not clave else "nueva")
+    pub = {"ssid": ssid, "url": url, "clave": marca}
+    cx.ejecutar("INSERT INTO estacion_comandos (nodo, tipo, parametros, estado, creado, actualizado, usuario) "
+                "VALUES (?, 'wifi', ?, 'pendiente', ?, ?, ?)", (nodo, json.dumps(pub), t, t, usuario))
+    c = cx.uno("SELECT * FROM estacion_comandos WHERE id = (SELECT MAX(id) FROM estacion_comandos WHERE nodo = ?)", (nodo,))
+    pub["sobre"] = wifi_cmd.cifrar(ajustes.ingest_token, c["id"], ssid, clave if not conservar else "", url, conservar)
+    cx.ejecutar("UPDATE estacion_comandos SET parametros = ? WHERE id = ?", (json.dumps(pub), c["id"]))
+    c["parametros"] = json.dumps(pub)
     aid = alerta_evento(cx, nodo, f"cmd:{c['id']}", "comando", "…", t)
     cx.ejecutar("UPDATE estacion_comandos SET alerta_id = ? WHERE id = ?", (aid, c["id"]))
     c["alerta_id"] = aid
@@ -342,7 +415,12 @@ def comandos_para_entrega(cx, nodo, t):
     out = []
     for c in filas:
         par = json.loads(c["parametros"])
-        out.append({"id": c["id"], "tipo": c["tipo"], "duracion_min": par.get("duracion_min")})
+        if c["tipo"] == "wifi":
+            sobre = par.get("sobre") or {}
+            out.append({"id": c["id"], "tipo": "wifi", "nonce": sobre.get("nonce"),
+                        "datos": sobre.get("datos"), "mac": sobre.get("mac")})
+        else:
+            out.append({"id": c["id"], "tipo": c["tipo"], "duracion_min": par.get("duracion_min")})
         _cmd_cambiar(cx, c, "entregado_receptora", c["detalle"], t)
     cancel = cx.todos("SELECT id FROM estacion_comandos WHERE nodo = ? AND estado = 'cancelado' AND actualizado >= ? "
                       "AND detalle LIKE 'cancelado tras entrega%'", (nodo, t - EXPIRA_SIN_ACTIVO_S))
@@ -366,7 +444,14 @@ def reportar_comando(cx, cid, cuerpo, t=None):
         return 409, {"ok": False, "error": f"el comando ya está {c['estado']}", "estado": c["estado"]}
     if ORDEN[nuevo] < ORDEN[c["estado"]] or (nuevo == c["estado"] and nuevo != "activo"):
         return 409, {"ok": False, "error": f"transición inválida {c['estado']} -> {nuevo}", "estado": c["estado"]}
-    if nuevo == "completado" and c["estado"] != "activo":
+    if c["tipo"] == "wifi":
+        if nuevo == "enviado_emisora":
+            return 409, {"ok": False, "error": "el comando wifi no se envía a la emisora", "estado": c["estado"]}
+        if c["estado"] == "pendiente" or (nuevo == "completado" and c["estado"] not in ("entregado_receptora", "activo")):
+            if not (c["estado"] == "entregado_receptora" and nuevo in ("activo", "fallido", "completado")) \
+                    and not (c["estado"] == "activo" and nuevo in ("completado", "fallido")):
+                return 409, {"ok": False, "error": f"transición inválida {c['estado']} -> {nuevo}", "estado": c["estado"]}
+    elif nuevo == "completado" and c["estado"] != "activo":
         return 409, {"ok": False, "error": "completado requiere estado activo previo", "estado": c["estado"]}
     c = _cmd_cambiar(cx, c, nuevo, detalle, t)
     return 200, {"ok": True, "id": cid, "estado": nuevo}
@@ -386,18 +471,33 @@ def cancelar_comando(cx, cid, t=None):
 
 
 def expirar_comandos(cx, t):
-    for c in cx.todos("SELECT * FROM estacion_comandos WHERE estado IN ('pendiente','entregado_receptora','enviado_emisora') "
-                      "AND creado <= ?", (t - EXPIRA_SIN_ACTIVO_S,)):
+    for c in cx.todos("SELECT * FROM estacion_comandos WHERE tipo <> 'wifi' AND estado IN "
+                      "('pendiente','entregado_receptora','enviado_emisora') AND creado <= ?", (t - EXPIRA_SIN_ACTIVO_S,)):
         _cmd_cambiar(cx, c, "expirado", "sin confirmación 'activo' en 60 min", t)
+    for c in cx.todos("SELECT * FROM estacion_comandos WHERE tipo = 'wifi' AND estado IN "
+                      "('pendiente','entregado_receptora') AND creado <= ?", (t - EXPIRA_WIFI_S,)):
+        _cmd_cambiar(cx, c, "expirado", "el cambio de WiFi no se confirmó en 30 min", t)
     for c in cx.todos("SELECT * FROM estacion_comandos WHERE estado = 'activo'"):
         dur = json.loads(c["parametros"]).get("duracion_min", 15)
         if t - c["actualizado"] > (dur + 30) * 60:
             _cmd_cambiar(cx, c, "expirado", "sin aviso de fin tras la ventana OTA", t)
 
 
-def listar_comandos(cx, nodo, limite=20):
-    return [_cmd_publico(c) for c in cx.todos("SELECT * FROM estacion_comandos WHERE nodo = ? ORDER BY id DESC LIMIT ?",
-                                              (nodo, limite))]
+def listar_comandos(cx, nodo, limite=20, tipo=None):
+    if tipo:
+        filas = cx.todos("SELECT * FROM estacion_comandos WHERE nodo = ? AND tipo = ? ORDER BY id DESC LIMIT ?",
+                         (nodo, tipo, limite))
+    else:
+        filas = cx.todos("SELECT * FROM estacion_comandos WHERE nodo = ? ORDER BY id DESC LIMIT ?", (nodo, limite))
+    return [_cmd_publico(c) for c in filas]
+
+
+def estado_wifi(cx, nodo):
+    fila = cx.uno("SELECT valor FROM estacion_config WHERE clave = ?", (f"wifi:{nodo}",))
+    receptora = json.loads(fila["valor"]) if fila else None
+    return {"nodo": nodo, "token_configurado": bool(ajustes.ingest_token),
+            "comandos": [c for c in listar_comandos(cx, nodo, 8) if c["tipo"] == "wifi"],
+            "receptora": receptora}
 
 
 # ============================================================ consultas UI
@@ -449,12 +549,33 @@ VARS_HIST = {
     "ph": ("ph", "ts_npk", "AND npk_nuevo = 1"), "ec": ("ec", "ts_npk", "AND npk_nuevo = 1"),
     "n": ("n", "ts_npk", "AND npk_nuevo = 1"), "p": ("p", "ts_npk", "AND npk_nuevo = 1"),
     "k": ("k", "ts_npk", "AND npk_nuevo = 1"),
+    "t_caja": ("t_int", "ts", ""), "h_caja": ("h_int", "ts", ""),
     "rssi": ("rssi", "ts", ""), "snr": ("snr", "ts", ""),
 }
 RANGOS = {   # rango: (duración s, paso s, fuente)
+    "8h": (8 * 3600, 120, "crudo"),
     "24h": (86400, 300, "crudo"), "7d": (7 * 86400, 1800, "crudo"), "30d": (30 * 86400, 7200, "hora"),
     "90d": (90 * 86400, 21600, "hora"), "365d": (365 * 86400, 86400, "hora"),
 }
+VARS_CAJA = {"t_caja", "h_caja"}
+# Segundos que cuentan como "cerca" del máximo o mínimo del día.
+BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0}
+
+
+def _puntos(cx, nodo, var, desde, hasta, paso, fuente):
+    if fuente == "crudo":
+        expr, tcol, filtro = VARS_HIST[var]
+        filas = cx.todos(
+            f"SELECT ({tcol} / ?) * ? AS b, AVG({expr}) AS prom, MIN({expr}) AS mn, MAX({expr}) AS mx, COUNT(*) AS n "
+            f"FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? AND ({expr}) IS NOT NULL {filtro} "
+            f"GROUP BY b ORDER BY b", (paso, paso, nodo, desde, hasta))
+    else:   # agregados horarios (se conservan indefinidamente)
+        filas = cx.todos(
+            "SELECT (hora / ?) * ? AS b, SUM(prom * n) / SUM(n) AS prom, MIN(vmin) AS mn, MAX(vmax) AS mx, SUM(n) AS n "
+            "FROM estacion_agregados_hora WHERE nodo = ? AND var = ? AND hora >= ? AND hora <= ? "
+            "GROUP BY b ORDER BY b", (paso, paso, nodo, var, desde - desde % 3600, hasta))
+    return [{"t": int(f["b"]), "prom": round(float(f["prom"]), 3), "min": float(f["mn"]), "max": float(f["mx"]),
+             "n": int(f["n"])} for f in filas]
 
 
 def historial(cx, nodo, var, rango, t=None):
@@ -463,20 +584,111 @@ def historial(cx, nodo, var, rango, t=None):
         raise ValueError("variable o rango inválido")
     dur, paso, fuente = RANGOS[rango]
     desde = t - dur
-    if fuente == "crudo":
+    return {"var": var, "rango": rango, "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": t,
+            "puntos": _puntos(cx, nodo, var, desde, t, paso, fuente)}
+
+
+def historial_ventana(cx, nodo, var, desde, hasta, t=None):
+    """Zoom: la ventana visible, con el paso más fino que cabe."""
+    if var not in VARS_HIST or hasta <= desde or hasta - desde > 400 * 86400:
+        raise ValueError("ventana inválida")
+    span = hasta - desde
+    if span <= 2 * 86400:
+        paso, fuente = 120, "crudo"
+    elif span <= 30 * 86400:
+        paso, fuente = 300, "crudo"
+    else:
+        paso, fuente = 3600, "hora"
+    return {"var": var, "rango": "ventana", "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": hasta,
+            "puntos": _puntos(cx, nodo, var, desde, hasta, paso, fuente)}
+
+
+def _inicio_dia_hmo(t):
+    local = t - 7 * 3600
+    return local - (local % 86400) + 7 * 3600
+
+
+def resumen_dia(cx, nodo, t=None):
+    """Máximo y mínimo de hoy (Hermosillo) y segundos cerca de cada extremo."""
+    t = t or ahora()
+    desde = _inicio_dia_hmo(t)
+    vars_out = {}
+    for var, banda in BANDAS_DIA.items():
         expr, tcol, filtro = VARS_HIST[var]
         filas = cx.todos(
-            f"SELECT ({tcol} / ?) * ? AS b, AVG({expr}) AS prom, MIN({expr}) AS mn, MAX({expr}) AS mx, COUNT(*) AS n "
-            f"FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? AND ({expr}) IS NOT NULL {filtro} "
-            f"GROUP BY b ORDER BY b", (paso, paso, nodo, desde, t))
-    else:   # agregados horarios (se conservan indefinidamente)
-        filas = cx.todos(
-            "SELECT (hora / ?) * ? AS b, SUM(prom * n) / SUM(n) AS prom, MIN(vmin) AS mn, MAX(vmax) AS mx, SUM(n) AS n "
-            "FROM estacion_agregados_hora WHERE nodo = ? AND var = ? AND hora >= ? AND hora <= ? "
-            "GROUP BY b ORDER BY b", (paso, paso, nodo, var, desde - desde % 3600, t))
-    pts = [{"t": int(f["b"]), "prom": round(float(f["prom"]), 3), "min": float(f["mn"]), "max": float(f["mx"]),
-            "n": int(f["n"])} for f in filas]
-    return {"var": var, "rango": rango, "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": t, "puntos": pts}
+            f"SELECT {tcol} AS t, ({expr}) AS v FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? "
+            f"AND ({expr}) IS NOT NULL {filtro} ORDER BY {tcol}", (nodo, desde, t))
+        vals = [(int(f["t"]), float(f["v"])) for f in filas if f["t"] is not None and f["v"] is not None]
+        if not vals:
+            vars_out[var] = None
+            continue
+        ts_max, vmax = max(vals, key=lambda x: (x[1], x[0]))
+        ts_min, vmin = min(vals, key=lambda x: (x[1], -x[0]))
+
+        def cerca(objetivo, _vals=vals, _banda=banda):
+            s = 0
+            for i, (ts, v) in enumerate(_vals):
+                if abs(v - objetivo) > _banda:
+                    continue
+                paso = (_vals[i + 1][0] - ts) if i + 1 < len(_vals) else 120
+                s += max(60, min(paso, 600))
+            return s
+
+        vars_out[var] = {"max": round(vmax, 3), "min": round(vmin, 3), "ts_max": ts_max, "ts_min": ts_min,
+                         "s_max": cerca(vmax), "s_min": cerca(vmin), "banda": banda, "paso_s": 120, "n": len(vals)}
+    return {"nodo": nodo, "zona": "America/Hermosillo", "desde": desde, "hasta": t, "vars": vars_out}
+
+
+ORDEN_REPORTE = ["t_aire", "h_aire", "pir", "t_suelo", "h_suelo", "ec", "ph", "n", "p", "k"]
+EXTRAS_REPORTE = {"t_aire": ["t1", "t2"], "h_aire": ["h1", "h2"]}
+NOMBRE_CAJA = {"t_caja": ("Temperatura de la caja", "°C"), "h_caja": ("Humedad de la caja", "%")}
+
+
+def _resumen_puntos(pts, umbral):
+    if not pts:
+        return None
+    n = sum(p["n"] for p in pts)
+    prom = sum(p["prom"] * p["n"] for p in pts) / n
+    dentro = 0
+    lo, hi = (umbral or {}).get("min"), (umbral or {}).get("max")
+    for p in pts:
+        v = p["prom"]
+        mal = (lo is not None and v < lo) or (hi is not None and v > hi)
+        if not mal:
+            dentro += p["n"]
+    return {"min": min(p["min"] for p in pts), "max": max(p["max"] for p in pts),
+            "prom": round(prom, 3), "n": n,
+            "en_rango_pct": round(1000 * dentro / n) / 10 if (lo is not None or hi is not None) else None}
+
+
+def reporte(cx, nodo, rango, incluir_caja=False, t=None):
+    t = t or ahora()
+    if rango not in ("24h", "7d", "30d", "365d"):
+        raise ValueError("rango inválido")
+    cfg = cfgmod.leer(cx)
+    orden = list(ORDEN_REPORTE)
+    if incluir_caja:
+        orden[3:3] = ["t_caja", "h_caja"]
+    variables = {}
+    cab = None
+    for var in orden:
+        h = historial(cx, nodo, var, rango, t)
+        cab = cab or h
+        if var in NOMBRE_CAJA:
+            nombre, unidad = NOMBRE_CAJA[var]
+            umbral = None
+        else:
+            nombre, unidad = cfgmod.VARIABLES[var][0], cfgmod.VARIABLES[var][1]
+            umbral = cfg["umbrales"].get(var)
+        extras = {}
+        for ex in EXTRAS_REPORTE.get(var, []):
+            extras[ex] = historial(cx, nodo, ex, rango, t)["puntos"]
+        variables[var] = {"nombre": nombre, "unidad": unidad, "fuente": h["fuente"],
+                          "resumen": _resumen_puntos(h["puntos"], umbral), "puntos": h["puntos"],
+                          "umbral": umbral, "extras": extras}
+    return {"nodo": nodo, "nombre_nodo": cfg["nombre_nodo"], "rango": rango, "generado": t,
+            "desde": cab["desde"], "hasta": cab["hasta"], "paso_s": cab["paso_s"], "fuente": cab["fuente"],
+            "orden": orden, "variables": variables, "rango_banda": True}
 
 
 # ============================================================ trabajo en segundo plano
@@ -534,7 +746,7 @@ def procesar_nuevas(cx, t=None, max_filas=5000):
 
 
 VARS_AGREGADAS = ["pir", "t_aire", "h_aire", "t1", "t2", "h1", "h2", "t_suelo", "h_suelo", "ph", "ec", "n", "p", "k",
-                  "rssi", "snr"]
+                  "t_caja", "h_caja", "rssi", "snr"]
 
 
 def reagregar(cx, nodo, desde, hasta):
