@@ -241,9 +241,31 @@ async def ultimo(request: Request, usuario: str = Depends(auth.usuario_actual)):
     return _resp(await _en_hilo(fn))
 
 
+def _caja_solo_admin(var: str, sesion: dict):
+    if var in sv.VARS_CAJA and sesion["rol"] != "admin":
+        return _err(403, "solo el administrador de la estación")
+    return None
+
+
+@router.get("/resumen-dia")
+async def resumen_dia(request: Request, _u: str = Depends(auth.usuario_actual)):
+    return _resp(await _en_hilo(lambda cx: (200, sv.resumen_dia(cx, _nodo(cx, request)))))
+
+
 @router.get("/historial")
-async def historial(request: Request, var: str = "t_aire", rango: str = "24h", _u: str = Depends(auth.usuario_actual)):
-    if var not in sv.VARS_HIST or rango not in sv.RANGOS:
+async def historial(request: Request, var: str = "t_aire", rango: str = "24h",
+                    desde: int | None = None, hasta: int | None = None,
+                    sesion: dict = Depends(auth.sesion_estacion)):
+    if var not in sv.VARS_HIST:
+        return _err(400, "variable o rango inválido")
+    veto = _caja_solo_admin(var, sesion)
+    if veto:
+        return veto
+    if desde is not None or hasta is not None:
+        if desde is None or hasta is None or hasta <= desde:
+            return _err(400, "ventana inválida")
+        return _resp(await _en_hilo(lambda cx: (200, sv.historial_ventana(cx, _nodo(cx, request), var, desde, hasta))))
+    if rango not in sv.RANGOS:
         return _err(400, "variable o rango inválido")
     return _resp(await _en_hilo(lambda cx: (200, sv.historial(cx, _nodo(cx, request), var, rango))))
 

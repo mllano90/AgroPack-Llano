@@ -109,10 +109,13 @@ def evaluar_registro(cx, cfg, nodo, r, ev, t_servidor):
         if val is None or not u:
             continue
         nombre, unidad = cfgmod.VARIABLES[var][0], cfgmod.VARIABLES[var][1]
-        if u.get("activo", True) and (val < u["min"] or val > u["max"]):
-            lado = "bajo" if val < u["min"] else "alto"
+        lo, hi = u.get("min"), u.get("max")
+        if u.get("activo", True) and ((lo is not None and val < lo) or (hi is not None and val > hi)):
+            lado = "bajo" if lo is not None and val < lo else "alto"
+            lo_txt = f"{lo:g}" if lo is not None else "—"
+            hi_txt = f"{hi:g}" if hi is not None else "—"
             alerta_abrir(cx, nodo, f"rango:{var}", "fuera_rango",
-                         f"{nombre} {lado}: {val:g} {unidad} (rango {u['min']:g}–{u['max']:g})", val, ts)
+                         f"{nombre} {lado}: {val:g} {unidad} (rango {lo_txt}–{hi_txt})", val, ts)
         else:
             alerta_resolver(cx, nodo, f"rango:{var}", ts)
 
@@ -449,12 +452,33 @@ VARS_HIST = {
     "ph": ("ph", "ts_npk", "AND npk_nuevo = 1"), "ec": ("ec", "ts_npk", "AND npk_nuevo = 1"),
     "n": ("n", "ts_npk", "AND npk_nuevo = 1"), "p": ("p", "ts_npk", "AND npk_nuevo = 1"),
     "k": ("k", "ts_npk", "AND npk_nuevo = 1"),
+    "t_caja": ("t_int", "ts", ""), "h_caja": ("h_int", "ts", ""),
     "rssi": ("rssi", "ts", ""), "snr": ("snr", "ts", ""),
 }
 RANGOS = {   # rango: (duración s, paso s, fuente)
+    "8h": (8 * 3600, 120, "crudo"),
     "24h": (86400, 300, "crudo"), "7d": (7 * 86400, 1800, "crudo"), "30d": (30 * 86400, 7200, "hora"),
     "90d": (90 * 86400, 21600, "hora"), "365d": (365 * 86400, 86400, "hora"),
 }
+VARS_CAJA = {"t_caja", "h_caja"}
+# Segundos que cuentan como "cerca" del máximo o mínimo del día.
+BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0}
+
+
+def _puntos(cx, nodo, var, desde, hasta, paso, fuente):
+    if fuente == "crudo":
+        expr, tcol, filtro = VARS_HIST[var]
+        filas = cx.todos(
+            f"SELECT ({tcol} / ?) * ? AS b, AVG({expr}) AS prom, MIN({expr}) AS mn, MAX({expr}) AS mx, COUNT(*) AS n "
+            f"FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? AND ({expr}) IS NOT NULL {filtro} "
+            f"GROUP BY b ORDER BY b", (paso, paso, nodo, desde, hasta))
+    else:   # agregados horarios (se conservan indefinidamente)
+        filas = cx.todos(
+            "SELECT (hora / ?) * ? AS b, SUM(prom * n) / SUM(n) AS prom, MIN(vmin) AS mn, MAX(vmax) AS mx, SUM(n) AS n "
+            "FROM estacion_agregados_hora WHERE nodo = ? AND var = ? AND hora >= ? AND hora <= ? "
+            "GROUP BY b ORDER BY b", (paso, paso, nodo, var, desde - desde % 3600, hasta))
+    return [{"t": int(f["b"]), "prom": round(float(f["prom"]), 3), "min": float(f["mn"]), "max": float(f["mx"]),
+             "n": int(f["n"])} for f in filas]
 
 
 def historial(cx, nodo, var, rango, t=None):
@@ -463,20 +487,59 @@ def historial(cx, nodo, var, rango, t=None):
         raise ValueError("variable o rango inválido")
     dur, paso, fuente = RANGOS[rango]
     desde = t - dur
-    if fuente == "crudo":
+    return {"var": var, "rango": rango, "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": t,
+            "puntos": _puntos(cx, nodo, var, desde, t, paso, fuente)}
+
+
+def historial_ventana(cx, nodo, var, desde, hasta, t=None):
+    """Zoom: la ventana visible, con el paso más fino que cabe."""
+    if var not in VARS_HIST or hasta <= desde or hasta - desde > 400 * 86400:
+        raise ValueError("ventana inválida")
+    span = hasta - desde
+    if span <= 2 * 86400:
+        paso, fuente = 120, "crudo"
+    elif span <= 30 * 86400:
+        paso, fuente = 300, "crudo"
+    else:
+        paso, fuente = 3600, "hora"
+    return {"var": var, "rango": "ventana", "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": hasta,
+            "puntos": _puntos(cx, nodo, var, desde, hasta, paso, fuente)}
+
+
+def _inicio_dia_hmo(t):
+    local = t - 7 * 3600
+    return local - (local % 86400) + 7 * 3600
+
+
+def resumen_dia(cx, nodo, t=None):
+    """Máximo y mínimo de hoy (Hermosillo) y segundos cerca de cada extremo."""
+    t = t or ahora()
+    desde = _inicio_dia_hmo(t)
+    vars_out = {}
+    for var, banda in BANDAS_DIA.items():
         expr, tcol, filtro = VARS_HIST[var]
         filas = cx.todos(
-            f"SELECT ({tcol} / ?) * ? AS b, AVG({expr}) AS prom, MIN({expr}) AS mn, MAX({expr}) AS mx, COUNT(*) AS n "
-            f"FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? AND ({expr}) IS NOT NULL {filtro} "
-            f"GROUP BY b ORDER BY b", (paso, paso, nodo, desde, t))
-    else:   # agregados horarios (se conservan indefinidamente)
-        filas = cx.todos(
-            "SELECT (hora / ?) * ? AS b, SUM(prom * n) / SUM(n) AS prom, MIN(vmin) AS mn, MAX(vmax) AS mx, SUM(n) AS n "
-            "FROM estacion_agregados_hora WHERE nodo = ? AND var = ? AND hora >= ? AND hora <= ? "
-            "GROUP BY b ORDER BY b", (paso, paso, nodo, var, desde - desde % 3600, t))
-    pts = [{"t": int(f["b"]), "prom": round(float(f["prom"]), 3), "min": float(f["mn"]), "max": float(f["mx"]),
-            "n": int(f["n"])} for f in filas]
-    return {"var": var, "rango": rango, "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": t, "puntos": pts}
+            f"SELECT {tcol} AS t, ({expr}) AS v FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? "
+            f"AND ({expr}) IS NOT NULL {filtro} ORDER BY {tcol}", (nodo, desde, t))
+        vals = [(int(f["t"]), float(f["v"])) for f in filas if f["t"] is not None and f["v"] is not None]
+        if not vals:
+            vars_out[var] = None
+            continue
+        ts_max, vmax = max(vals, key=lambda x: (x[1], x[0]))
+        ts_min, vmin = min(vals, key=lambda x: (x[1], -x[0]))
+
+        def cerca(objetivo, _vals=vals, _banda=banda):
+            s = 0
+            for i, (ts, v) in enumerate(_vals):
+                if abs(v - objetivo) > _banda:
+                    continue
+                paso = (_vals[i + 1][0] - ts) if i + 1 < len(_vals) else 120
+                s += max(60, min(paso, 600))
+            return s
+
+        vars_out[var] = {"max": round(vmax, 3), "min": round(vmin, 3), "ts_max": ts_max, "ts_min": ts_min,
+                         "s_max": cerca(vmax), "s_min": cerca(vmin), "banda": banda, "paso_s": 120, "n": len(vals)}
+    return {"nodo": nodo, "zona": "America/Hermosillo", "desde": desde, "hasta": t, "vars": vars_out}
 
 
 # ============================================================ trabajo en segundo plano
@@ -534,7 +597,7 @@ def procesar_nuevas(cx, t=None, max_filas=5000):
 
 
 VARS_AGREGADAS = ["pir", "t_aire", "h_aire", "t1", "t2", "h1", "h2", "t_suelo", "h_suelo", "ph", "ec", "n", "p", "k",
-                  "rssi", "snr"]
+                  "t_caja", "h_caja", "rssi", "snr"]
 
 
 def reagregar(cx, nodo, desde, hasta):

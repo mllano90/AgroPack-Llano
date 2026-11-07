@@ -57,6 +57,19 @@ def test_ui_requiere_jwt_propio(cliente):
     assert cliente.get(f"{API}/auth/yo").json() == {"usuario": "admin", "rol": "admin"}
 
 
+def test_resumen_del_dia(cliente):
+    t = int(time.time())
+    def linea(seq, epoch, t1):
+        return f"D,{seq},0,{t1},500,0,{t1},500,0,900,0,400,200,1000,60,80,40,90,6,2,0,2,30,0,250,400,{epoch}"
+    ingesta(cliente, [{"csv": linea(1, t - 600, 200)}, {"csv": linea(2, t - 60, 390)}])
+    login(cliente)
+    aire = cliente.get(f"{API}/resumen-dia").json()["vars"]["t_aire"]
+    assert aire["min"] == 20 and aire["max"] == 39
+    assert aire["s_max"] >= 60 and aire["s_min"] >= 60
+    ven = cliente.get(f"{API}/historial?var=t_aire&desde={t - 3600}&hasta={t + 30}")
+    assert ven.status_code == 200 and ven.json()["rango"] == "ventana" and ven.json()["paso_s"] == 120
+
+
 def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
     login(cliente)
     malo = [
@@ -87,6 +100,8 @@ def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
     assert cliente.get(f"{API}/ultimo", headers=hv).status_code == 200
     assert cliente.get(f"{API}/alertas", headers=hv).status_code == 200
     assert cliente.get(f"{API}/historial?var=t_aire&rango=24h", headers=hv).status_code == 200
+    assert cliente.get(f"{API}/historial?var=t_caja&rango=24h", headers=hv).status_code == 403
+    assert cliente.get(f"{API}/resumen-dia", headers=hv).status_code == 200
     anon = {"Authorization": ""}
     assert cliente.get(f"{API}/usuarios", headers=anon).status_code == 401
     assert cliente.get(f"{API}/ultimo", headers=anon).status_code == 401

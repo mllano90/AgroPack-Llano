@@ -6,18 +6,21 @@ import { Icono, SpriteIconos } from './Icono';
 import Login from './Login';
 import Inicio from './Inicio';
 import Historial from './Historial';
-import Configuracion from './Configuracion';
+import Rangos from './Rangos';
+import ConfigNodo from './ConfigNodo';
 import Alertas from './Alertas';
+import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, NODO_POR_DEFECTO } from './marca';
 
-type Vista = 'inicio' | 'historial' | 'config' | 'alertas';
+type Vista = 'inicio' | 'historial' | 'rangos' | 'nodo' | 'alertas';
 type Rol = 'admin' | 'normal';
-const VISTAS: Vista[] = ['inicio', 'historial', 'config', 'alertas'];
+const VISTAS: Vista[] = ['inicio', 'historial', 'rangos', 'nodo', 'alertas'];
 const vistaDeHash = (): Vista => {
-  const v = location.hash.replace('#', '') as Vista;
+  const raw = location.hash.replace('#', '');
+  const v = (raw === 'config' ? 'nodo' : raw) as Vista;
   return VISTAS.includes(v) ? v : 'inicio';
 };
 
-/** Módulo completo de la estación. En AgroPack: <Route path="/estacion/*" element={<EstacionApp />} /> */
+/** Módulo de la estación. La ruta de AgroPack sigue siendo /estacion. */
 export default function EstacionApp() {
   const [token, setToken] = useState(sesion.token());
   const [rol, setRol] = useState<Rol | null>(null);
@@ -46,38 +49,46 @@ export default function EstacionApp() {
     return () => clearInterval(id);
   }, [token, cargar]);
 
-  if (!token) return <div className="estacion-root"><SpriteIconos /><Login alEntrar={(t, r) => { sesion.guardar(t); setToken(t); setRol(r); }} /></div>;
+  if (!token) {
+    return <div className="estacion-root"><SpriteIconos /><Login alEntrar={(t, r) => { sesion.guardar(t); setToken(t); setRol(r); }} /></div>;
+  }
 
   const admin = rol === 'admin';
   const on = !!(ultimo?.hay_datos && ultimo.en_linea);
   const ir = (v: Vista) => { location.hash = v; setVista(v); window.scrollTo(0, 0); };
   const salir = () => { sesion.borrar(); setToken(null); setRol(null); };
-  const pestanas: [Vista, string, string][] = [
+  const vistaOk: Vista = !admin && (vista === 'nodo' || vista === 'rangos') ? 'inicio' : vista;
+  const nav: [Vista, string, string][] = [
     ['inicio', 'casa', 'Inicio'],
     ['historial', 'grafica', 'Historial'],
-    ...(admin ? [['config', 'engrane', 'Configuración'] as [Vista, string, string]] : []),
+    ...(admin ? [['rangos', 'rangos', 'Rangos'] as [Vista, string, string], ['nodo', 'engrane', 'Config'] as [Vista, string, string]] : []),
     ['alertas', 'campana', 'Alertas'],
   ];
   return (
-    <div className="estacion-root">
+    <div className={'estacion-root' + (vistaOk === 'inicio' ? ' en-inicio' : '')}>
       <SpriteIconos />
       <div className="fondo" />
       <header className="vidrio cabecera">
         <Icono id="hoja" className="ico hoja" />
-        <h1>{ultimo?.nombre_nodo ?? 'Nodo Cultivo – Casa Sombra'}</h1>
+        <div className="marca">
+          <h1>{MARCA}<span className="marca-nombre">{MARCA_NOMBRE}</span><span className="marca-firma">{MARCA_FIRMA}</span></h1>
+          <div className="marca-nodo">{ultimo?.nombre_nodo ?? NODO_POR_DEFECTO}</div>
+        </div>
         <div className={'conexion' + (on ? '' : ' off')}><span className="punto" /><span>{on ? 'En línea' : 'Sin conexión'}</span></div>
         <Icono id={on ? 'wifi' : 'wifi-off'} className={'ico wifi' + (on ? '' : ' off')} />
         <button className="btn" type="button" onClick={salir}>Salir</button>
       </header>
       <main>
-        {vista === 'inicio' && <Inicio d={ultimo} errorRed={errorRed} />}
-        {vista === 'historial' && <Historial />}
-        {vista === 'config' && admin && <Configuracion alGuardar={cargar} alSalir={salir} />}
-        {vista === 'alertas' && <Alertas alCambiar={cargar} puedeResolver={admin} />}
+        {vistaOk === 'inicio' && <Inicio d={ultimo} errorRed={errorRed} />}
+        {vistaOk === 'historial' && <Historial esAdmin={admin} />}
+        {vistaOk === 'rangos' && admin && <Rangos alGuardar={cargar} alSalir={salir} />}
+        {vistaOk === 'nodo' && admin && <ConfigNodo ultimo={ultimo} alGuardar={cargar} alSalir={salir} />}
+        {vistaOk === 'alertas' && <Alertas alCambiar={cargar} puedeResolver={admin} />}
+        <footer className="pie-marca">{MARCA} · {MARCA_NOMBRE} · <span>{MARCA_FIRMA}</span></footer>
       </main>
-      <nav className={'vidrio barra-nav' + (admin ? '' : ' tres')}>
-        {pestanas.map(([v, ic, txt]) => (
-          <a key={v} href={`#${v}`} className={vista === v ? 'on' : ''} onClick={e => { e.preventDefault(); ir(v); }}>
+      <nav className="vidrio barra-nav">
+        {nav.map(([v, ic, txt]) => (
+          <a key={v} href={`#${v}`} className={vistaOk === v ? 'on' : ''} onClick={e => { e.preventDefault(); ir(v); }}>
             {v === 'alertas'
               ? <span className="campana"><Icono id={ic} />{!!ultimo?.alertas_activas && <span className="badge">{ultimo.alertas_activas > 99 ? '99+' : ultimo.alertas_activas}</span>}</span>
               : <Icono id={ic} />}

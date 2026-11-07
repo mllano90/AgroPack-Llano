@@ -196,6 +196,8 @@ def test_css_sin_selectores_globales():
             break
     assert css_path is not None, "no está frontend/src/estacion/estacion.css"
     css = css_path.read_text(encoding="utf-8")
+    css = re.sub(r"/\*.*?\*/", "", css, flags=re.S)
+    css = re.sub(r"@keyframes[^{]+\{(?:[^{}]|\{[^{}]*\})*\}", "", css)
     sin_media = re.sub(r"@media[^{]+\{", "", css)
     for sel in re.findall(r"(?:^|})\s*([^{}@]+)\{", sin_media):
         for s in sel.split(","):

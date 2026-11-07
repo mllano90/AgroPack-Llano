@@ -1,94 +1,184 @@
-import { useState } from 'react';
-import type { Sensor, Ultimo, Umbral } from './tipos';
+import { useCallback, useEffect, useState } from 'react';
+import { api } from './api';
+import BarrasEnlace from './Enlace';
+import type { ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
 import { Icono } from './Icono';
-import { edadTxt, fHoraS, num } from './formato';
+import { durTxt, edadTxt, fHora, fHoraS, num } from './formato';
+import { IND, type DefIndicador } from './indicadores';
+import ModalHistorial from './ModalHistorial';
+import { fueraDeRango } from './rango';
+import { prefAmbiente, UMBRAL_AMB } from './prefs';
 
-function Tarjeta({ id, icono, etq, valor, dec, unidad, err, lo, hi, umb, ts, ahora, onClick }: {
-  id: string; icono: string; etq: string; valor: number | null | undefined; dec: number; unidad: string; err: string | null;
-  lo: number; hi: number; umb?: Umbral; ts?: number; ahora: number; onClick?: () => void;
-}) {
-  const ancho = err || valor == null ? 0 : Math.max(3, Math.min(100, ((valor - lo) / (hi - lo)) * 100));
-  const fuera = !err && valor != null && umb?.activo && (valor < umb.min || valor > umb.max);
+/** Indicador tocable: abre la ventana emergente con su historial. */
+/** Máximo y mínimo de hoy con cuánto duró cada nivel, p. ej. "máx 39.0 °C (2 h)" / "mín 18.0 °C (3 h)".
+ * Móvil (≤480 px): sin unidad (ya está en el valor grande) y, en las tarjetas angostas del suelo (≈65 px útiles),
+ * ▲/▼ en lugar de "máx"/"mín"; el título (toque largo / hover) conserva el texto completo con la hora del extremo. */
+function Extremos({ def, e }: { def: DefIndicador; e?: ExtremoDia | null }) {
+  if (!e) return null;
+  const u = def.unidad ? ' ' + def.unidad : '';
+  const t = (v: number, ts: number, s: number, q: string) =>
+    `${q} de hoy ${num(v, def.dec)}${u} a las ${fHora.format(ts * 1000)}; ${durTxt(s)} cerca de ese nivel (±${num(e.banda, def.dec)}${u})`;
   return (
-    <article id={id} className={'vidrio tarjeta' + (onClick ? ' tocable' : '')} onClick={onClick}
-      role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}
-      onKeyDown={e => { if (onClick && (e.key === 'Enter' || e.key === ' ')) onClick(); }}>
-      <Icono id={icono} className="ico grande" />
-      <div className="cuerpo">
-        <div className="etq">{etq}</div>
-        <div className="valor">
-          {err ? <b className="err" title={err}>Error sensor</b> : <><b>{num(valor, dec)}</b><small>{unidad}</small></>}
-        </div>
-        <div className="barra"><i className={fuera ? 'fuera' : ''} style={{ width: `${ancho}%` }} /></div>
-        <div className="edad">{ts ? 'Medido ' + edadTxt(ts, ahora) : ''}</div>
-      </div>
-    </article>
+    <span className="ind-ext" title={`${t(e.max, e.ts_max, e.s_max, 'Máximo')}\n${t(e.min, e.ts_min, e.s_min, 'Mínimo')}`}>
+      <span className="ext-max"><span className="ext-q">máx </span><span className="ext-f" aria-hidden="true">▲</span>{num(e.max, def.dec)}<span className="ext-u">{u}</span> <i>({durTxt(e.s_max)})</i></span>
+      <span className="ext-min"><span className="ext-q">mín </span><span className="ext-f" aria-hidden="true">▼</span>{num(e.min, def.dec)}<span className="ext-u">{u}</span> <i>({durTxt(e.s_min)})</i></span>
+    </span>
   );
 }
 
-function FilaSuelo({ icono, etq, html, err, ts, ahora, extra = '' }: {
-  icono: string; etq: string; html: React.ReactNode; err: string | null; ts?: number | null; ahora: number; extra?: string;
+function Indicador({ def, valor, err, umb, lo, hi, sub, ext, tam = 'normal', alAbrir }: {
+  def: DefIndicador; valor: number | null | undefined; err: string | null; umb?: Umbral; lo?: number; hi?: number;
+  sub?: React.ReactNode; ext?: ExtremoDia | null; tam?: 'grande' | 'normal' | 'mini'; alAbrir: (d: DefIndicador) => void;
 }) {
+  const fuera = !err && !!fueraDeRango(valor, umb);
+  const ancho = lo == null || hi == null || err || valor == null ? null : Math.max(3, Math.min(100, ((valor - lo) / (hi - lo)) * 100));
+  const txt = err ? 'Error sensor' : `${num(valor, def.dec)}${def.unidad ? ' ' + def.unidad : ''}`;
   return (
-    <div className="fila">
-      <Icono id={icono} />
-      <span>{etq}</span>
-      {err ? <b className="err" title={err}>Error sensor</b> : <b>{html}</b>}
-      <em>{(ts ? 'Lectura ' + edadTxt(ts, ahora) : err || 'sin datos') + extra}</em>
-    </div>
+    <button type="button" id={'ind-' + def.v} className={`ind ind-${tam}${fuera ? ' fuera' : ''}${err ? ' con-error' : ''}`}
+      onClick={() => alAbrir(def)} aria-haspopup="dialog" aria-label={`${def.nombre}: ${txt}. Ver historial`}>
+      <span className="ind-cab"><Icono id={def.icono} className="ico" /><span className="ind-etq"><span className="etq-larga">{def.corto}</span>{def.mini && <span className="etq-mini">{def.mini}</span>}</span>
+        <Icono id="grafica" className="ico ind-graf" /></span>
+      <span className="ind-cuerpo">
+        <span className="ind-valor">
+          {err ? <b className="err" title={err}>Error sensor</b> : <><b>{num(valor, def.dec)}</b>{def.unidad && <small>{def.unidad}</small>}</>}
+        </span>
+        <Extremos def={def} e={ext} />
+      </span>
+      {ancho != null && <span className="barra"><i className={fuera ? 'fuera' : ''} style={{ width: `${ancho}%`, background: def.color }} /></span>}
+      {sub && <span className="ind-sub">{sub}</span>}
+    </button>
   );
 }
 
-const txtSensor = (s: Sensor, campo: 't' | 'h', u: string, d = 1) => (s.ok ? `${num(s[campo], d)} ${u}` : 'Error sensor');
+
+/** Tarjeta compacta de conexión LoRa: click despliega lectura, receptora, cola y barras RSSI/SNR. */
+function TarjetaConexion({ d }: { d: Ultimo }) {
+  const [abierta, setAbierta] = useState(false);
+  const A = d.ahora;
+  const fw = (d.receptora?.firmware || '').replace(/^receptora-/, 'v');
+  const resumen = [
+    edadTxt(d.ts, A) || 'sin lectura',
+    d.rssi != null ? `RSSI ${d.rssi}` : null,
+    d.snr != null ? `SNR ${Number(d.snr).toFixed(1)}` : null,
+  ].filter(Boolean).join(' · ');
+  return (
+    <button type="button" className={'tarjeta-conexion meta-lectura' + (abierta ? ' abierta' : '')}
+      aria-expanded={abierta} onClick={() => setAbierta(v => !v)}
+      aria-label={abierta ? 'Ocultar detalle de conexión' : 'Ver detalle de conexión'}>
+      <span className="tc-cab">
+        <Icono id="wifi" className="ico" />
+        <span className="tc-tit">Conexión</span>
+        {!abierta && <span className="tc-resumen">{resumen}</span>}
+        <span className="tc-chev" aria-hidden="true">{abierta ? '▾' : '▸'}</span>
+      </span>
+      <BarrasEnlace rssi={d.rssi} snr={d.snr} />
+      {abierta && (
+        <span className="tc-det">
+          <span>Última lectura: <b>{d.ts ? fHoraS.format(d.ts * 1000) : '--'}</b>
+            {d.ts != null && <> (hace {Math.max(0, Math.round((A - d.ts) / 60))} min)</>}
+            {d.tipo != null && <> · paquete {d.tipo} #{d.seq}</>}
+          </span>
+          {d.sin_hora_emisora && <span className="tc-aviso">Emisora sin hora (se usó la de recepción)</span>}
+          {d.receptora && <span>Receptora {fw || '?'}, cola {d.receptora.cola_pendiente ?? '?'}</span>}
+        </span>
+      )}
+    </button>
+  );
+}
+
+
+/** Capa CSS ligera: tinte cálido/frío y haz de sol según aire y piranómetro. No captura clics. */
+function ambienteQuieto(): boolean {
+  if (typeof window === 'undefined' || !window.matchMedia) return false;
+  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    || window.matchMedia('(max-width: 699px), (pointer: coarse)').matches;
+}
+
+function CapaAmbiente({ tAire, pir }: { tAire: number | null | undefined; pir: number | null | undefined }) {
+  if (!prefAmbiente.activo() || ambienteQuieto()) return null;
+  const clases = ['capa-ambiente'];
+  if (tAire != null && tAire > UMBRAL_AMB.calor) clases.push('amb-calido');
+  else if (tAire != null && tAire < UMBRAL_AMB.frio) clases.push('amb-frio');
+  if (pir != null && pir >= UMBRAL_AMB.sol) clases.push('amb-sol');
+  if (clases.length === 1) return null; // sin efecto activo
+  return <div className={clases.join(' ')} aria-hidden="true" />;
+}
+
+const sAire = (s: Sensor, c: 't' | 'h', d: number) => (s.ok ? num(s[c], d) : 'err');
 
 export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: boolean }) {
-  const [verAire, setVerAire] = useState(false);
+  const [abierto, setAbierto] = useState<DefIndicador | null>(null);
+  const cerrar = useCallback(() => setAbierto(null), []);
+  const hay = !!(d?.hay_datos && d.aire && d.pir && d.suelo);
+  // extremos del día: se piden al llegar una lectura nueva (cada ~2 min), no en cada refresco de 30 s
+  const [dia, setDia] = useState<ResumenDia | null>(null);
+  const tsUlt = d?.ts ?? 0;
+  useEffect(() => {
+    if (!hay) return;
+    let vivo = true;
+    api.resumenDia().then(r => { if (vivo) setDia(r); }).catch(() => { /* sin extremos: la tarjeta sigue igual */ });
+    return () => { vivo = false; };
+  }, [hay, tsUlt]);
+  const X = dia?.vars ?? {};
   if (!d) return <section className="vista"><div className="vidrio pie-info">{errorRed ? 'Sin conexión con el servidor' : 'Cargando…'}</div></section>;
   if (!d.hay_datos || !d.aire || !d.pir || !d.suelo) return <section className="vista"><div className="vidrio pie-info">Aún no hay lecturas de este nodo.</div></section>;
-  const A = d.ahora, ar = d.aire, U = d.umbrales, su = d.suelo;
+  const A = d.ahora, ar = d.aire, U = d.umbrales, su = d.suelo, npk = d.npk;
   const errAire = !ar.a1.ok && !ar.a2.ok ? `A1: ${ar.a1.error} · A2: ${ar.a2.error}` : null;
   const errSuelo = su.ok ? null : su.codigo === 255 ? 'Aún sin lectura' : su.error;
-  const extraNpk = d.npk_ultimo_fallo ? ' · último muestreo FALLÓ' : '';
   const f = d.fase!;
+  const abrir = setAbierto;
+  const nq = (k: 'ec' | 'ph' | 'n' | 'p' | 'k') => (npk ? npk[k] : null);
   return (
     <section id="v-inicio" className="vista">
-      <div className="fila-aire">
-        <Tarjeta id="cPir" icono="sol" etq="Radiación solar" valor={d.pir.v} dec={0} unidad="W/m²" err={d.pir.error} lo={0} hi={1000} umb={U.pir} ts={d.ts} ahora={A} />
-        <Tarjeta id="cTa" icono="termo" etq="Temperatura aire" valor={ar.t} dec={1} unidad="°C" err={errAire} lo={0} hi={45} umb={U.t_aire} ts={d.ts} ahora={A} onClick={() => setVerAire(v => !v)} />
-        <Tarjeta id="cHa" icono="gota" etq="Humedad aire" valor={ar.h} dec={0} unidad="%" err={errAire} lo={0} hi={100} umb={U.h_aire} ts={d.ts} ahora={A} onClick={() => setVerAire(v => !v)} />
-      </div>
-      {verAire && (
-        <div className="vidrio detalle-aire">
-          <div className="det-tit">Sensores de aire <button className="x" aria-label="Cerrar" onClick={() => setVerAire(false)}>×</button></div>
-          <div className="det-grid">
-            {([['Aire 1', ar.a1], ['Aire 2', ar.a2]] as const).map(([n, s]) => (
-              <div key={n}><span className="tenue">{n}</span>
-                <b className={s.ok ? '' : 'err'}>{txtSensor(s, 't', '°C')}</b>
-                <b className={s.ok ? '' : 'err'}>{s.ok ? `${num(s.h)} %` : s.error}</b></div>
-            ))}
-          </div>
-          <p className="tenue chico">La tarjeta muestra el promedio de los sensores válidos.</p>
+      <div className="escena-fondo" aria-hidden="true" />
+      <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
+      {/* ---------- AIRE: arriba de la planta */}
+      <div className="vidrio zona zona-aire" aria-label="Aire">
+        <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire<span className="zona-hora">Lectura {edadTxt(d.ts, A)}</span></h2>
+        <div className="ind-grid ind-aire">
+          <Indicador def={IND.t_aire} valor={ar.t} err={errAire} umb={U.t_aire} lo={0} hi={45} ext={X.t_aire} tam="grande" alAbrir={abrir}
+            sub={<>A1 {sAire(ar.a1, 't', 1)} · A2 {sAire(ar.a2, 't', 1)}</>} />
+          <Indicador def={IND.h_aire} valor={ar.h} err={errAire} umb={U.h_aire} lo={0} hi={100} ext={X.h_aire} tam="grande" alAbrir={abrir}
+            sub={<>A1 {sAire(ar.a1, 'h', 0)} · A2 {sAire(ar.a2, 'h', 0)}</>} />
+          <Indicador def={IND.pir} valor={d.pir.v} err={d.pir.error} umb={U.pir} lo={0} hi={1000} ext={X.pir} tam="grande" alAbrir={abrir}
+            sub={d.pir.ok ? ((d.pir.v ?? 0) > 5 ? 'Piranómetro' : 'Sin sol') : d.pir.error} />
         </div>
-      )}
-      <aside className="vidrio panel-suelo">
-        <h2><Icono id="hoja" className="ico hoja" />Sensor de tierra</h2>
-        <FilaSuelo icono="termo" etq="Temperatura" html={`${num(su.t)} °C`} err={errSuelo} ts={su.ts} ahora={A} />
-        <FilaSuelo icono="gota" etq="Humedad" html={`${num(su.h, 0)} %`} err={errSuelo} ts={su.ts} ahora={A} />
-        {d.npk ? <>
-          <FilaSuelo icono="ph" etq="pH" html={num(d.npk.ph)} err={null} ts={d.npk.ts} ahora={A} extra={extraNpk} />
-          <FilaSuelo icono="ec" etq="Conductividad" html={`${num(d.npk.ec, 2)} dS/m`} err={null} ts={d.npk.ts} ahora={A} extra={extraNpk} />
-          <FilaSuelo icono="npk" etq="NPK" html={<>{d.npk.n}-{d.npk.p}-{d.npk.k} <small>mg/kg</small></>} err={null} ts={d.npk.ts} ahora={A} extra={extraNpk} />
-        </> : (['pH', 'Conductividad', 'NPK'] as const).map((e, i) => (
-          <FilaSuelo key={e} icono={['ph', 'ec', 'npk'][i]} etq={e} html="--" err={null} ts={null} ahora={A} extra=" (NPK aún no medido)" />
-        ))}
-        <p className="tenue chico">{f.fase === 1 ? `Calentando suelo ${f.min}/${f.tot} min` : f.fase === 2 ? 'Muestreando NPK…' : `Próximo NPK en ~${Math.max(0, f.tot - f.min)} min`}</p>
-      </aside>
-      <div className="vidrio pie-info">
-        Última lectura: <b>{fHoraS.format(d.ts! * 1000)}</b> (hace {Math.max(0, Math.round((A - d.ts!) / 60))} min) · paquete {d.tipo} #{d.seq}
-        {d.rssi != null && ` · RSSI ${d.rssi} dBm`}{d.snr != null && ` · SNR ${num(d.snr)} dB`}
-        {d.sin_hora_emisora && <span style={{ color: 'var(--ambar)' }}> · emisora sin hora (se usó la de recepción)</span>}
-        {d.receptora && ` · Receptora ${d.receptora.firmware || ''}, cola ${d.receptora.cola_pendiente ?? '?'}`}
+        <TarjetaConexion d={d} />
       </div>
+
+      {/* ---------- PLANTA: zona reservada, ninguna tarjeta la cubre */}
+      <figure className="figura-planta" aria-hidden="true" />
+
+      {/* ---------- SUELO: en la parte de la tierra, debajo de la planta */}
+      <div className="zona zona-suelo" aria-label="Suelo">
+        <h2 className="zona-tit"><Icono id="hoja" className="ico hoja" />Sensor de tierra
+          <span className="zona-hora">{f.fase === 1 ? `Calentando suelo ${f.min}/${f.tot} min` : f.fase === 2 ? 'Muestreando NPK…' : `Próximo NPK en ~${Math.max(0, f.tot - f.min)} min`}</span></h2>
+        <div className="sub-grupos">
+          <div className="sub-grupo">
+            <h3>Humedad y temperatura <span>{su.ts ? edadTxt(su.ts, A) : errSuelo || 'sin datos'}</span></h3>
+            <div className="ind-grid c2">
+              <Indicador def={IND.h_suelo} valor={su.h} err={errSuelo} umb={U.h_suelo} lo={0} hi={100} ext={X.h_suelo} alAbrir={abrir} />
+              <Indicador def={IND.t_suelo} valor={su.t} err={errSuelo} umb={U.t_suelo} lo={0} hi={45} ext={X.t_suelo} alAbrir={abrir} />
+            </div>
+          </div>
+          <div className="sub-grupo">
+            <h3>Salinidad y acidez <span>{npk ? edadTxt(npk.ts, A) : 'NPK aún no medido'}</span></h3>
+            <div className="ind-grid c2">
+              <Indicador def={IND.ec} valor={nq('ec')} err={null} umb={U.ec} lo={0} hi={4} alAbrir={abrir} />
+              <Indicador def={IND.ph} valor={nq('ph')} err={null} umb={U.ph} lo={3} hi={10} alAbrir={abrir} />
+            </div>
+          </div>
+          <div className="sub-grupo">
+            <h3>Nutrientes NPK <span>{npk ? 'mg/kg' : ''}{d.npk_ultimo_fallo && <em className="aviso"> · último muestreo FALLÓ</em>}</span></h3>
+            <div className="ind-grid c3">
+              {(['n', 'p', 'k'] as const).map(k => <Indicador key={k} def={IND[k]} valor={nq(k)} err={null} umb={U[k]} tam="mini" alAbrir={abrir} />)}
+            </div>
+          </div>
+        </div>
+        <p className="pista">Toca un indicador para ver su historial (8 h · 24 h · 7 días · 1 mes)</p>
+      </div>
+
+      {abierto && <ModalHistorial def={abierto} umbral={U[abierto.v]} rangoBanda alCerrar={cerrar} />}
     </section>
   );
 }
