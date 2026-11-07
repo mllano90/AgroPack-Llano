@@ -17,12 +17,16 @@ def _png(path):
 def test_no_hay_service_worker_en_la_raiz():
     assert not (RAIZ / "frontend" / "public" / "sw.js").exists()
     assert not (RAIZ / "frontend" / "public" / "manifest.webmanifest").exists()
+    assert not (RAIZ / "frontend" / "public" / "manifest.json").exists()
 
 
 def test_manifest_acotado_a_estacion():
-    man = json.loads((PUBLIC / "manifest.webmanifest").read_text(encoding="utf-8"))
+    texto = (PUBLIC / "manifest.json").read_text(encoding="utf-8")
+    assert json.loads(texto) == json.loads((PUBLIC / "manifest.webmanifest").read_text(encoding="utf-8"))
+    man = json.loads(texto)
+    assert man["id"] == "/estacion/"
     assert man["scope"] == "/estacion/"
-    assert man["start_url"].startswith("/estacion/")
+    assert man["start_url"] == "/estacion/#inicio"
     assert man["display"] == "standalone"
     fines = {i["purpose"] for i in man["icons"]}
     assert "any" in fines and "maskable" in fines
@@ -44,6 +48,9 @@ def test_worker_no_amplia_el_scope_ni_cachea_la_api():
     reg = (RAIZ / "frontend" / "src" / "estacion" / "pwa.ts").read_text(encoding="utf-8")
     assert "scope: '/estacion/'" in reg
     assert "/estacion/sw.js" in reg
+    assert "const MANIFEST = '/estacion/manifest.json'" in reg
+    assert "emsif-shell-v3" in js
+    assert "/estacion/manifest.json" in js
     html = (RAIZ / "frontend" / "index.html").read_text(encoding="utf-8")
     assert "manifest" not in html
     assert "serviceWorker" not in html
