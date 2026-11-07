@@ -10,8 +10,10 @@ import fondo from './assets/fondo_continuo.jpg';
 import { fueraDeRango } from './rango';
 import { prefAmbiente, UMBRAL_AMB } from './prefs';
 
-/** Lienzo de fondo_continuo.jpg (foto original en FOTO, planta en PLANTA). Ver sim/generar_fondo_continuo.py. */
-const LIENZO = { w: 2800, h: 3560 }, FOTO = { x: 760, y: 1040 }, PLANTA = { x0: 232, x1: 942, y0: 99, y1: 719 };
+/** Lienzo de fondo_continuo.jpg. La foto original (1280×720) está en FOTO; la planta, en PLANTA.
+ *  La escala mete la planta entera en el hueco, sin recortarla ni estirarla, y la centra ahí. */
+const LIENZO = { w: 2800, h: 3560 }, FOTO = { x: 760, y: 1040 }, FOTO_TAM = { w: 1280, h: 720 };
+const PLANTA = { x0: 232, x1: 942, y0: 99, y1: 719 };
 
 export function geometriaFondo(hueco: { left: number; top: number; width: number; height: number }) {
   const pw = PLANTA.x1 - PLANTA.x0, ph = PLANTA.y1 - PLANTA.y0;
@@ -19,7 +21,8 @@ export function geometriaFondo(hueco: { left: number; top: number; width: number
   const cx = FOTO.x + (PLANTA.x0 + PLANTA.x1) / 2, cy = FOTO.y + (PLANTA.y0 + PLANTA.y1) / 2;
   const x = hueco.left + hueco.width / 2 - cx * s, y = hueco.top + hueco.height / 2 - cy * s;
   const planta = { left: x + (FOTO.x + PLANTA.x0) * s, top: y + (FOTO.y + PLANTA.y0) * s, width: pw * s, height: ph * s };
-  return { s, x, y, w: LIENZO.w * s, h: LIENZO.h * s, planta };
+  const foto = { left: x + FOTO.x * s, top: y + FOTO.y * s, width: FOTO_TAM.w * s, height: FOTO_TAM.h * s };
+  return { s, x, y, w: LIENZO.w * s, h: LIENZO.h * s, planta, foto };
 }
 
 function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
@@ -27,10 +30,13 @@ function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
   if (!r.height || !r.width) return;
   const g = geometriaFondo(r);
   capa.style.backgroundImage = `url(${fondo})`;
+  capa.style.backgroundRepeat = 'no-repeat';
   capa.style.backgroundSize = `${g.w}px ${g.h}px`;
   capa.style.backgroundPosition = `${g.x}px ${g.y}px`;
-  const p = g.planta;
-  capa.dataset.planta = [p.left, p.top, p.width, p.height].map(v => Math.round(v)).join(',');
+  const redondear = (o: { left: number; top: number; width: number; height: number }) =>
+    [o.left, o.top, o.width, o.height].map(v => Math.round(v)).join(',');
+  capa.dataset.planta = redondear(g.planta);
+  capa.dataset.foto = redondear(g.foto);
 }
 
 /** Indicador tocable: abre la ventana emergente con su historial. */
@@ -81,7 +87,6 @@ function TarjetaConexion({ d }: { d: Ultimo }) {
   const A = d.ahora;
   const fw = (d.receptora?.firmware || '').replace(/^receptora-/, 'v');
   const resumen = [
-    edadTxt(d.ts, A) || 'sin lectura',
     d.rssi != null ? `RSSI ${d.rssi}` : null,
     d.snr != null ? `SNR ${Number(d.snr).toFixed(1)}` : null,
   ].filter(Boolean).join(' · ');
@@ -151,9 +156,16 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     ajustar();
     const ro = new ResizeObserver(ajustar);
     ro.observe(f);
+    const sc = f.closest('.estacion-root');
+    sc?.addEventListener('scroll', ajustar, { passive: true });
     window.addEventListener('resize', ajustar);
     window.addEventListener('orientationchange', ajustar);
-    return () => { ro.disconnect(); window.removeEventListener('resize', ajustar); window.removeEventListener('orientationchange', ajustar); };
+    return () => {
+      ro.disconnect();
+      sc?.removeEventListener('scroll', ajustar);
+      window.removeEventListener('resize', ajustar);
+      window.removeEventListener('orientationchange', ajustar);
+    };
   }, [hay]);
   if (!d) return <section className="vista"><div className="vidrio pie-info">{errorRed ? 'Sin conexión con el servidor' : 'Cargando…'}</div></section>;
   if (!d.hay_datos || !d.aire || !d.pir || !d.suelo) return <section className="vista"><div className="vidrio pie-info">Aún no hay lecturas de este nodo.</div></section>;
@@ -169,7 +181,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
       <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
-        <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire<span className="zona-hora">Lectura {edadTxt(d.ts, A)}</span></h2>
+        <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire</h2>
         <div className="ind-grid ind-aire">
           <Indicador def={IND.t_aire} valor={ar.t} err={errAire} umb={U.t_aire} lo={0} hi={45} ext={X.t_aire} tam="grande" alAbrir={abrir}
             sub={<>A1 {sAire(ar.a1, 't', 1)} · A2 {sAire(ar.a2, 't', 1)}</>} />

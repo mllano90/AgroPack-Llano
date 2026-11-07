@@ -43,10 +43,32 @@ services:
     envVars:
       - key: VITE_API_URL
         sync: false
+    # Render sirve el archivo real si existe y no le aplica el rewrite.
+    # sw.js y el manifest quedan en /estacion/ con su MIME; el catch-all no los convierte en index.html.
+    # Ninguna cabecera amplía el scope del worker hacia la raíz.
     routes:
       - type: rewrite
         source: /*
         destination: /index.html
+    headers:
+      - path: /estacion/sw.js
+        name: Content-Type
+        value: application/javascript; charset=utf-8
+      - path: /estacion/sw.js
+        name: Cache-Control
+        value: no-cache
+      - path: /estacion/sw.js
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /estacion/manifest.webmanifest
+        name: Content-Type
+        value: application/manifest+json
+      - path: /estacion/manifest.webmanifest
+        name: Cache-Control
+        value: no-cache
+      - path: /estacion/manifest.webmanifest
+        name: X-Content-Type-Options
+        value: nosniff
 
 databases:
   - name: agropack-db

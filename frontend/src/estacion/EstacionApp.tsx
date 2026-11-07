@@ -10,6 +10,9 @@ import Rangos from './Rangos';
 import ConfigNodo from './ConfigNodo';
 import Alertas from './Alertas';
 import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, NODO_POR_DEFECTO } from './marca';
+import { leyendaLectura } from './formato';
+import Instalar from './Instalar';
+import { ensancharLienzo, montarMetaPWA, registrarWorkerEstacion } from './pwa';
 
 type Vista = 'inicio' | 'historial' | 'rangos' | 'nodo' | 'alertas';
 type Rol = 'admin' | 'normal';
@@ -29,6 +32,11 @@ export default function EstacionApp() {
   const [errorRed, setErrorRed] = useState(false);
 
   useEffect(() => { enNoAutorizado(() => { setToken(null); setRol(null); }); }, []);
+  useEffect(() => {
+    const limpiar = [ensancharLienzo(), montarMetaPWA()];
+    registrarWorkerEstacion();
+    return () => limpiar.forEach(f => f());
+  }, []);
   useEffect(() => {
     if (!token) { setRol(null); return; }
     api.yo().then(y => setRol(y.rol)).catch(() => {});
@@ -50,11 +58,23 @@ export default function EstacionApp() {
   }, [token, cargar]);
 
   if (!token) {
-    return <div className="estacion-root"><SpriteIconos /><Login alEntrar={(t, r) => { sesion.guardar(t); setToken(t); setRol(r); }} /></div>;
+    return (
+      <div className="estacion-root">
+        <SpriteIconos />
+        <Login alEntrar={(t, r) => { sesion.guardar(t); setToken(t); setRol(r); }} />
+        <div className="login-instalar"><Instalar /></div>
+      </div>
+    );
   }
 
   const admin = rol === 'admin';
   const on = !!(ultimo?.hay_datos && ultimo.en_linea);
+  const leyenda = leyendaLectura(ultimo?.ts, ultimo?.ahora ?? 0, !!ultimo?.hay_datos);
+  const tituloLectura = !ultimo?.hay_datos || ultimo.ts == null
+    ? 'Aún no hay una lectura de este nodo.'
+    : ultimo.sin_hora_emisora
+      ? 'La emisora no traía hora; se muestra la hora en que se recibió el paquete.'
+      : 'Hora de la última lectura. En línea solo indica si esa lectura es reciente.';
   const ir = (v: Vista) => { location.hash = v; setVista(v); window.scrollTo(0, 0); };
   const salir = () => { sesion.borrar(); setToken(null); setRol(null); };
   const vistaOk: Vista = !admin && (vista === 'nodo' || vista === 'rangos') ? 'inicio' : vista;
@@ -74,9 +94,18 @@ export default function EstacionApp() {
           <h1>{MARCA}<span className="marca-nombre">{MARCA_NOMBRE}</span><span className="marca-firma">{MARCA_FIRMA}</span></h1>
           <div className="marca-nodo">{ultimo?.nombre_nodo ?? NODO_POR_DEFECTO}</div>
         </div>
-        <div className={'conexion' + (on ? '' : ' off')}><span className="punto" /><span>{on ? 'En línea' : 'Sin conexión'}</span></div>
-        <Icono id={on ? 'wifi' : 'wifi-off'} className={'ico wifi' + (on ? '' : ' off')} />
-        <button className="btn" type="button" onClick={salir}>Salir</button>
+        <div className="cab-acciones">
+          <div className="estado-senal">
+            <div className={'conexion' + (on ? '' : ' off')} title={on ? `En línea: la última lectura tiene menos de ${ultimo?.offline_min ?? ''} min.` : 'Sin conexión: no hay una lectura reciente.'}>
+              <span className="punto" />
+              <span>{on ? 'En línea' : 'Sin conexión'}</span>
+              <Icono id={on ? 'wifi' : 'wifi-off'} className={'ico wifi' + (on ? '' : ' off')} />
+            </div>
+            <span className="ultima-lectura" title={tituloLectura}>{leyenda}</span>
+          </div>
+          <Instalar />
+          <button className="btn" type="button" onClick={salir}>Salir</button>
+        </div>
       </header>
       <main>
         {vistaOk === 'inicio' && <Inicio d={ultimo} errorRed={errorRed} />}
