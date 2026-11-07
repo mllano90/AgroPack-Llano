@@ -87,7 +87,6 @@ function TarjetaConexion({ d }: { d: Ultimo }) {
   const A = d.ahora;
   const fw = (d.receptora?.firmware || '').replace(/^receptora-/, 'v');
   const resumen = [
-    edadTxt(d.ts, A) || 'sin lectura',
     d.rssi != null ? `RSSI ${d.rssi}` : null,
     d.snr != null ? `SNR ${Number(d.snr).toFixed(1)}` : null,
   ].filter(Boolean).join(' · ');
@@ -182,7 +181,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
       <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
-        <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire<span className="zona-hora">Lectura {edadTxt(d.ts, A)}</span></h2>
+        <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire</h2>
         <div className="ind-grid ind-aire">
           <Indicador def={IND.t_aire} valor={ar.t} err={errAire} umb={U.t_aire} lo={0} hi={45} ext={X.t_aire} tam="grande" alAbrir={abrir}
             sub={<>A1 {sAire(ar.a1, 't', 1)} · A2 {sAire(ar.a2, 't', 1)}</>} />

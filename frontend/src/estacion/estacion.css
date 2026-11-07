@@ -22,7 +22,11 @@
 .estacion-root .pie-marca span{font-style:italic}
 .estacion-root .login .login-nombre{margin:0 0 6px}.estacion-root .login .firma{margin:12px 0 0;font-style:italic;opacity:.7}
 .estacion-root .ico.hoja{color:var(--verde);width:28px;height:28px}
+.estacion-root .cab-acciones{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px 8px;margin-left:auto;min-width:0;max-width:100%}
+.estacion-root .estado-senal{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:2px 8px;min-width:0}
+.estacion-root .ultima-lectura{color:var(--tenue);font-size:.75rem;line-height:1.25;text-align:right}
 .estacion-root .conexion{display:flex;align-items:center;gap:6px;font-size:.9rem;color:var(--verde);white-space:nowrap}
+.estacion-root .conexion .ico{width:18px;height:18px}
 .estacion-root .conexion .punto{width:10px;height:10px;border-radius:50%;background:var(--verde);box-shadow:0 0 8px var(--verde)}
 .estacion-root .conexion.off{color:var(--rojo)}.estacion-root .conexion.off .punto{background:var(--rojo);box-shadow:0 0 8px var(--rojo)}
 .estacion-root .ico.wifi{color:var(--verde)}.estacion-root .ico.wifi.off{color:var(--rojo)}
@@ -215,6 +219,11 @@
 .estacion-root [hidden]{display:none!important}
 @media (max-width:380px){.estacion-root .cabecera h1{font-size:1.05rem}}
 @media (max-width:520px){.estacion-root .marca-nombre{display:none}}
+@media (max-width:640px){
+  .estacion-root .cab-acciones{flex-basis:100%;justify-content:space-between}
+  .estacion-root .estado-senal{flex:1 1 12rem;justify-content:flex-start}
+  .estacion-root .ultima-lectura{flex:1 1 100%;text-align:left}
+}
 @media (max-width:699px){
   .estacion-root .ind-aire{gap:6px}
   .estacion-root .ind-aire .ind{padding:9px 8px}

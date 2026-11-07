@@ -22,3 +22,10 @@ export function edadTxt(ts: number | null | undefined, ahora: number): string {
   if (m < 120) return `${h} (hace ${m} min)`;
   return `${h} (hace ${Math.round(m / 60)} h)`;
 }
+
+/** Hora de la última lectura del nodo. No es el latido de la receptora ni el estado En línea. */
+export function leyendaLectura(ts: number | null | undefined, ahora: number, hayDatos: boolean): string {
+  if (!hayDatos || ts == null) return 'Sin lectura';
+  const txt = edadTxt(ts, ahora);
+  return txt ? `Lectura ${txt}` : 'Sin lectura';
+}
