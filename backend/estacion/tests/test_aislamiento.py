@@ -71,14 +71,46 @@ def test_solo_tablas_prefijadas_y_sin_fk():
         assert not t.foreign_keys, t.name
 
 
+def test_tabla_vieja_recibe_columnas_de_caja(tmp_path):
+    """Una estacion_lecturas del PR 9 (sin caja) gana las columnas al volver a arrancar."""
+    from sqlalchemy import create_engine, inspect, text
+    from estacion.modelos import crear_tablas
+    motor = create_engine(f"sqlite:///{tmp_path / 'vieja.db'}")
+    with motor.begin() as c:
+        c.execute(text("CREATE TABLE estacion_lecturas (id INTEGER PRIMARY KEY, csv VARCHAR(128) NOT NULL)"))
+    crear_tablas(motor)
+    cols = {c["name"] for c in inspect(motor).get_columns("estacion_lecturas")}
+    assert {"e_int", "t_int", "h_int"} <= cols
+
+
+def test_sin_variables_ingesta_cerrada_y_proceso_sigue(tmp_path, monkeypatch):
+    for k in ("ESTACION_INGEST_TOKEN", "INGEST_TOKEN", "ESTACION_ADMIN_PASS", "ADMIN_PASS",
+              "ESTACION_ADMIN_USER", "ADMIN_USER", "ESTACION_SECRET", "SECRET"):
+        monkeypatch.delenv(k, raising=False)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'd.db'}")
+    monkeypatch.setenv("ESTACION_HABILITADA", "1")
+    from estacion.integracion import registrar_estacion
+    app = _anfitrion()
+    assert registrar_estacion(app, iniciar_trabajo=False) is True
+    c = TestClient(app)
+    assert c.get("/api/empaque/ping").status_code == 200
+    assert c.get("/api/estacion/salud").status_code == 200
+    r = c.post("/api/estacion/v1/ingesta", json={"nodo": "nodo1", "registros": [{"csv": "D,1"}]})
+    assert r.status_code == 503
+    login = c.post("/api/estacion/auth/login", json={"usuario": "admin", "clave": "admin"})
+    assert login.status_code == 401
+
+
 def test_no_importa_modulos_ajenos():
     import ast
     import pathlib
-    base = pathlib.Path(__file__).resolve().parent.parent / "estacion"
+    base = pathlib.Path(__file__).resolve().parent.parent
     permitidos = {"fastapi", "sqlalchemy", "starlette", "base64", "hashlib", "hmac", "json", "secrets", "time", "os",
                   "re", "csv", "io", "logging", "asyncio", "threading", "argparse", "datetime", "concurrent", "pathlib",
                   "psycopg"}
-    for f in base.glob("*.py"):
+    archivos = list(base.glob("*.py"))
+    assert len(archivos) >= 8, archivos
+    for f in archivos:
         for n in ast.walk(ast.parse(f.read_text(encoding="utf-8"))):
             if isinstance(n, ast.Import):
                 mods = [a.name.split(".")[0] for a in n.names]

@@ -58,6 +58,69 @@ def test_ui_requiere_jwt_propio(cliente):
 
 
 # ---------------------------------------------------------------- decodificación
+# Texto exacto del snprintf de v4.5.2 (caja ANTES del epoch). Índices: 23 eInt, 24 Tint, 25 Hint, 26 epoch.
+EXACTO_27 = "D,7,0,253,550,0,257,540,0,420,0,612,241,1830,62,120,80,100,6,5,0,8,30,0,310,615,1793385300"
+# El orden invertido (caja después del epoch) no es el firmware: se rechaza.
+INVERTIDO = "D,7,0,253,550,0,257,540,0,420,0,612,241,1830,62,120,80,100,6,5,0,8,30,1793385300,0,310,615"
+# 26 campos: v4.5 con caja y sin epoch (receptora_logica.h, nNum == 25).
+EXACTO_26 = "D,9,0,253,550,0,257,540,0,420,0,612,241,1830,62,120,80,100,6,5,0,8,30,0,280,500"
+# Paquete viejo reescrito por csvDe: eInt 255, Tint 0, Hint 0, epoch al final.
+EXACTO_255 = "D,4,0,253,550,0,257,540,0,420,0,612,241,1830,62,120,80,100,6,5,0,2,30,255,0,0,1793386000"
+
+
+def test_paquete_27_firmware_v452(cliente):
+    """CSV y JSON como los arma la receptora v4.5.2. La caja va antes del epoch."""
+    assert EXACTO_27.split(",")[23:27] == ["0", "310", "615", "1793385300"]
+    assert len(EXACTO_27.split(",")) == 27 and len(EXACTO_26.split(",")) == 26
+    reg = {
+        "id": "0000002a-15", "boot_id": "0000002a", "csv": EXACTO_27,
+        "rx": T0 + 2, "rssi": -91, "snr": 7.5, "tipo": "D", "seq": 7,
+        "errA1": 0, "t1": 99.9, "h1": 1.0, "errCaja": 0, "t_caja": 1.0, "h_caja": 2.0,
+        "errPir": 0, "pir": 1, "errSuelo": 0, "hs": 1.0, "ts": 2.0,
+        "epoch_medicion": T0, "epoch_recepcion": T0 + 2, "reinicios_emisora": 1,
+    }
+    r = ingesta(cliente, [reg]).json()
+    assert r["ok"] is True and r["aceptados"] == 1 and r["duplicados"] == 0 and r["rechazados"] == []
+    assert r["ultimo_id"] == "nodo1:id:0000002a-15"
+    assert ingesta(cliente, [reg]).json()["duplicados"] == 1
+    login(cliente)
+    u = cliente.get(f"{API}/ultimo").json()
+    # Manda el csv, no el t1/t_caja del JSON (esos 99.9 y 1.0 son una contradicción a propósito).
+    assert u["aire"]["t"] == 25.5 and u["aire"]["a1"]["t"] == 25.3 and u["aire"]["h"] == 54.5
+    assert u["pir"]["v"] == 420 and u["suelo"]["h"] == 61.2 and u["suelo"]["t"] == 24.1
+    assert u["npk"]["ec"] == 1.83 and u["npk"]["ph"] == 6.2
+    assert u["ts"] == T0 and u["interno"]["ok"] is True
+    assert u["interno"]["t"] == 31.0 and u["interno"]["h"] == 61.5
+    # 26 campos, sin epoch: la hora sale de rx y la caja se lee igual.
+    rx = T0 + 500
+    j = ingesta(cliente, [{"csv": EXACTO_26, "rx": rx, "id": "0000002a-16"}]).json()
+    assert j["aceptados"] == 1
+    u = cliente.get(f"{API}/ultimo").json()
+    assert u["seq"] == 9 and u["ts"] == rx and u["sin_hora_emisora"] and u["interno"]["t"] == 28.0
+    # eInt 255 (paquete viejo reescrito): no es 0 °C y no toca el aire.
+    ingesta(cliente, [{"csv": EXACTO_255, "rx": T0 + 3, "id": "0000002a-17"}])
+    u = cliente.get(f"{API}/ultimo").json()
+    assert u["aire"]["t"] == 25.5 and u["interno"]["ok"] is False and u["interno"]["codigo"] == 255
+    assert u["interno"]["t"] is None
+    # Caja después del epoch, un campo de menos, o '+' : se rechazan.
+    corto = EXACTO_27.rsplit(",", 2)[0]
+    j = ingesta(cliente, [{"csv": INVERTIDO}, {"csv": corto}, {"csv": EXACTO_27.replace(",0,310,", ",+0,310,", 1)}]).json()
+    assert j["aceptados"] == 0 and len(j["rechazados"]) == 3
+    # 24 campos sigue sin caja.
+    ingesta(cliente, [{"csv": csv(11, T0 + 800), "id": "0000002a-18"}])
+    u = cliente.get(f"{API}/ultimo").json()
+    assert u["seq"] == 11 and u["interno"] is None
+    # Latido v4.5 con los campos extra de la receptora. Los que no están en la tabla no tumban el POST.
+    lat = {"nodo": "nodo1", "recibidos": 10, "perdidos": 1, "duplicados": 0, "reinicios_emisora": 0,
+           "err_crc": 0, "err_formato": 0, "radio_reinit": 0, "heap": 180000, "heap_min": 100000,
+           "cola_pendiente": 3, "uptime_s": 3600, "firmware": "v4.5.2", "rssi_wifi": -62, "ts": T0,
+           "version": "v4.5.2", "cola_perdidos": 0, "cola_corruptos": 0, "subidas_ok": 4,
+           "subidas_fallidas": 0, "comandos_lora": 0, "avisos_lora": 0,
+           "wifi_ssid": "casa", "wifi_fuente": "nvs", "wifi_con_clave": True}
+    est = cliente.post(f"{API}/v1/estado", json=lat, headers=auth())
+    assert est.status_code == 200 and est.json()["ok"] is True and est.json()["comandos"] == []
+
+
 def test_decodificacion_y_unidades(cliente):
     r = ingesta(cliente, [{"csv": csv(7, T0, mn=8, edad=5), "rssi": -91, "snr": 7.5, "rx": T0 + 2}]).json()
     assert r["aceptados"] == 1
