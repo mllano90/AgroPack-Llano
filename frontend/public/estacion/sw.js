@@ -24,6 +24,7 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
+  // Solo cachés propias (emsif-). Nunca borra cachés de AgroPack ni de otro módulo.
   e.waitUntil(caches.keys()
     .then(ks => Promise.all(ks.filter(k => k.startsWith('emsif-') && k !== VERSION).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));

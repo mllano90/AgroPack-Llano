@@ -12,7 +12,7 @@ import Alertas from './Alertas';
 import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, NODO_POR_DEFECTO } from './marca';
 import { leyendaLectura } from './formato';
 import Instalar from './Instalar';
-import { ensancharLienzo, montarMetaPWA, registrarWorkerEstacion, soltarWorkerRaiz } from './pwa';
+import { ensancharLienzo, montarMetaPWA, registrarWorkerEstacion } from './pwa';
 
 type Vista = 'inicio' | 'historial' | 'rangos' | 'nodo' | 'alertas';
 type Rol = 'admin' | 'normal';
@@ -34,7 +34,7 @@ export default function EstacionApp() {
   useEffect(() => { enNoAutorizado(() => { setToken(null); setRol(null); }); }, []);
   useEffect(() => {
     const limpiar = [ensancharLienzo(), montarMetaPWA()];
-    soltarWorkerRaiz().finally(registrarWorkerEstacion);
+    registrarWorkerEstacion();
     return () => limpiar.forEach(f => f());
   }, []);
   useEffect(() => {

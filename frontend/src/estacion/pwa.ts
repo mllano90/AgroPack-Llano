@@ -71,19 +71,7 @@ export function montarMetaPWA(): () => void {
   return () => limpiar.forEach(f => f());
 }
 
-/** Quita un worker viejo publicado en la raíz. No desregistra nada cuyo scope sea /estacion/. */
-export async function soltarWorkerRaiz() {
-  if (!('serviceWorker' in navigator)) return;
-  const regs = await navigator.serviceWorker.getRegistrations();
-  await Promise.all(regs.map(r => {
-    let path = '/';
-    let script = '';
-    try { path = new URL(r.scope).pathname; script = new URL(r.active?.scriptURL || r.installing?.scriptURL || r.waiting?.scriptURL || '/').pathname; } catch { /* scope raro */ }
-    if (path === '/' && (script === '/sw.js' || script.endsWith('/sw.js') && !script.includes('/estacion/'))) return r.unregister();
-    return undefined;
-  }));
-}
-
+/** Registra solo /estacion/sw.js con scope /estacion/. No enumera ni toca otros workers. */
 export function registrarWorkerEstacion() {
   if (!('serviceWorker' in navigator) || !window.isSecureContext || import.meta.env.DEV) return;
   if (!location.pathname.startsWith('/estacion')) return;

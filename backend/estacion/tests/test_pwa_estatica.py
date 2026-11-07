@@ -49,6 +49,21 @@ def test_worker_no_amplia_el_scope_ni_cachea_la_api():
     assert "serviceWorker" not in html
 
 
+def test_worker_ajeno_en_raiz_nunca_se_desregistra():
+    """Un worker de AgroPack en scope / no recibe unregister. El único registro es el de la estación."""
+    reg = (RAIZ / "frontend" / "src" / "estacion" / "pwa.ts").read_text(encoding="utf-8")
+    app = (RAIZ / "frontend" / "src" / "estacion" / "EstacionApp.tsx").read_text(encoding="utf-8")
+    assert ".unregister(" not in reg
+    assert "getRegistrations(" not in reg
+    assert "soltarWorkerRaiz" not in reg and "soltarWorkerRaiz" not in app
+    assert "caches.delete" not in reg and "caches.keys" not in reg
+    assert reg.count("serviceWorker.register(") == 1
+    assert "register('/estacion/sw.js', { scope: '/estacion/' })" in reg
+    js = (PUBLIC / "sw.js").read_text(encoding="utf-8")
+    assert js.count("caches.delete") == 1
+    assert "ks.filter(k => k.startsWith('emsif-') && k !== VERSION).map(k => caches.delete(k))" in js
+
+
 def test_render_no_abre_el_scope_del_worker():
     assert "Service-Worker-Allowed" not in RENDER
     assert "application/javascript" in RENDER
