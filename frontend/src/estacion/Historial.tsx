@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import GraficaHist from './GraficaHist';
 import { api } from './api';
 import type { Historial as H, Umbral } from './tipos';
+import { Icono } from './Icono';
+import { RANGOS_REPORTE, descargar, generarReporte } from './reporte';
 
 const VARS: [string, string, string, number, boolean][] = [
   ['t_aire', 'Temp. aire', '°C', 1, false], ['h_aire', 'Hum. aire', '%', 0, false], ['pir', 'Radiación', 'W/m²', 0, false],
@@ -51,6 +53,41 @@ export default function Historial({ esAdmin = false }: { esAdmin?: boolean }) {
             principal={{ v: def[0], nombre: def[1], color: '#2fe07a' }} />
         ) : <div className="grafica"><div className="mh-vacio">{datos ? 'Sin datos en este rango' : 'Cargando…'}</div></div>}
       </div>
+      <BloqueReporte />
     </section>
+  );
+}
+
+function BloqueReporte() {
+  const [rango, setRango] = useState('7d');
+  const [formato, setFormato] = useState<'pdf' | 'png'>('pdf');
+  const [estado, setEstado] = useState('');
+  const [ocupado, setOcupado] = useState(false);
+  const generar = async () => {
+    setOcupado(true); setEstado('Consultando datos…');
+    try {
+      const d = await api.reporte(rango);
+      setEstado(`Generando ${formato.toUpperCase()}…`);
+      const { blob, nombre } = await generarReporte(d, formato);
+      descargar(blob, nombre);
+      setEstado(`✔ ${nombre} (${Math.round(blob.size / 1024)} kB)`);
+    } catch (e) { setEstado('✖ ' + (e as Error).message); }
+    setOcupado(false);
+  };
+  return (
+    <div id="reporte" className="vidrio bloque">
+      <h2><Icono id="descarga" className="ico" /> Reporte descargable</h2>
+      <p className="tenue chico">PDF tamaño carta o una imagen PNG, con el rango ideal en líneas punteadas.</p>
+      <div className="fila-ctl">
+        <div className="seg" role="group" aria-label="Rango del reporte">
+          {RANGOS_REPORTE.map(([r, t]) => <button key={r} className={r === rango ? 'on' : ''} onClick={() => setRango(r)}>{t}</button>)}
+        </div>
+        <div className="seg" role="group" aria-label="Formato">
+          {(['pdf', 'png'] as const).map(x => <button key={x} className={x === formato ? 'on' : ''} onClick={() => setFormato(x)}>{x.toUpperCase()}</button>)}
+        </div>
+        <button className="btn primario" id="btn-reporte" disabled={ocupado} onClick={generar}>{ocupado ? 'Generando…' : 'Generar reporte'}</button>
+      </div>
+      {estado && <p className="chico" role="status">{estado}</p>}
+    </div>
   );
 }

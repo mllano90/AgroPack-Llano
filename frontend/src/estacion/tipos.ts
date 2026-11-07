@@ -25,6 +25,21 @@ export interface ResumenDia { nodo: string; zona: string; desde: number; hasta: 
 export interface Alerta { id: number; clave: string; tipo: string; mensaje: string; estado: string; inicio: number; ultima: number; fin: number | null; conteo: number }
 export interface Cuenta { usuario: string; rol: 'admin' | 'normal'; activo: boolean; creado: number }
 export interface Comando {
-  id: number; nodo: string; tipo: string; parametros: { duracion_min: number }; estado: string; estado_texto: string;
+  id: number; nodo: string; tipo: string;
+  parametros: { duracion_min?: number; ssid?: string; url?: string; clave?: string };
+  estado: string; estado_texto: string;
   creado: number; actualizado: number; detalle: string | null; usuario: string | null; expira: number | null;
+}
+export interface Resumen { min: number; max: number; prom: number; n: number; en_rango_pct?: number | null }
+export interface VarReporte {
+  nombre: string; unidad: string; fuente: string; resumen: Resumen | null; puntos: Punto[];
+  umbral?: Umbral | null; extras: Record<string, Punto[]>;
+}
+export interface Reporte {
+  nodo: string; nombre_nodo: string; rango: string; generado: number; desde: number; hasta: number; paso_s: number;
+  fuente: string; orden: string[]; variables: Record<string, VarReporte>; rango_banda?: boolean;
+}
+export interface EstadoWifi {
+  nodo: string; token_configurado: boolean; comandos: Comando[];
+  receptora: { ssid: string; fuente: string | null; clave: 'configurada' | 'vacía'; firmware: string | null; ts: number } | null;
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api';
 import BarrasEnlace from './Enlace';
 import type { ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
@@ -6,8 +6,32 @@ import { Icono } from './Icono';
 import { durTxt, edadTxt, fHora, fHoraS, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
 import ModalHistorial from './ModalHistorial';
+import fondo from './assets/fondo_continuo.jpg';
 import { fueraDeRango } from './rango';
 import { prefAmbiente, UMBRAL_AMB } from './prefs';
+
+/** Lienzo de fondo_continuo.jpg (foto original en FOTO, planta en PLANTA). Ver sim/generar_fondo_continuo.py. */
+const LIENZO = { w: 2800, h: 3560 }, FOTO = { x: 760, y: 1040 }, PLANTA = { x0: 232, x1: 942, y0: 99, y1: 719 };
+
+export function geometriaFondo(hueco: { left: number; top: number; width: number; height: number }) {
+  const pw = PLANTA.x1 - PLANTA.x0, ph = PLANTA.y1 - PLANTA.y0;
+  const s = Math.min(hueco.width / pw, hueco.height / ph);
+  const cx = FOTO.x + (PLANTA.x0 + PLANTA.x1) / 2, cy = FOTO.y + (PLANTA.y0 + PLANTA.y1) / 2;
+  const x = hueco.left + hueco.width / 2 - cx * s, y = hueco.top + hueco.height / 2 - cy * s;
+  const planta = { left: x + (FOTO.x + PLANTA.x0) * s, top: y + (FOTO.y + PLANTA.y0) * s, width: pw * s, height: ph * s };
+  return { s, x, y, w: LIENZO.w * s, h: LIENZO.h * s, planta };
+}
+
+function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
+  const r = fig.getBoundingClientRect();
+  if (!r.height || !r.width) return;
+  const g = geometriaFondo(r);
+  capa.style.backgroundImage = `url(${fondo})`;
+  capa.style.backgroundSize = `${g.w}px ${g.h}px`;
+  capa.style.backgroundPosition = `${g.x}px ${g.y}px`;
+  const p = g.planta;
+  capa.dataset.planta = [p.left, p.top, p.width, p.height].map(v => Math.round(v)).join(',');
+}
 
 /** Indicador tocable: abre la ventana emergente con su historial. */
 /** Máximo y mínimo de hoy con cuánto duró cada nivel, p. ej. "máx 39.0 °C (2 h)" / "mín 18.0 °C (3 h)".
@@ -109,6 +133,7 @@ const sAire = (s: Sensor, c: 't' | 'h', d: number) => (s.ok ? num(s[c], d) : 'er
 export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: boolean }) {
   const [abierto, setAbierto] = useState<DefIndicador | null>(null);
   const cerrar = useCallback(() => setAbierto(null), []);
+  const fig = useRef<HTMLElement>(null), capa = useRef<HTMLDivElement>(null);
   const hay = !!(d?.hay_datos && d.aire && d.pir && d.suelo);
   // extremos del día: se piden al llegar una lectura nueva (cada ~2 min), no en cada refresco de 30 s
   const [dia, setDia] = useState<ResumenDia | null>(null);
@@ -120,6 +145,16 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     return () => { vivo = false; };
   }, [hay, tsUlt]);
   const X = dia?.vars ?? {};
+  useLayoutEffect(() => {
+    if (!hay || !fig.current || !capa.current) return;
+    const f = fig.current, c = capa.current, ajustar = () => alinearFondo(f, c);
+    ajustar();
+    const ro = new ResizeObserver(ajustar);
+    ro.observe(f);
+    window.addEventListener('resize', ajustar);
+    window.addEventListener('orientationchange', ajustar);
+    return () => { ro.disconnect(); window.removeEventListener('resize', ajustar); window.removeEventListener('orientationchange', ajustar); };
+  }, [hay]);
   if (!d) return <section className="vista"><div className="vidrio pie-info">{errorRed ? 'Sin conexión con el servidor' : 'Cargando…'}</div></section>;
   if (!d.hay_datos || !d.aire || !d.pir || !d.suelo) return <section className="vista"><div className="vidrio pie-info">Aún no hay lecturas de este nodo.</div></section>;
   const A = d.ahora, ar = d.aire, U = d.umbrales, su = d.suelo, npk = d.npk;
@@ -130,7 +165,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
   const nq = (k: 'ec' | 'ph' | 'n' | 'p' | 'k') => (npk ? npk[k] : null);
   return (
     <section id="v-inicio" className="vista">
-      <div className="escena-fondo" aria-hidden="true" />
+      <div ref={capa} className="escena-fondo" aria-hidden="true" />
       <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
@@ -147,7 +182,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
       </div>
 
       {/* ---------- PLANTA: zona reservada, ninguna tarjeta la cubre */}
-      <figure className="figura-planta" aria-hidden="true" />
+      <figure ref={fig} className="figura-planta" aria-hidden="true" />
 
       {/* ---------- SUELO: en la parte de la tierra, debajo de la planta */}
       <div className="zona zona-suelo" aria-label="Suelo">

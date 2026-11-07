@@ -25,7 +25,7 @@ export default function Mantenimiento() {
   const [lista, setLista] = useState<Comando[]>([]);
   const [dur, setDur] = useState(15);
   const [modal, setModal] = useState<null | { titulo: string; texto: string; accion: () => Promise<unknown> }>(null);
-  const cargar = useCallback(() => api.comandos().then(d => setLista(d.comandos)).catch(() => {}), []);
+  const cargar = useCallback(() => api.comandos('ota').then(d => setLista(d.comandos)).catch(() => {}), []);
   useEffect(() => { cargar(); const id = setInterval(cargar, 10000); return () => clearInterval(id); }, [cargar]);
   const c = lista[0];
   const enCurso = !!c && !TERMINALES.includes(c.estado);

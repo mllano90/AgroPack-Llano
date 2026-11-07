@@ -83,7 +83,7 @@
 .estacion-root .figura-planta{margin:0;min-height:0;display:flex;justify-content:center;align-items:stretch;pointer-events:none;user-select:none;-webkit-user-select:none}
 .estacion-root .escena-fondo{position:fixed;inset:0;z-index:-1;background:linear-gradient(180deg,#0b1a10,#120c07) no-repeat;background-color:#0d120b;transform:translateZ(0);will-change:transform;pointer-events:none}
 .estacion-root .escena-fondo::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,15,8,.22),rgba(3,15,8,0) 22%,rgba(3,15,8,0) 75%,rgba(3,10,5,.3))}
-.estacion-root.en-inicio .fondo{background-image:url(./assets/fondo_movil.jpg)}
+.estacion-root.en-inicio .fondo{background-image:none}
 .estacion-root .zona-suelo{border:1px solid rgba(214,160,98,.26);box-shadow:0 8px 30px rgba(0,0,0,.35);background:rgba(22,13,7,.42);
   backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%)}
 .estacion-root .zona-suelo .ind{background:rgba(10,6,3,.5);border-color:rgba(214,160,98,.22)}

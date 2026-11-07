@@ -4,6 +4,7 @@ import type { Config, Cuenta, Ultimo } from './tipos';
 import { Icono } from './Icono';
 import { num } from './formato';
 import Mantenimiento from './Mantenimiento';
+import RedWifi from './RedWifi';
 import { prefAmbiente, UMBRAL_AMB } from './prefs';
 
 function Cuentas() {
@@ -103,6 +104,7 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
         <div className="acciones"><button className="btn primario" type="submit">Guardar</button><span className="tenue">{msg}</span></div>
       </form>
       <Cuentas />
+      <RedWifi />
       <Mantenimiento />
       <div className="salir"><button className="btn" type="button" onClick={alSalir}><Icono id="salir" />Cerrar sesión</button></div>
     </section>

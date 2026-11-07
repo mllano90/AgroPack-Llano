@@ -1,6 +1,6 @@
 // Cliente API del módulo estación. Usa VITE_API_URL (vacío = mismo origen) + /api/estacion.
 // En AgroPack puede reemplazarse por su src/lib/api.ts manteniendo estas firmas.
-import type { Alerta, Comando, Config, Historial, ResumenDia, Ultimo } from './tipos';
+import type { Alerta, Comando, Config, EstadoWifi, Historial, Reporte, ResumenDia, Ultimo } from './tipos';
 
 const BASE = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')}/api/estacion`;
 const CLAVE_TOKEN = 'estacion_token';
@@ -50,7 +50,11 @@ export const api = {
   guardarConfig: (c: Partial<Config>) => pedir<{ ok: boolean; config?: Config }>('/config', { method: 'PUT', body: JSON.stringify(c) }),
   alertas: (estado: string) => pedir<{ alertas: Alerta[] }>(`/alertas?estado=${estado}`),
   resolverAlerta: (id: number) => pedir<{ ok: boolean }>(`/alertas/${id}/resolver`, { method: 'POST' }),
-  comandos: () => pedir<{ comandos: Comando[] }>('/comandos'),
+  reporte: (rango: string) => pedir<Reporte>(`/reporte?rango=${encodeURIComponent(rango)}`),
+  comandos: (tipo?: string) => pedir<{ comandos: Comando[] }>(`/comandos${tipo ? `?tipo=${tipo}` : ''}`),
+  wifi: () => pedir<EstadoWifi>('/wifi'),
+  aplicarWifi: (b: { ssid: string; clave: string; url: string; red_abierta: boolean; conservar_clave: boolean }) =>
+    pedir<{ comando: Comando }>('/wifi', { method: 'POST', body: JSON.stringify(b) }),
   crearComando: (duracion_min: number) => pedir<{ comando: Comando }>('/comandos', { method: 'POST', body: JSON.stringify({ tipo: 'ota', duracion_min }) }),
   cancelarComando: (id: number) => pedir<{ ok: boolean }>(`/comandos/${id}/cancelar`, { method: 'POST' }),
   async descargarCsv(rango: string) {
