@@ -24,6 +24,10 @@ En local, para probar la pantalla: definir las cuatro primeras (token, secret, u
 
 Sin claves foráneas hacia el resto de AgroPack.
 
+## Cuentas
+
+El administrador definido con `ESTACION_ADMIN_USER` / `ESTACION_ADMIN_PASS` crea cuentas normales en Configuración → Cuentas. Esas cuentas viven solo en `estacion_usuarios`. Ven lecturas, historial y alertas. No abren configuración, cuentas, modo programación ni el empaque: el JWT de la estación lleva `aud=estacion` y el de AgroPack no lo acepta, ni aunque el secreto coincida.
+
 ## Contrato de la receptora
 
 `POST /api/estacion/v1/ingesta` con `Authorization: Bearer <ESTACION_INGEST_TOKEN>`.

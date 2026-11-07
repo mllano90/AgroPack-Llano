@@ -1,8 +1,43 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { api } from './api';
-import type { Config } from './tipos';
+import type { Config, Cuenta } from './tipos';
 import { Icono } from './Icono';
 import Mantenimiento from './Mantenimiento';
+
+function Cuentas() {
+  const [lista, setLista] = useState<Cuenta[]>([]);
+  const [usuario, setUsuario] = useState('');
+  const [clave, setClave] = useState('');
+  const [msg, setMsg] = useState('');
+  useEffect(() => { api.usuarios().then(d => setLista(d.usuarios)).catch(e => setMsg(e.message)); }, []);
+  const crear = async (e: FormEvent) => {
+    e.preventDefault();
+    setMsg('');
+    try {
+      await api.crearUsuario(usuario.trim(), clave);
+      setUsuario('');
+      setClave('');
+      setMsg('✔ Cuenta creada. Solo ve la estación.');
+      setLista((await api.usuarios()).usuarios);
+    } catch (err) { setMsg('✖ ' + (err as Error).message); }
+  };
+  return (
+    <form className="vidrio bloque" onSubmit={crear}>
+      <h2>Cuentas</h2>
+      <p className="tenue">La cuenta nueva es de acceso normal: ve lecturas, historial y alertas. No entra a empaque, a esta configuración, al WiFi ni al modo programación. Desde aquí no se crea otro administrador.</p>
+      <div className="dos">
+        <label>Usuario<input name="nuevo-usuario" autoComplete="off" required minLength={3} maxLength={32} value={usuario} onChange={e => setUsuario(e.target.value)} /></label>
+        <label>Contraseña<input name="nueva-clave" type="password" autoComplete="new-password" required minLength={10} maxLength={72} value={clave} onChange={e => setClave(e.target.value)} /></label>
+      </div>
+      <div className="acciones"><button className="btn primario" type="submit">Crear cuenta</button><span className="tenue">{msg}</span></div>
+      <ul className="lista-cuentas">
+        {lista.map(c => (
+          <li key={c.usuario}><b>{c.usuario}</b><span className="tenue">{c.rol === 'admin' ? 'Administrador' : 'Acceso normal'}</span></li>
+        ))}
+      </ul>
+    </form>
+  );
+}
 
 export default function Configuracion({ alGuardar, alSalir }: { alGuardar: () => void; alSalir: () => void }) {
   const [cfg, setCfg] = useState<Config | null>(null);
@@ -43,6 +78,7 @@ export default function Configuracion({ alGuardar, alSalir }: { alGuardar: () =>
         </div>
         <div className="acciones"><button className="btn primario" type="submit">Guardar</button><span className="tenue">{msg}</span></div>
       </form>
+      <Cuentas />
       <Mantenimiento />
       <div className="salir"><button className="btn" type="button" onClick={alSalir}><Icono id="salir" />Cerrar sesión</button></div>
     </section>

@@ -129,18 +129,25 @@ class Usuario(Base):
     usuario = Column(String(64), nullable=False, unique=True)
     hash = Column(String(200), nullable=False)       # pbkdf2_sha256$iter$salt$hash
     activo = Column(Boolean, nullable=False, default=True)
+    rol = Column(String(16), nullable=False, server_default="normal")  # admin | normal
     creado = Column(BigInteger, nullable=False)
 
 
 def crear_tablas(engine):
     Base.metadata.create_all(engine)
-    # create_all no altera una estacion_lecturas ya creada (p. ej. el esquema del PR 9).
+    # create_all no altera una tabla ya creada (p. ej. el esquema del PR 9).
     insp = inspect(engine)
-    if not insp.has_table("estacion_lecturas"):
-        return
-    columnas = {c["name"]: c for c in insp.get_columns("estacion_lecturas")}
-    tipo_num = "DOUBLE PRECISION" if engine.dialect.name == "postgresql" else "REAL"
     with engine.begin() as conn:
+        if insp.has_table("estacion_usuarios"):
+            tienen = {c["name"] for c in insp.get_columns("estacion_usuarios")}
+            if "rol" not in tienen:
+                conn.execute(text(
+                    "ALTER TABLE estacion_usuarios ADD COLUMN rol VARCHAR(16) NOT NULL DEFAULT 'normal'"
+                ))
+        if not insp.has_table("estacion_lecturas"):
+            return
+        columnas = {c["name"]: c for c in insp.get_columns("estacion_lecturas")}
+        tipo_num = "DOUBLE PRECISION" if engine.dialect.name == "postgresql" else "REAL"
         for nombre, tipo in (("e_int", "INTEGER"), ("t_int", tipo_num), ("h_int", tipo_num)):
             if nombre not in columnas:
                 conn.execute(text(f"ALTER TABLE estacion_lecturas ADD COLUMN {nombre} {tipo}"))

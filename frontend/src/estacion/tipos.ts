@@ -17,6 +17,7 @@ export interface Config {
   umbrales: Record<string, Umbral>; variables: Record<string, { nombre: string; unidad: string }>;
 }
 export interface Alerta { id: number; clave: string; tipo: string; mensaje: string; estado: string; inicio: number; ultima: number; fin: number | null; conteo: number }
+export interface Cuenta { usuario: string; rol: 'admin' | 'normal'; activo: boolean; creado: number }
 export interface Comando {
   id: number; nodo: string; tipo: string; parametros: { duracion_min: number }; estado: string; estado_texto: string;
   creado: number; actualizado: number; detalle: string | null; usuario: string | null; expira: number | null;

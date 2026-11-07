@@ -183,13 +183,48 @@ async def login(request: Request):
         _fallos[ip] = recientes
         return _err(401, "usuario o contraseña incorrectos")
     _fallos.pop(ip, None)
-    token, exp = auth.crear_jwt(u)
-    return {"ok": True, "token": token, "usuario": u, "expira": exp}
+    token, exp = auth.crear_jwt(ok["usuario"], ok["rol"])
+    return {"ok": True, "token": token, "usuario": ok["usuario"], "rol": ok["rol"], "expira": exp}
 
 
 @router.get("/auth/yo")
-def yo(usuario: str = Depends(auth.usuario_actual)):
-    return {"usuario": usuario}
+def yo(sesion: dict = Depends(auth.sesion_estacion)):
+    return {"usuario": sesion["usuario"], "rol": sesion["rol"]}
+
+
+@router.get("/usuarios")
+async def listar_usuarios(_admin: str = Depends(auth.admin_actual)):
+    def fn(cx):
+        filas = cx.todos("SELECT usuario, rol, activo, creado FROM estacion_usuarios ORDER BY usuario")
+        return 200, {"usuarios": [{"usuario": f["usuario"], "rol": "admin" if f["rol"] == "admin" else "normal",
+                                   "activo": bool(f["activo"]), "creado": f["creado"]} for f in filas]}
+    return _resp(await _en_hilo(fn))
+
+
+@router.post("/usuarios")
+async def crear_usuario(request: Request, _admin: str = Depends(auth.admin_actual)):
+    """Crea una cuenta normal. El cuerpo no puede elegir rol: siempre es normal."""
+    cuerpo, e = await _leer_json(request)
+    if e:
+        return e
+    if not isinstance(cuerpo, dict):
+        return _err(400, "usuario y clave requeridos")
+    try:
+        usuario, clave = auth.validar_cuenta_nueva(cuerpo.get("usuario"), cuerpo.get("clave"))
+    except ValueError as ex:
+        return _err(400, str(ex))
+
+    def fn(cx):
+        if cx.uno("SELECT id FROM estacion_usuarios WHERE usuario = ?", (usuario,)):
+            return 409, {"ok": False, "error": "ese usuario ya existe"}
+        n = cx.uno("SELECT COUNT(*) AS n FROM estacion_usuarios")["n"]
+        if n >= 40:
+            return 400, {"ok": False, "error": "hay demasiadas cuentas"}
+        cx.ejecutar(
+            "INSERT INTO estacion_usuarios (usuario, hash, activo, rol, creado) VALUES (?, ?, ?, ?, ?)",
+            (usuario, auth.hash_clave(clave), True, "normal", int(time.time())))
+        return 200, {"ok": True, "usuario": usuario, "rol": "normal"}
+    return _resp(await _en_hilo(fn))
 
 
 # ================================================================ API de la interfaz (JWT)
@@ -255,7 +290,7 @@ async def historial_csv(request: Request, rango: str = "24h", _u: str = Depends(
 
 
 @router.get("/config")
-async def leer_config(_u: str = Depends(auth.usuario_actual)):
+async def leer_config(_u: str = Depends(auth.admin_actual)):
     def fn(cx):
         c = cfgmod.leer(cx)
         c["variables"] = {k: {"nombre": v[0], "unidad": v[1]} for k, v in cfgmod.VARIABLES.items()}
@@ -264,7 +299,7 @@ async def leer_config(_u: str = Depends(auth.usuario_actual)):
 
 
 @router.put("/config")
-async def guardar_config(request: Request, _u: str = Depends(auth.usuario_actual)):
+async def guardar_config(request: Request, _u: str = Depends(auth.admin_actual)):
     cuerpo, e = await _leer_json(request)
     if e:
         return e
@@ -294,7 +329,7 @@ async def alertas(request: Request, estado: str = "todas", limite: int = 200, _u
 
 
 @router.post("/alertas/{aid}/resolver")
-async def resolver_alerta(aid: int, _u: str = Depends(auth.usuario_actual)):
+async def resolver_alerta(aid: int, _u: str = Depends(auth.admin_actual)):
     def fn(cx):
         n = cx.ejecutar("UPDATE estacion_alertas SET estado = 'resuelta', fin = ? WHERE id = ? AND estado = 'activa' "
                         "AND tipo <> 'comando'", (sv.ahora(), aid))
@@ -303,7 +338,7 @@ async def resolver_alerta(aid: int, _u: str = Depends(auth.usuario_actual)):
 
 
 @router.get("/comandos")
-async def comandos(request: Request, _u: str = Depends(auth.usuario_actual)):
+async def comandos(request: Request, _u: str = Depends(auth.admin_actual)):
     def fn(cx):
         sv.expirar_comandos(cx, sv.ahora())
         return 200, {"comandos": sv.listar_comandos(cx, _nodo(cx, request))}
@@ -311,7 +346,7 @@ async def comandos(request: Request, _u: str = Depends(auth.usuario_actual)):
 
 
 @router.post("/comandos")
-async def crear_comando(request: Request, usuario: str = Depends(auth.usuario_actual)):
+async def crear_comando(request: Request, usuario: str = Depends(auth.admin_actual)):
     cuerpo, e = await _leer_json(request)
     if e:
         return e
@@ -330,5 +365,5 @@ async def crear_comando(request: Request, usuario: str = Depends(auth.usuario_ac
 
 
 @router.post("/comandos/{cid}/cancelar")
-async def cancelar_comando(cid: int, _u: str = Depends(auth.usuario_actual)):
+async def cancelar_comando(cid: int, _u: str = Depends(auth.admin_actual)):
     return _resp(await _en_hilo(lambda cx: sv.cancelar_comando(cx, cid)))
