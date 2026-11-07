@@ -6,7 +6,7 @@ import { fFecha } from './formato';
 const TIPOS: Record<string, string> = { sin_datos: 'Sin datos', error_sensor: 'Error de sensor', fuera_rango: 'Fuera de rango',
   reinicio: 'Reinicio emisora', bateria: 'Batería', comando: 'Comando remoto' };
 
-export default function Alertas({ alCambiar }: { alCambiar: () => void }) {
+export default function Alertas({ alCambiar, puedeResolver }: { alCambiar: () => void; puedeResolver: boolean }) {
   const [filtro, setFiltro] = useState('activa');
   const [lista, setLista] = useState<Alerta[] | null>(null);
   const cargar = useCallback(() => api.alertas(filtro).then(d => setLista(d.alertas)).catch(() => {}), [filtro]);
@@ -29,7 +29,7 @@ export default function Alertas({ alCambiar }: { alCambiar: () => void }) {
                 <div className="meta">{TIPOS[a.tipo] || a.tipo} · desde {fFecha.format(a.inicio * 1000)}
                   {a.fin ? ` · hasta ${fFecha.format(a.fin * 1000)}` : ` · última ${fFecha.format(a.ultima * 1000)}`}
                   {a.conteo > 1 && ` · ${a.conteo} veces`}</div>
-                {a.estado === 'activa' && a.tipo !== 'comando' && <button className="btn" onClick={() => resolver(a.id)}>Marcar resuelta</button>}
+                {puedeResolver && a.estado === 'activa' && a.tipo !== 'comando' && <button className="btn" onClick={() => resolver(a.id)}>Marcar resuelta</button>}
               </div>
               <span className="est">{a.estado}</span>
             </li>

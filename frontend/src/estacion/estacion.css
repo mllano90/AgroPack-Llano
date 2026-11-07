@@ -107,6 +107,10 @@
 .estacion-root .vacio{text-align:center;color:var(--tenue);padding:20px}
 .estacion-root .barra-nav{position:fixed;left:8px;right:8px;bottom:calc(8px + env(safe-area-inset-bottom));max-width:820px;margin:0 auto;height:var(--nav);
   display:grid;grid-template-columns:repeat(4,1fr);z-index:10;padding:0 4px}
+.estacion-root .barra-nav.tres{grid-template-columns:repeat(3,1fr)}
+.estacion-root .cabecera .btn{padding:6px 10px;font-size:.85rem}
+.estacion-root .lista-cuentas{list-style:none;padding:0;margin:8px 0 0}
+.estacion-root .lista-cuentas li{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--borde)}
 .estacion-root .barra-nav a{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;color:var(--tenue);text-decoration:none;font-size:.78rem;position:relative}
 .estacion-root .barra-nav a .ico{width:26px;height:26px}
 .estacion-root .barra-nav a.on{color:var(--verde)}

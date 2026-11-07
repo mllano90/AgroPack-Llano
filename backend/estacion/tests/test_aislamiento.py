@@ -1,5 +1,9 @@
 """El módulo no puede tumbar ni tocar la app anfitriona."""
 import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -12,6 +16,65 @@ def _anfitrion():
     def ping():
         return {"ok": True}
     return app
+
+
+def test_token_de_estacion_no_abre_empaque_ni_al_reves(tmp_path):
+    """Mismo secreto y el mismo nombre admin: el JWT de la estación no autoriza empaque."""
+    db = tmp_path / "cruce.db"
+    codigo = textwrap.dedent("""
+        import os, sys
+        from datetime import datetime, timedelta
+        sys.path.insert(0, os.environ["BACKEND"])
+        from fastapi.testclient import TestClient
+        from jose import jwt
+        from app.main import app
+        c = TestClient(app)
+        sec = os.environ["SECRET_KEY"]
+        reg = c.post("/api/auth/register", json={
+            "username": "admin", "nombre_completo": "Admin empaque", "rol": "admin", "password": "Empaque2468"})
+        assert reg.status_code in (200, 201), reg.text
+        emp = c.post("/api/auth/login", data={"username": "admin", "password": "Empaque2468"})
+        assert emp.status_code == 200, emp.text
+        tok_emp = emp.json()["access_token"]
+        est = c.post("/api/estacion/auth/login", json={"usuario": "admin", "clave": "Estacion2468"})
+        assert est.status_code == 200 and est.json()["rol"] == "admin", est.text
+        tok_est = est.json()["token"]
+        h = {"Authorization": "Bearer " + tok_est}
+        assert c.get("/api/empaque/admin/recientes", headers=h).status_code == 401
+        assert c.get("/api/estacion/usuarios", headers={"Authorization": "Bearer " + tok_emp}).status_code == 401
+        assert c.get("/api/estacion/ultimo", headers={"Authorization": "Bearer " + tok_emp}).status_code == 401
+        assert c.get("/api/empaque/admin/recientes", headers={"Authorization": "Bearer " + tok_emp}).status_code == 200
+        viejo = jwt.encode({"sub": "admin", "exp": datetime.utcnow() + timedelta(hours=1)}, sec, algorithm="HS256")
+        if isinstance(viejo, bytes):
+            viejo = viejo.decode()
+        assert c.get("/api/empaque/admin/recientes", headers={"Authorization": "Bearer " + viejo}).status_code == 200
+        alta = c.post("/api/estacion/usuarios", json={"usuario": "visor1", "clave": "Visor2468ok", "rol": "admin"}, headers=h)
+        assert alta.status_code == 200 and alta.json()["rol"] == "normal", alta.text
+        vis = c.post("/api/estacion/auth/login", json={"usuario": "visor1", "clave": "Visor2468ok"})
+        assert vis.status_code == 200 and vis.json()["rol"] == "normal", vis.text
+        hv = {"Authorization": "Bearer " + vis.json()["token"]}
+        assert c.get("/api/estacion/usuarios", headers=hv).status_code == 403
+        assert c.post("/api/estacion/comandos", json={"duracion_min": 15}, headers=hv).status_code == 403
+        assert c.get("/api/estacion/ultimo", headers=hv).status_code == 200
+        assert c.get("/api/empaque/admin/recientes", headers=hv).status_code == 401
+        print("AISLAMIENTO_OK")
+    """)
+    env = os.environ.copy()
+    secreto = "secreto-compartido-de-prueba-32bytes"
+    env.update({
+        "SECRET_KEY": secreto,
+        "ESTACION_SECRET": secreto,
+        "ESTACION_ADMIN_USER": "admin",
+        "ESTACION_ADMIN_PASS": "Estacion2468",
+        "ESTACION_INGEST_TOKEN": "token-local-prueba",
+        "ESTACION_HABILITADA": "1",
+        "DATABASE_URL": f"sqlite:///{db}",
+        "DEBUG": "0",
+        "BACKEND": str(Path(__file__).resolve().parents[2]),
+    })
+    r = subprocess.run([sys.executable, "-c", codigo], env=env, capture_output=True, text=True)
+    assert r.returncode == 0, r.stdout + "\n" + r.stderr
+    assert "AISLAMIENTO_OK" in r.stdout
 
 
 def test_fallo_al_registrar_no_tumba_anfitrion(tmp_path, monkeypatch):

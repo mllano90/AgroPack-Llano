@@ -54,7 +54,43 @@ def test_ui_requiere_jwt_propio(cliente):
     assert ingesta(cliente, [{"csv": csv(1, T0)}], headers={"Authorization": f"Bearer {bueno}"}).status_code == 401
     login(cliente)
     assert cliente.get(f"{API}/ultimo").status_code == 200
-    assert cliente.get(f"{API}/auth/yo").json() == {"usuario": "admin"}
+    assert cliente.get(f"{API}/auth/yo").json() == {"usuario": "admin", "rol": "admin"}
+
+
+def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
+    login(cliente)
+    malo = [
+        {"usuario": "ab", "clave": "Visor2468ok"},
+        {"usuario": "visor 1", "clave": "Visor2468ok"},
+        {"usuario": "visor1", "clave": "corta1"},
+        {"usuario": "visor1", "clave": "sololetras"},
+        {"usuario": "visor1", "clave": "qwertyuiop"},
+        {"usuario": "cuentalarga", "clave": "cuentalarga"},
+    ]
+    for cuerpo in malo:
+        assert cliente.post(f"{API}/usuarios", json=cuerpo).status_code == 400
+    alta = cliente.post(f"{API}/usuarios", json={"usuario": "visor1", "clave": "Visor2468ok", "rol": "admin"})
+    assert alta.status_code == 200 and alta.json()["rol"] == "normal"
+    assert cliente.post(f"{API}/usuarios", json={"usuario": "visor1", "clave": "OtraClave2468"}).status_code == 409
+    nombres = {u["usuario"]: u["rol"] for u in cliente.get(f"{API}/usuarios").json()["usuarios"]}
+    assert nombres["visor1"] == "normal" and nombres["admin"] == "admin"
+    assert "hash" not in alta.text
+    vis = cliente.post(f"{API}/auth/login", json={"usuario": "visor1", "clave": "Visor2468ok"})
+    assert vis.status_code == 200 and vis.json()["rol"] == "normal"
+    hv = {"Authorization": "Bearer " + vis.json()["token"]}
+    assert cliente.get(f"{API}/usuarios", headers=hv).status_code == 403
+    assert cliente.get(f"{API}/config", headers=hv).status_code == 403
+    assert cliente.put(f"{API}/config", json={"nombre_nodo": "Casa"}, headers=hv).status_code == 403
+    assert cliente.post(f"{API}/usuarios", json={"usuario": "otro2", "clave": "OtraClave2468"}, headers=hv).status_code == 403
+    assert cliente.post(f"{API}/comandos", json={"duracion_min": 15}, headers=hv).status_code == 403
+    assert cliente.post(f"{API}/alertas/1/resolver", headers=hv).status_code == 403
+    assert cliente.get(f"{API}/ultimo", headers=hv).status_code == 200
+    assert cliente.get(f"{API}/alertas", headers=hv).status_code == 200
+    assert cliente.get(f"{API}/historial?var=t_aire&rango=24h", headers=hv).status_code == 200
+    anon = {"Authorization": ""}
+    assert cliente.get(f"{API}/usuarios", headers=anon).status_code == 401
+    assert cliente.get(f"{API}/ultimo", headers=anon).status_code == 401
+    assert cliente.post(f"{API}/usuarios", json={"usuario": "otro2", "clave": "OtraClave2468"}, headers=anon).status_code == 401
 
 
 # ---------------------------------------------------------------- decodificación

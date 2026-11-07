@@ -36,7 +36,11 @@ async function pedir<T>(ruta: string, opt: RequestInit = {}): Promise<T> {
 
 export const api = {
   login: (usuario: string, clave: string) =>
-    pedir<{ token: string; usuario: string; expira: number }>('/auth/login', { method: 'POST', body: JSON.stringify({ usuario, clave }) }),
+    pedir<{ token: string; usuario: string; rol: 'admin' | 'normal'; expira: number }>('/auth/login', { method: 'POST', body: JSON.stringify({ usuario, clave }) }),
+  yo: () => pedir<{ usuario: string; rol: 'admin' | 'normal' }>('/auth/yo'),
+  usuarios: () => pedir<{ usuarios: { usuario: string; rol: 'admin' | 'normal'; activo: boolean; creado: number }[] }>('/usuarios'),
+  crearUsuario: (usuario: string, clave: string) =>
+    pedir<{ ok: boolean; usuario: string; rol: 'normal' }>('/usuarios', { method: 'POST', body: JSON.stringify({ usuario, clave }) }),
   ultimo: () => pedir<Ultimo>('/ultimo'),
   historial: (v: string, rango: string) => pedir<Historial>(`/historial?var=${v}&rango=${rango}`),
   config: () => pedir<Config>('/config'),

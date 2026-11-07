@@ -2,14 +2,14 @@ import { useState, type FormEvent } from 'react';
 import { api } from './api';
 import { Icono } from './Icono';
 
-export default function Login({ alEntrar }: { alEntrar: (token: string) => void }) {
+export default function Login({ alEntrar }: { alEntrar: (token: string, rol: 'admin' | 'normal') => void }) {
   const [u, setU] = useState('');
   const [c, setC] = useState('');
   const [error, setError] = useState('');
   const [enviando, setEnviando] = useState(false);
   const enviar = async (e: FormEvent) => {
     e.preventDefault(); setEnviando(true); setError('');
-    try { alEntrar((await api.login(u, c)).token); } catch (err) { setError((err as Error).message); }
+    try { const r = await api.login(u, c); alEntrar(r.token, r.rol); } catch (err) { setError((err as Error).message); }
     setEnviando(false);
   };
   return (
