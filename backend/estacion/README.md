@@ -28,7 +28,18 @@ Sin claves foráneas hacia el resto de AgroPack.
 
 `POST /api/estacion/v1/ingesta` con `Authorization: Bearer <ESTACION_INGEST_TOKEN>`.
 
-El CSV acepta 23 campos (sin epoch), 24 (v4.2, epoch al final) o 27. Los 27 son el de 24 más `eInt,Tint,Hint` al final; el epoch sigue en el campo 24. Aire, PIR y suelo quedan en las mismas posiciones. La caja no entra al promedio de aire. Otro largo, o la caja en medio, se rechaza y no se guarda.
+Contrato v4.5.2 (`estacion_logica.h`, el mismo orden en `receptora_logica.h` y en `nube_logica.h` `csvDe`). Índices del texto, cero = tipo:
+
+`T,seq,eA1,T1,H1,eA2,T2,H2,ePir,Pir,eS,Hs,Ts,EC,pH,N,P,K,nNPK,edadNPK,fase,minFase,totFase,eInt,Tint,Hint,epoch`
+
+| Campos | Versión | Caja | Epoch |
+|---|---|---|---|
+| 23 | v3/v4 | no | no |
+| 24 | v4.1/v4.2 | no | campo 23 |
+| 26 | v4.5 sin reloj | 23 eInt, 24 Tint, 25 Hint | no |
+| 27 | v4.5.2 | 23 eInt, 24 Tint, 25 Hint | campo 26 |
+
+La caja después del epoch se rechaza. El JSON de la receptora manda `id`, `csv`, `rx`, `rssi`, `snr` y además nombres (`t_caja`, `errCaja`, …). El servidor valida el `csv`; los nombres de más no cambian la lectura. El `id` (`%08lx-%lu`) deduplica. La respuesta que la cola espera es `ok`, `aceptados`, `duplicados` y `rechazados`.
 
 ## Pruebas
 
