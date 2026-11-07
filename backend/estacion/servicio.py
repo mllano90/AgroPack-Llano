@@ -172,6 +172,7 @@ def validar_registro(reg, nodo, t_servidor):
     fila = {"uid": uid, "nodo": nodo, "tipo": p["tipo"], "seq": p["seq"], "ts": ts, "ts_emisora": p["epoch"],
             "ts_rx": rx or None, "ts_servidor": t_servidor, "rssi": rssi, "snr": float(snr) if snr is not None else None,
             "e_a1": p["e_a1"], "t1": d["t1"], "h1": d["h1"], "e_a2": p["e_a2"], "t2": d["t2"], "h2": d["h2"],
+            "e_int": d["e_int"], "t_int": d["t_int"], "h_int": d["h_int"],
             "e_pir": p["e_pir"], "pir": d["pir"], "e_suelo": p["e_suelo"], "h_suelo": d["h_suelo"],
             "t_suelo": d["t_suelo"], "ts_suelo": d["ts_suelo"], "suelo_nuevo": 0,
             "ec": d["ec"], "ph": d["ph"], "n": d["n"], "p": d["p"], "k": d["k"], "n_npk": p["n_npk"],
@@ -182,8 +183,9 @@ def validar_registro(reg, nodo, t_servidor):
 
 
 COLS = ["uid", "nodo", "tipo", "seq", "ts", "ts_emisora", "ts_rx", "ts_servidor", "rssi", "snr", "e_a1", "t1", "h1",
-        "e_a2", "t2", "h2", "e_pir", "pir", "e_suelo", "h_suelo", "t_suelo", "ts_suelo", "suelo_nuevo", "ec", "ph",
-        "n", "p", "k", "n_npk", "edad_npk", "ts_npk", "npk_nuevo", "fase", "min_fase", "tot_fase", "csv"]
+        "e_a2", "t2", "h2", "e_int", "t_int", "h_int", "e_pir", "pir", "e_suelo", "h_suelo", "t_suelo", "ts_suelo",
+        "suelo_nuevo", "ec", "ph", "n", "p", "k", "n_npk", "edad_npk", "ts_npk", "npk_nuevo", "fase", "min_fase",
+        "tot_fase", "csv"]
 SQL_INSERT = (f"INSERT INTO estacion_lecturas ({', '.join(COLS)}) VALUES ({', '.join('?' * len(COLS))}) "
               "ON CONFLICT (uid) DO NOTHING")
 
@@ -429,6 +431,7 @@ def ultimo(cx, nodo, t=None):
                 ts=r["ts"], ts_servidor=r["ts_servidor"], sin_hora_emisora=r["ts_emisora"] == 0, seq=r["seq"],
                 tipo=r["tipo"], rssi=r["rssi"], snr=r["snr"],
                 aire={"a1": a1, "a2": a2, "t": _prom(r["t1"], r["t2"]), "h": _prom(r["h1"], r["h2"])},
+                interno=None if r.get("e_int") is None else sensor(r["e_int"], t=r["t_int"], h=r["h_int"]),
                 pir=sensor(r["e_pir"], v=r["pir"]),
                 suelo=sensor(r["e_suelo"], t=r["t_suelo"], h=r["h_suelo"], ts=r["ts_suelo"]),
                 npk=npk, npk_ultimo_fallo=bool(ult_c and ult_c["n_npk"] < 3),

@@ -58,6 +58,35 @@ def test_ui_requiere_jwt_propio(cliente):
 
 
 # ---------------------------------------------------------------- decodificación
+def test_paquete_27_caja_interna_no_mueve_sensores(cliente):
+    """27 campos: epoch en el 24 y eInt,Tint,Hint al final. El suelo no se corre."""
+    base = csv(7, T0, mn=8, edad=5)
+    linea = base + ",0,310,615"
+    r = ingesta(cliente, [{"csv": linea, "rssi": -91, "snr": 7.5, "rx": T0 + 2}]).json()
+    assert r["aceptados"] == 1
+    login(cliente)
+    u = cliente.get(f"{API}/ultimo").json()
+    assert u["aire"]["t"] == 25.5 and u["aire"]["a1"]["t"] == 25.3
+    assert u["pir"]["v"] == 420 and u["suelo"]["h"] == 61.2 and u["npk"]["ec"] == 1.83
+    assert u["ts"] == T0 and u["interno"]["ok"] is True
+    assert u["interno"]["t"] == 31.0 and u["interno"]["h"] == 61.5
+    # Un error de la caja no se vuelve 0 ni contamina el aire.
+    malo = csv(8, T0 + 120, t1=400, t2=400) + ",226,0,0"
+    ingesta(cliente, [{"csv": malo}])
+    u = cliente.get(f"{API}/ultimo").json()
+    assert u["aire"]["t"] == 40.0 and u["interno"]["ok"] is False and u["interno"]["t"] is None
+    # 26 campos, la caja antes del epoch, o metida en medio: se rechazan.
+    antes = base.rsplit(",", 1)[0] + ",0,310,615," + str(T0)
+    cortado = base + ",0,310"
+    movido = "D,7,0,253,550,0,257,540,0,310,615,0,420,0,612,241,1830,62,120,80,100,6,5,0,8,30," + str(T0)
+    j = ingesta(cliente, [{"csv": antes}, {"csv": cortado}, {"csv": movido}]).json()
+    assert j["aceptados"] == 0 and len(j["rechazados"]) == 3
+    # El paquete de 24 sigue igual y no inventa caja.
+    ingesta(cliente, [{"csv": csv(9, T0 + 240)}])
+    u = cliente.get(f"{API}/ultimo").json()
+    assert u["seq"] == 9 and u["interno"] is None
+
+
 def test_decodificacion_y_unidades(cliente):
     r = ingesta(cliente, [{"csv": csv(7, T0, mn=8, edad=5), "rssi": -91, "snr": 7.5, "rx": T0 + 2}]).json()
     assert r["aceptados"] == 1

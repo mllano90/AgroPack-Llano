@@ -3,7 +3,7 @@
 Tiempos: epoch Unix UTC en segundos (BigInteger) para que SQLite y Postgres se comporten igual.
 """
 from sqlalchemy import (BigInteger, Boolean, Column, Float, Index, Integer, MetaData, String, Text,
-                        UniqueConstraint)
+                        inspect, text)
 from sqlalchemy.orm import declarative_base
 
 # Base propia (no se mezcla con la de AgroPack). crear_tablas() hace create_all solo de estas tablas.
@@ -27,6 +27,8 @@ class Lectura(Base):
     snr = Column(Float)
     e_a1 = Column(Integer, nullable=False); t1 = Column(Float); h1 = Column(Float)
     e_a2 = Column(Integer, nullable=False); t2 = Column(Float); h2 = Column(Float)
+    # Caja interna (paquete de 27). NULL en paquetes de 23/24 campos. No entra al aire.
+    e_int = Column(Integer); t_int = Column(Float); h_int = Column(Float)
     e_pir = Column(Integer, nullable=False); pir = Column(Float)
     e_suelo = Column(Integer, nullable=False); h_suelo = Column(Float); t_suelo = Column(Float)
     ts_suelo = Column(BigInteger)
@@ -37,7 +39,7 @@ class Lectura(Base):
     npk_nuevo = Column(Integer, nullable=False, server_default="0")
     fase = Column(Integer, nullable=False); min_fase = Column(Integer, nullable=False); tot_fase = Column(Integer, nullable=False)
     reinicio = Column(Integer, nullable=False, server_default="0")
-    csv = Column(String(128), nullable=False)
+    csv = Column(String(160), nullable=False)
     __table_args__ = (Index("ix_estacion_lecturas_nodo_ts", "nodo", "ts"),
                       Index("ix_estacion_lecturas_nodo_ts_suelo", "nodo", "ts_suelo"),
                       Index("ix_estacion_lecturas_nodo_ts_npk", "nodo", "ts_npk"))
@@ -132,3 +134,16 @@ class Usuario(Base):
 
 def crear_tablas(engine):
     Base.metadata.create_all(engine)
+    # create_all no altera una estacion_lecturas ya creada (p. ej. el esquema del PR 9).
+    insp = inspect(engine)
+    if not insp.has_table("estacion_lecturas"):
+        return
+    columnas = {c["name"]: c for c in insp.get_columns("estacion_lecturas")}
+    tipo_num = "DOUBLE PRECISION" if engine.dialect.name == "postgresql" else "REAL"
+    with engine.begin() as conn:
+        for nombre, tipo in (("e_int", "INTEGER"), ("t_int", tipo_num), ("h_int", tipo_num)):
+            if nombre not in columnas:
+                conn.execute(text(f"ALTER TABLE estacion_lecturas ADD COLUMN {nombre} {tipo}"))
+        largo = getattr(columnas.get("csv", {}).get("type"), "length", None)
+        if engine.dialect.name == "postgresql" and largo is not None and largo < 160:
+            conn.execute(text("ALTER TABLE estacion_lecturas ALTER COLUMN csv TYPE VARCHAR(160)"))
