@@ -24,9 +24,20 @@ def get_password_hash(password):
 def create_access_token(data: dict):
     to_encode = data.copy()
     expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "aud": "agropack", "iss": "agropack"})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
     return encoded_jwt
+
+
+def _token_es_de_empaque(payload: dict) -> bool:
+    """Un JWT de la estación (aud/iss = estacion) no abre el empaque, aunque el secreto coincida.
+
+    Los tokens ya emitidos no traen aud: siguen valiendo. Uno nuevo lleva aud/iss agropack.
+    """
+    aud, iss = payload.get("aud"), payload.get("iss")
+    if isinstance(aud, list):
+        aud = aud[0] if len(aud) == 1 else "varios"
+    return aud in (None, "agropack") and iss in (None, "agropack")
 
 
 # ============================================================
@@ -54,10 +65,11 @@ def get_current_user(
     )
     try:
         payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM],
+            options={"verify_aud": False},
         )
         username: str = payload.get("sub")
-        if username is None:
+        if username is None or not _token_es_de_empaque(payload):
             raise credentials_exception
     except JWTError:
         raise credentials_exception
@@ -92,10 +104,11 @@ def get_user_from_token(token: str, db: Session) -> User:
     )
     try:
         payload = jwt.decode(
-            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM]
+            token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM],
+            options={"verify_aud": False},
         )
         username: str = payload.get("sub")
-        if username is None:
+        if username is None or not _token_es_de_empaque(payload):
             raise credentials_exception
     except JWTError:
         raise credentials_exception
