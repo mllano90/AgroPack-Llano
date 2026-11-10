@@ -21,6 +21,8 @@ REPORTABLES = {"enviado_emisora", "activo", "completado", "expirado", "fallido"}
 ORDEN = {e: i for i, e in enumerate(ESTADOS_CMD)}
 EXPIRA_SIN_ACTIVO_S = 3600
 EXPIRA_WIFI_S = 1800          # el sobre WiFi no vive más de 30 min
+EXPIRA_ENLACE_SIN_ACTIVO_S = 1800   # pendiente/entregado/enviado sin 'activo'
+EXPIRA_ENLACE_ACTIVO_S = 3600       # 'activo' sin fin
 REENTREGA_S = 300
 TEXTO_CMD = {
     "pendiente": "pendiente (esperando a la receptora)",
@@ -28,6 +30,16 @@ TEXTO_CMD = {
     "enviado_emisora": "enviado a la emisora por LoRa",
     "activo": "ACTIVO: emisora con AP + OTA listo",
     "completado": "completado", "expirado": "expirado", "fallido": "fallido", "cancelado": "cancelado",
+}
+TEXTO_CMD_ENLACE = {
+    "pendiente": "esperando que la receptora tome el comando",
+    "entregado_receptora": "esperando que la receptora tome el comando",
+    "enviado_emisora": "esperando que la receptora tome el comando",
+    "activo": "en curso",
+    "completado": "terminado",
+    "expirado": "expirado",
+    "fallido": "falló o regresó al canal seguro",
+    "cancelado": "cancelado",
 }
 
 
@@ -287,6 +299,90 @@ def ingestar(cx, cuerpo, t_servidor=None):
 
 CAMPOS_ESTADO = {"recibidos": 0, "perdidos": 0, "duplicados": 0, "reinicios_emisora": 0, "err_crc": 0,
                  "err_formato": 0, "radio_reinit": 0, "heap": 0, "heap_min": 0, "cola_pendiente": 0, "uptime_s": 0}
+MAX_ENLACE_BYTES = 4096
+_ESTADOS_PRUEBA = ("inactiva", "esperando_ack", "en_curso", "terminada")
+_MOTIVOS_FALLBACK = ("sin_confirmacion_anterior", "sin_paquetes_fabrica")
+
+
+def _tam_json(obj, nombre):
+    if len(json.dumps(obj, separators=(",", ":")).encode()) > MAX_ENLACE_BYTES:
+        raise PaqueteInvalido(f"{nombre} pasa de 4 KB")
+
+
+def _entero_estricto(v, nombre, lo, hi):
+    if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+        raise PaqueteInvalido(f"{nombre} inválido")
+    return v
+
+
+def _numero(v, nombre):
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        raise PaqueteInvalido(f"{nombre} inválido")
+    return v
+
+
+def validar_canal_lora(v):
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise PaqueteInvalido("canal_lora debe ser un objeto")
+    _tam_json(v, "canal_lora")
+    activo = _entero_estricto(v.get("activo"), "canal_lora.activo", 0, 10)
+    if not isinstance(v.get("fabrica"), bool) or v["fabrica"] != (activo == 0):
+        raise PaqueteInvalido("canal_lora.fabrica inválido")
+    _numero(v.get("mhz"), "canal_lora.mhz")
+    _entero_estricto(v.get("sf"), "canal_lora.sf", 5, 12)
+    _numero(v.get("bw_khz"), "canal_lora.bw_khz")
+    if not isinstance(v.get("confirmado"), bool):
+        raise PaqueteInvalido("canal_lora.confirmado inválido")
+    _entero_estricto(v.get("anterior"), "canal_lora.anterior", 0, 10)
+    _entero_estricto(v.get("sin_paquetes_s"), "canal_lora.sin_paquetes_s", 0, 10 ** 9)
+    fb = v.get("fallback", None)
+    if fb is not None:
+        if not isinstance(fb, dict) or fb.get("motivo") not in _MOTIVOS_FALLBACK:
+            raise PaqueteInvalido("canal_lora.fallback inválido")
+        _entero_estricto(fb.get("desde"), "fallback.desde", 0, 10)
+        _entero_estricto(fb.get("hacia"), "fallback.hacia", 0, 10)
+        _entero_estricto(fb.get("hace_s"), "fallback.hace_s", 0, 10 ** 9)
+    return v
+
+
+def validar_prueba_enlace(v):
+    if v is None:
+        return None
+    if not isinstance(v, dict):
+        raise PaqueteInvalido("prueba_enlace debe ser un objeto")
+    _tam_json(v, "prueba_enlace")
+    if v.get("estado") not in _ESTADOS_PRUEBA:
+        raise PaqueteInvalido("prueba_enlace.estado inválido")
+    _entero_estricto(v.get("comando_id"), "prueba_enlace.comando_id", 0, 2 ** 31)
+    _entero_estricto(v.get("combinacion"), "prueba_enlace.combinacion", 0, 10)
+    _entero_estricto(v.get("total"), "prueba_enlace.total", 1, 10)
+    tabla = v.get("tabla")
+    if not isinstance(tabla, list) or len(tabla) > 10:
+        raise PaqueteInvalido("prueba_enlace.tabla inválida")
+    for fila in tabla:
+        if not isinstance(fila, dict):
+            raise PaqueteInvalido("fila de tabla inválida")
+        _entero_estricto(fila.get("n"), "tabla.n", 1, 10)
+    rec = v.get("recomendada", None)
+    if rec is not None:
+        _entero_estricto(rec, "prueba_enlace.recomendada", 1, 10)
+    return v
+
+
+def _guardar_enlace(cx, nodo, ts, canal, prueba):
+    if canal is None and prueba is None:
+        return
+    prev = cx.uno("SELECT canal_lora, prueba_enlace FROM estacion_enlace_nodo WHERE nodo = ?", (nodo,))
+    cj = json.dumps(canal) if canal is not None else (prev["canal_lora"] if prev else None)
+    pj = json.dumps(prueba) if prueba is not None else (prev["prueba_enlace"] if prev else None)
+    if prev:
+        cx.ejecutar("UPDATE estacion_enlace_nodo SET ts = ?, canal_lora = ?, prueba_enlace = ? WHERE nodo = ?",
+                    (ts, cj, pj, nodo))
+    else:
+        cx.ejecutar("INSERT INTO estacion_enlace_nodo (nodo, ts, canal_lora, prueba_enlace) VALUES (?, ?, ?, ?)",
+                    (nodo, ts, cj, pj))
 
 
 def registrar_estado(cx, cuerpo, t_servidor=None):
@@ -309,6 +405,7 @@ def registrar_estado(cx, cuerpo, t_servidor=None):
         rw = _entero(cuerpo.get("rssi_wifi"), "rssi_wifi", -150, 10)
         ts = _entero(cuerpo.get("ts", 0), "ts", 0, 4102444800) or t_servidor
         wifi = None
+        canal = prueba = None
         if "wifi_ssid" in cuerpo:
             ssid = cuerpo.get("wifi_ssid")
             if not isinstance(ssid, str) or len(ssid.encode()) > 32 or "\x00" in ssid:
@@ -321,6 +418,8 @@ def registrar_estado(cx, cuerpo, t_servidor=None):
                 raise PaqueteInvalido("wifi_con_clave inválido")
             wifi = {"ssid": ssid, "fuente": fuente, "clave": "configurada" if con else "vacía",
                     "firmware": fw, "ts": t_servidor}
+        canal = validar_canal_lora(cuerpo["canal_lora"]) if "canal_lora" in cuerpo else None
+        prueba = validar_prueba_enlace(cuerpo["prueba_enlace"]) if "prueba_enlace" in cuerpo else None
     except PaqueteInvalido as e:
         return 400, {"ok": False, "error": str(e)}
     cx.ejecutar("INSERT INTO estacion_estado_receptora (nodo, ts, recibidos, perdidos, duplicados, reinicios_emisora, err_crc, "
@@ -333,6 +432,7 @@ def registrar_estado(cx, cuerpo, t_servidor=None):
         bruto = json.dumps(wifi)
         if cx.ejecutar("UPDATE estacion_config SET valor = ? WHERE clave = ?", (bruto, f"wifi:{nodo}")) == 0:
             cx.ejecutar("INSERT INTO estacion_config (clave, valor) VALUES (?, ?)", (f"wifi:{nodo}", bruto))
+    _guardar_enlace(cx, nodo, ts, canal, prueba)
     if bat is not None:   # placeholder batería (futuro)
         cfg = cfgmod.leer(cx)
         if bat < cfg["bateria_min_v"]:
@@ -356,9 +456,16 @@ def _cmd_publico(c):
     par = _parametros_publicos(c)
     if c["tipo"] == "wifi" and c["estado"] == "completado":
         texto = "completado: la receptora ya usa la red nueva"
+    elif c["tipo"] == "enlace":
+        texto = TEXTO_CMD_ENLACE.get(c["estado"], c["estado"])
     else:
         texto = TEXTO_CMD.get(c["estado"], c["estado"])
-    expira_base = EXPIRA_WIFI_S if c["tipo"] == "wifi" else EXPIRA_SIN_ACTIVO_S
+    if c["tipo"] == "enlace":
+        expira_base = EXPIRA_ENLACE_SIN_ACTIVO_S
+    elif c["tipo"] == "wifi":
+        expira_base = EXPIRA_WIFI_S
+    else:
+        expira_base = EXPIRA_SIN_ACTIVO_S
     return {"id": c["id"], "nodo": c["nodo"], "tipo": c["tipo"], "parametros": par, "estado": c["estado"],
             "estado_texto": texto, "creado": c["creado"],
             "actualizado": c["actualizado"], "detalle": c["detalle"], "usuario": c["usuario"],
@@ -369,6 +476,8 @@ def _cmd_alerta(cx, c, t):
     par = _parametros_publicos(c)
     if c["tipo"] == "wifi":
         msg = f"Comando #{c['id']} WiFi «{par.get('ssid') or '?'}»: {TEXTO_CMD[c['estado']]}"
+    elif c["tipo"] == "enlace":
+        msg = f"Comando #{c['id']} enlace {par.get('accion')} n={par.get('n')}: {TEXTO_CMD_ENLACE[c['estado']]}"
     else:
         msg = f"Comando #{c['id']} modo programación ({par.get('duracion_min')} min): {TEXTO_CMD[c['estado']]}"
     if c.get("detalle"):
@@ -382,7 +491,7 @@ def _cmd_alerta(cx, c, t):
 
 def _cmd_cambiar(cx, c, estado, detalle, t):
     par = json.loads(c["parametros"])
-    if c["tipo"] == "wifi" and estado in ("activo", "completado", "fallido", "expirado", "cancelado"):
+    if c["tipo"] in ("wifi", "enlace") and estado in ("activo", "completado", "fallido", "expirado", "cancelado"):
         par.pop("sobre", None)
         parametros = json.dumps(par)
         cx.ejecutar("UPDATE estacion_comandos SET estado = ?, detalle = ?, actualizado = ?, parametros = ? WHERE id = ?",
@@ -410,6 +519,8 @@ def crear_comando(cx, nodo, tipo, parametros, usuario, t=None):
                         "('completado','expirado','fallido','cancelado')", (nodo,))
     if abiertos:
         raise LookupError(f"ya hay un comando en curso (#{abiertos[0]['id']})")
+    if _enlaces_abiertos(cx, nodo, ("prueba", "usar")):
+        raise LookupError("hay una prueba u orden de canal en curso")
     par = json.dumps({"duracion_min": dur})
     cx.ejecutar("INSERT INTO estacion_comandos (nodo, tipo, parametros, estado, creado, actualizado, usuario) "
                 "VALUES (?, ?, ?, 'pendiente', ?, ?, ?)", (nodo, tipo, par, t, t, usuario))
@@ -450,6 +561,51 @@ def crear_comando_wifi(cx, nodo, ssid, clave, url, usuario, conservar=False, red
     return _cmd_publico(c)
 
 
+_TERMINALES_CMD = ("completado", "expirado", "fallido", "cancelado")
+
+
+def _enlaces_abiertos(cx, nodo, acciones):
+    filas = cx.todos("SELECT * FROM estacion_comandos WHERE nodo = ? AND tipo = 'enlace' AND estado NOT IN "
+                     "('completado','expirado','fallido','cancelado')", (nodo,))
+    return [c for c in filas if json.loads(c["parametros"]).get("accion") in acciones]
+
+
+def crear_comando_enlace(cx, nodo, accion, n, usuario, t=None):
+    """Orden de canal cifrada con ESTACION_INGEST_TOKEN. El sobre se arma con el id ya asignado."""
+    from . import enlace_cmd
+    t = t or ahora()
+    if not ajustes.ingest_token:
+        raise LookupError("falta ESTACION_INGEST_TOKEN: no se puede firmar la orden")
+    if not isinstance(nodo, str) or not RE_NODO.match(nodo):
+        raise ValueError("nodo inválido")
+    accion, n = enlace_cmd.validar(accion, 0 if n is None else n)
+    expirar_comandos(cx, t)
+    if accion in ("prueba", "usar"):
+        ota = cx.todos("SELECT id FROM estacion_comandos WHERE nodo = ? AND tipo = 'ota' AND estado NOT IN "
+                       "('completado','expirado','fallido','cancelado')", (nodo,))
+        if ota:
+            raise LookupError(f"hay un modo programación en curso (#{ota[0]['id']})")
+        previos = _enlaces_abiertos(cx, nodo, ("prueba", "usar"))
+        if previos:
+            raise LookupError(f"ya hay una prueba u orden de canal en curso (#{previos[0]['id']})")
+    else:
+        previos = _enlaces_abiertos(cx, nodo, ("cancelar", "fabrica"))
+        if previos:
+            raise LookupError(f"ya hay una orden de canal en curso (#{previos[0]['id']})")
+    pub = {"accion": accion, "n": n}
+    cx.ejecutar("INSERT INTO estacion_comandos (nodo, tipo, parametros, estado, creado, actualizado, usuario) "
+                "VALUES (?, 'enlace', ?, 'pendiente', ?, ?, ?)", (nodo, json.dumps(pub), t, t, usuario))
+    c = cx.uno("SELECT * FROM estacion_comandos WHERE id = (SELECT MAX(id) FROM estacion_comandos WHERE nodo = ?)", (nodo,))
+    pub["sobre"] = enlace_cmd.cifrar(ajustes.ingest_token, c["id"], accion, n)
+    cx.ejecutar("UPDATE estacion_comandos SET parametros = ? WHERE id = ?", (json.dumps(pub), c["id"]))
+    c["parametros"] = json.dumps(pub)
+    aid = alerta_evento(cx, nodo, f"cmd:{c['id']}", "comando", "…", t)
+    cx.ejecutar("UPDATE estacion_comandos SET alerta_id = ? WHERE id = ?", (aid, c["id"]))
+    c["alerta_id"] = aid
+    _cmd_alerta(cx, c, t)
+    return _cmd_publico(c)
+
+
 def comandos_para_entrega(cx, nodo, t):
     """Lista 'comandos' para la respuesta de ingesta/estado. Marca entregado_receptora.
     Se reentrega un comando entregado_receptora si pasan REENTREGA_S sin avance (respuesta perdida)."""
@@ -459,9 +615,12 @@ def comandos_para_entrega(cx, nodo, t):
     out = []
     for c in filas:
         par = json.loads(c["parametros"])
-        if c["tipo"] == "wifi":
+        if c["tipo"] in ("wifi", "enlace"):
             sobre = par.get("sobre") or {}
-            out.append({"id": c["id"], "tipo": "wifi", "nonce": sobre.get("nonce"),
+            if c["tipo"] == "enlace" and not (sobre.get("nonce") and sobre.get("datos") and sobre.get("mac")):
+                _cmd_cambiar(cx, c, "fallido", "sobre ausente", t)
+                continue
+            out.append({"id": c["id"], "tipo": c["tipo"], "nonce": sobre.get("nonce"),
                         "datos": sobre.get("datos"), "mac": sobre.get("mac")})
         else:
             out.append({"id": c["id"], "tipo": c["tipo"], "duracion_min": par.get("duracion_min")})
@@ -515,13 +674,20 @@ def cancelar_comando(cx, cid, t=None):
 
 
 def expirar_comandos(cx, t):
-    for c in cx.todos("SELECT * FROM estacion_comandos WHERE tipo <> 'wifi' AND estado IN "
+    for c in cx.todos("SELECT * FROM estacion_comandos WHERE tipo NOT IN ('wifi', 'enlace') AND estado IN "
                       "('pendiente','entregado_receptora','enviado_emisora') AND creado <= ?", (t - EXPIRA_SIN_ACTIVO_S,)):
         _cmd_cambiar(cx, c, "expirado", "sin confirmación 'activo' en 60 min", t)
     for c in cx.todos("SELECT * FROM estacion_comandos WHERE tipo = 'wifi' AND estado IN "
                       "('pendiente','entregado_receptora') AND creado <= ?", (t - EXPIRA_WIFI_S,)):
         _cmd_cambiar(cx, c, "expirado", "el cambio de WiFi no se confirmó en 30 min", t)
-    for c in cx.todos("SELECT * FROM estacion_comandos WHERE estado = 'activo'"):
+    for c in cx.todos("SELECT * FROM estacion_comandos WHERE tipo = 'enlace' AND estado IN "
+                      "('pendiente','entregado_receptora','enviado_emisora') AND creado <= ?",
+                      (t - EXPIRA_ENLACE_SIN_ACTIVO_S,)):
+        _cmd_cambiar(cx, c, "expirado", "sin confirmación 'activo' en 30 min", t)
+    for c in cx.todos("SELECT * FROM estacion_comandos WHERE estado = 'activo' AND tipo = 'enlace' "
+                      "AND actualizado <= ?", (t - EXPIRA_ENLACE_ACTIVO_S,)):
+        _cmd_cambiar(cx, c, "expirado", "sin aviso de fin en 60 min", t)
+    for c in cx.todos("SELECT * FROM estacion_comandos WHERE estado = 'activo' AND tipo <> 'enlace'"):
         dur = json.loads(c["parametros"]).get("duracion_min", 15)
         if t - c["actualizado"] > (dur + 30) * 60:
             _cmd_cambiar(cx, c, "expirado", "sin aviso de fin tras la ventana OTA", t)
@@ -542,6 +708,17 @@ def estado_wifi(cx, nodo):
     return {"nodo": nodo, "token_configurado": bool(ajustes.ingest_token),
             "comandos": [c for c in listar_comandos(cx, nodo, 8) if c["tipo"] == "wifi"],
             "receptora": receptora}
+
+
+def estado_enlace(cx, nodo):
+    fila = cx.uno("SELECT canal_lora, prueba_enlace FROM estacion_enlace_nodo WHERE nodo = ?", (nodo,))
+    fw = cx.uno("SELECT firmware FROM estacion_estado_receptora WHERE nodo = ? AND firmware IS NOT NULL "
+                "ORDER BY id DESC LIMIT 1", (nodo,))
+    return {"nodo": nodo, "firmware": fw["firmware"] if fw else None,
+            "token_configurado": bool(ajustes.ingest_token),
+            "canal_lora": json.loads(fila["canal_lora"]) if fila and fila["canal_lora"] else None,
+            "prueba_enlace": json.loads(fila["prueba_enlace"]) if fila and fila["prueba_enlace"] else None,
+            "comandos": [c for c in listar_comandos(cx, nodo, 8) if c["tipo"] == "enlace"]}
 
 
 # ============================================================ consultas UI

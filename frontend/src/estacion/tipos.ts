@@ -26,7 +26,7 @@ export interface Alerta { id: number; clave: string; tipo: string; mensaje: stri
 export interface Cuenta { usuario: string; rol: 'admin' | 'normal'; activo: boolean; creado: number }
 export interface Comando {
   id: number; nodo: string; tipo: string;
-  parametros: { duracion_min?: number; ssid?: string; url?: string; clave?: string };
+  parametros: { duracion_min?: number; ssid?: string; url?: string; clave?: string; accion?: string; n?: number };
   estado: string; estado_texto: string;
   creado: number; actualizado: number; detalle: string | null; usuario: string | null; expira: number | null;
 }
@@ -38,6 +38,25 @@ export interface VarReporte {
 export interface Reporte {
   nodo: string; nombre_nodo: string; rango: string; generado: number; desde: number; hasta: number; paso_s: number;
   fuente: string; orden: string[]; variables: Record<string, VarReporte>; rango_banda?: boolean;
+}
+export interface FallbackCanal { desde: number; hacia: number; motivo: string; hace_s: number }
+export interface CanalLora {
+  activo: number; fabrica: boolean; mhz: number; sf: number; bw_khz: number; confirmado: boolean;
+  anterior: number; sin_paquetes_s: number; fallback: FallbackCanal | null;
+}
+export interface FilaEnlace {
+  n: number; mhz: number; sf: number; bw_khz: number; toa_ms?: number; limite_snr_db?: number; probada?: boolean;
+  enviados?: number; recibidos?: number; perdida_pct?: number | null; rssi_prom?: number | null;
+  snr_prom?: number | null; margen_snr_db?: number | null; apta?: string;
+}
+export interface PruebaEnlace {
+  estado: 'inactiva' | 'esperando_ack' | 'en_curso' | 'terminada'; comando_id: number; combinacion: number; total: number;
+  fin?: string; fin_texto?: string; recomendada?: number | null; alternativa_poco_margen?: number | null;
+  tabla: FilaEnlace[]; version_emisora?: string | null; duracion_s?: number;
+}
+export interface EstadoEnlace {
+  nodo: string; firmware: string | null; token_configurado: boolean;
+  canal_lora: CanalLora | null; prueba_enlace: PruebaEnlace | null; comandos: Comando[];
 }
 export interface EstadoWifi {
   nodo: string; token_configurado: boolean; comandos: Comando[];

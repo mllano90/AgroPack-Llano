@@ -5,6 +5,7 @@ import { Icono } from './Icono';
 import { num } from './formato';
 import Mantenimiento from './Mantenimiento';
 import RedWifi from './RedWifi';
+import PruebaEnlace from './PruebaEnlace';
 import { prefAmbiente, UMBRAL_AMB } from './prefs';
 
 function Cuentas() {
@@ -105,6 +106,7 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
       </form>
       <Cuentas />
       <RedWifi />
+      <PruebaEnlace />
       <Mantenimiento />
       <div className="salir"><button className="btn" type="button" onClick={alSalir}><Icono id="salir" />Cerrar sesión</button></div>
     </section>

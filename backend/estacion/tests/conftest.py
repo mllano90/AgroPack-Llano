@@ -13,6 +13,7 @@ sys.path.insert(0, str(PAQUETE / "sim"))   # simulador.py
 sys.path.insert(0, str(BACKEND))
 TOKEN = "token-de-prueba"
 TABLAS = ["estacion_lecturas", "estacion_alertas", "estacion_config", "estacion_nodo_eval", "estacion_estado_receptora",
+          "estacion_enlace_nodo",
           "estacion_comandos", "estacion_agregados_hora", "estacion_trabajos", "estacion_usuarios"]
 
 

@@ -29,6 +29,16 @@
 .estacion-root .aviso-diag p{margin:0}
 .estacion-root .aviso-diag p+p{margin-top:8px}
 .estacion-root .aviso-diag strong{display:block;margin-bottom:2px;color:#ffb38a}
+.estacion-root #prueba-enlace .tabla-enlace{overflow-x:auto;margin-top:10px}
+.estacion-root #prueba-enlace table{width:100%;min-width:720px;border-collapse:collapse;font-size:.78rem}
+.estacion-root #prueba-enlace th,.estacion-root #prueba-enlace td{padding:4px 6px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--borde)}
+.estacion-root #prueba-enlace th:first-child,.estacion-root #prueba-enlace td:first-child{text-align:left}
+.estacion-root #prueba-enlace tr.recomendada{background:rgba(47,224,122,.14)}
+.estacion-root #prueba-enlace tr.alternativa{background:rgba(255,176,32,.12)}
+.estacion-root #prueba-enlace .barra-prueba{height:8px;margin:6px 0;background:rgba(255,255,255,.12);border-radius:4px;overflow:hidden}
+.estacion-root #prueba-enlace .barra-prueba i{display:block;height:100%;background:var(--verde)}
+.estacion-root #prueba-enlace .aviso-fallback{color:var(--ambar);margin:4px 0 0}
+.estacion-root #prueba-enlace .btn.mini{margin-left:6px}
 .estacion-root .conexion{display:flex;align-items:center;gap:6px;font-size:.9rem;color:var(--verde);white-space:nowrap}
 .estacion-root .conexion .ico{width:18px;height:18px}
 .estacion-root .conexion .punto{width:10px;height:10px;border-radius:50%;background:var(--verde);box-shadow:0 0 8px var(--verde)}
