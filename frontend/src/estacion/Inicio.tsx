@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api';
 import BarrasEnlace from './Enlace';
-import type { ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
+import type { Alerta, ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
 import { Icono } from './Icono';
 import { durTxt, edadTxt, fHora, fHoraS, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
@@ -135,6 +135,28 @@ function CapaAmbiente({ tAire, pir }: { tAire: number | null | undefined; pir: n
 
 const sAire = (s: Sensor, c: 't' | 'h', d: number) => (s.ok ? num(s[c], d) : 'err');
 
+/** Avisos de enlace y de bus, los mismos que la lista de Alertas. */
+function AvisosEnlace() {
+  const [lista, setLista] = useState<Alerta[]>([]);
+  useEffect(() => {
+    let vivo = true;
+    const cargar = () => api.alertas('activa').then(d => {
+      if (vivo) setLista(d.alertas.filter(a => a.clave === 'sin_datos' || a.clave === 'err:bus'));
+    }).catch(() => {});
+    cargar();
+    const id = setInterval(cargar, 30000);
+    return () => { vivo = false; clearInterval(id); };
+  }, []);
+  if (!lista.length) return null;
+  return (
+    <div className="aviso-diag" role="alert">
+      {lista.map(a => (
+        <p key={a.id}><strong>{a.clave === 'err:bus' ? 'Bus RS485' : 'Sin datos'}</strong>{a.mensaje}</p>
+      ))}
+    </div>
+  );
+}
+
 export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: boolean }) {
   const [abierto, setAbierto] = useState<DefIndicador | null>(null);
   const cerrar = useCallback(() => setAbierto(null), []);
@@ -176,6 +198,8 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
   const abrir = setAbierto;
   const nq = (k: 'ec' | 'ph' | 'n' | 'p' | 'k') => (npk ? npk[k] : null);
   return (
+    <>
+    <AvisosEnlace />
     <section id="v-inicio" className="vista">
       <div ref={capa} className="escena-fondo" aria-hidden="true" />
       <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
@@ -227,5 +251,6 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
 
       {abierto && <ModalHistorial def={abierto} umbral={U[abierto.v]} rangoBanda alCerrar={cerrar} />}
     </section>
+    </>
   );
 }

@@ -284,6 +284,65 @@ def test_alertas_rango_hueco_reinicio(cliente):
     assert por["reinicio"][0]["estado"] == "activa" and len(por["reinicio"]) == 1
 
 
+def csv_caja(seq, epoch, eInt=0, tint=310, hint=615, **kw):
+    cuerpo, hora = csv(seq, epoch, **kw).rsplit(",", 1)
+    return f"{cuerpo},{eInt},{tint},{hint},{hora}"
+
+
+def _sin_datos(cliente):
+    return next(a for a in alertas(cliente, "activa") if a["clave"] == "sin_datos")
+
+
+def test_sin_datos_distingue_receptora_y_bus_rs485(cliente):
+    t = int(time.time())
+    # Sin latido no se afirma que el WiFi de la oficina esté caído.
+    ingesta(cliente, [{"csv": csv(1, t - 11 * 60)}])
+    procesar(cliente, t)
+    login(cliente)
+    assert _sin_datos(cliente)["mensaje"].startswith("Sin datos desde hace")
+    assert "WiFi" not in _sin_datos(cliente)["mensaje"]
+    # Latido reciente y lectura vieja: la receptora llega a la nube, la emisora no.
+    assert cliente.post(f"{API}/v1/estado", json={"nodo": "nodo1", "ts": t - 40, "rssi_wifi": -55,
+                                                  "recibidos": 8, "err_formato": 1}, headers=auth()).status_code == 200
+    procesar(cliente, t)
+    assert "emisora" in _sin_datos(cliente)["mensaje"] and "en línea" in _sin_datos(cliente)["mensaje"]
+    # Lectura al día: la alerta se cierra.
+    ingesta(cliente, [{"csv": csv(2, t - 30)}])
+    procesar(cliente, t)
+    assert not any(a["clave"] == "sin_datos" for a in alertas(cliente, "activa"))
+
+
+def test_sin_datos_receptora_sin_internet(cliente):
+    t = int(time.time())
+    ingesta(cliente, [{"csv": csv(1, t - 20 * 60)}])
+    assert cliente.post(f"{API}/v1/estado", json={"nodo": "nodo1", "ts": t - 15 * 60, "rssi_wifi": -70,
+                                                  "recibidos": 3, "err_formato": 0}, headers=auth()).status_code == 200
+    procesar(cliente, t)
+    login(cliente)
+    assert "WiFi" in _sin_datos(cliente)["mensaje"]
+
+
+def test_bus_rs485_una_alerta_y_no_si_alguno_responde(cliente):
+    e = 0xE2
+    ingesta(cliente, [{"csv": csv_caja(1, T0, eA1=e, eA2=e, ePir=e, eS=e, eInt=e)}])
+    procesar(cliente, T0 + 30)
+    login(cliente)
+    claves = {a["clave"] for a in alertas(cliente, "activa")}
+    assert "err:bus" in claves
+    assert not ({"err:A1", "err:A2", "err:Pir", "err:Suelo"} & claves)
+    assert "RS485" in next(a["mensaje"] for a in alertas(cliente, "activa") if a["clave"] == "err:bus")
+    # La caja responde: no es el bus entero, vuelven las alertas sueltas.
+    ingesta(cliente, [{"csv": csv_caja(2, T0 + 120, eA1=0, eA2=e, ePir=e, eS=e, eInt=0)}])
+    procesar(cliente, T0 + 150)
+    claves = {a["clave"] for a in alertas(cliente, "activa")}
+    assert "err:bus" not in claves and {"err:A2", "err:Pir", "err:Suelo"} <= claves and "err:A1" not in claves
+    # Sin campo de caja, los cuatro del bus en timeout bastan.
+    ingesta(cliente, [{"csv": csv(3, T0 + 240, eA1=e, eA2=e, ePir=e, eS=e)}])
+    procesar(cliente, T0 + 270)
+    claves = {a["clave"] for a in alertas(cliente, "activa")}
+    assert "err:bus" in claves and not ({"err:A1", "err:A2", "err:Pir", "err:Suelo"} & claves)
+
+
 def test_alerta_sin_datos_tiempo_real_y_config(cliente):
     t = int(time.time())
     ingesta(cliente, [{"csv": csv(1, t - 3600)}])
