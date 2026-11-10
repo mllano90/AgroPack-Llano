@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import BarrasEnlace from './Enlace';
 import type { Alerta, ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
@@ -6,38 +6,8 @@ import { Icono } from './Icono';
 import { durTxt, edadTxt, fHora, fHoraS, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
 import ModalHistorial from './ModalHistorial';
-import fondo from './assets/fondo_continuo.jpg';
 import { fueraDeRango } from './rango';
 import { prefAmbiente, UMBRAL_AMB } from './prefs';
-
-/** Lienzo de fondo_continuo.jpg. La foto original (1280×720) está en FOTO; la planta, en PLANTA.
- *  La escala mete la planta entera en el hueco, sin recortarla ni estirarla, y la centra ahí. */
-const LIENZO = { w: 2800, h: 3560 }, FOTO = { x: 760, y: 1040 }, FOTO_TAM = { w: 1280, h: 720 };
-const PLANTA = { x0: 232, x1: 942, y0: 99, y1: 719 };
-
-export function geometriaFondo(hueco: { left: number; top: number; width: number; height: number }) {
-  const pw = PLANTA.x1 - PLANTA.x0, ph = PLANTA.y1 - PLANTA.y0;
-  const s = Math.min(hueco.width / pw, hueco.height / ph);
-  const cx = FOTO.x + (PLANTA.x0 + PLANTA.x1) / 2, cy = FOTO.y + (PLANTA.y0 + PLANTA.y1) / 2;
-  const x = hueco.left + hueco.width / 2 - cx * s, y = hueco.top + hueco.height / 2 - cy * s;
-  const planta = { left: x + (FOTO.x + PLANTA.x0) * s, top: y + (FOTO.y + PLANTA.y0) * s, width: pw * s, height: ph * s };
-  const foto = { left: x + FOTO.x * s, top: y + FOTO.y * s, width: FOTO_TAM.w * s, height: FOTO_TAM.h * s };
-  return { s, x, y, w: LIENZO.w * s, h: LIENZO.h * s, planta, foto };
-}
-
-function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
-  const r = fig.getBoundingClientRect();
-  if (!r.height || !r.width) return;
-  const g = geometriaFondo(r);
-  capa.style.backgroundImage = `url(${fondo})`;
-  capa.style.backgroundRepeat = 'no-repeat';
-  capa.style.backgroundSize = `${g.w}px ${g.h}px`;
-  capa.style.backgroundPosition = `${g.x}px ${g.y}px`;
-  const redondear = (o: { left: number; top: number; width: number; height: number }) =>
-    [o.left, o.top, o.width, o.height].map(v => Math.round(v)).join(',');
-  capa.dataset.planta = redondear(g.planta);
-  capa.dataset.foto = redondear(g.foto);
-}
 
 /** Indicador tocable: abre la ventana emergente con su historial. */
 /** Máximo y mínimo de hoy con cuánto duró cada nivel, p. ej. "máx 39.0 °C (2 h)" / "mín 18.0 °C (3 h)".
@@ -160,7 +130,6 @@ function AvisosEnlace() {
 export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: boolean }) {
   const [abierto, setAbierto] = useState<DefIndicador | null>(null);
   const cerrar = useCallback(() => setAbierto(null), []);
-  const fig = useRef<HTMLElement>(null), capa = useRef<HTMLDivElement>(null);
   const hay = !!(d?.hay_datos && d.aire && d.pir && d.suelo);
   // extremos del día: se piden al llegar una lectura nueva (cada ~2 min), no en cada refresco de 30 s
   const [dia, setDia] = useState<ResumenDia | null>(null);
@@ -172,23 +141,6 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     return () => { vivo = false; };
   }, [hay, tsUlt]);
   const X = dia?.vars ?? {};
-  useLayoutEffect(() => {
-    if (!hay || !fig.current || !capa.current) return;
-    const f = fig.current, c = capa.current, ajustar = () => alinearFondo(f, c);
-    ajustar();
-    const ro = new ResizeObserver(ajustar);
-    ro.observe(f);
-    const sc = f.closest('.estacion-root');
-    sc?.addEventListener('scroll', ajustar, { passive: true });
-    window.addEventListener('resize', ajustar);
-    window.addEventListener('orientationchange', ajustar);
-    return () => {
-      ro.disconnect();
-      sc?.removeEventListener('scroll', ajustar);
-      window.removeEventListener('resize', ajustar);
-      window.removeEventListener('orientationchange', ajustar);
-    };
-  }, [hay]);
   if (!d) return <section className="vista"><div className="vidrio pie-info">{errorRed ? 'Sin conexión con el servidor' : 'Cargando…'}</div></section>;
   if (!d.hay_datos || !d.aire || !d.pir || !d.suelo) return <section className="vista"><div className="vidrio pie-info">Aún no hay lecturas de este nodo.</div></section>;
   const A = d.ahora, ar = d.aire, U = d.umbrales, su = d.suelo, npk = d.npk;
@@ -201,7 +153,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     <>
     <AvisosEnlace />
     <section id="v-inicio" className="vista">
-      <div ref={capa} className="escena-fondo" aria-hidden="true" />
+      <div className="escena-fondo" aria-hidden="true" />
       <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
@@ -217,10 +169,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
         <TarjetaConexion d={d} />
       </div>
 
-      {/* ---------- PLANTA: zona reservada, ninguna tarjeta la cubre */}
-      <figure ref={fig} className="figura-planta" aria-hidden="true" />
-
-      {/* ---------- SUELO: en la parte de la tierra, debajo de la planta */}
+      {/* ---------- SUELO: debajo del aire; la planta queda en el fondo, centrada */}
       <div className="zona zona-suelo" aria-label="Suelo">
         <h2 className="zona-tit"><Icono id="hoja" className="ico hoja" />Sensor de tierra
           <span className="zona-hora">{f.fase === 1 ? `Calentando suelo ${f.min}/${f.tot} min` : f.fase === 2 ? 'Muestreando NPK…' : `Próximo NPK en ~${Math.max(0, f.tot - f.min)} min`}</span></h2>
