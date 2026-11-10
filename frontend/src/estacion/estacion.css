@@ -45,31 +45,29 @@
 .estacion-root .conexion.off{color:var(--rojo)}.estacion-root .conexion.off .punto{background:var(--rojo);box-shadow:0 0 8px var(--rojo)}
 .estacion-root .ico.wifi{color:var(--verde)}.estacion-root .ico.wifi.off{color:var(--rojo)}
 .estacion-root.en-inicio{box-sizing:border-box;height:100vh;height:100dvh;max-height:100dvh;min-height:0;overflow:hidden;display:flex;flex-direction:column;
-  padding:calc(env(safe-area-inset-top) + 4px) clamp(6px,1.2vw,14px) calc(var(--nav) + env(safe-area-inset-bottom) + 8px);container-type:size}
-.estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;width:100%;max-width:1100px;margin:0 auto;display:flex;flex-direction:column;overflow:hidden;gap:clamp(3px,.6vh,8px)}
-.estacion-root.en-inicio .cabecera{flex:none;width:100%;max-width:none;margin-bottom:clamp(3px,.5vh,8px);padding:clamp(4px,.7vh,8px) clamp(8px,1vw,14px)}
+  padding:calc(env(safe-area-inset-top) + 4px) clamp(6px,1.2vw,14px) calc(var(--nav) + env(safe-area-inset-bottom) + 8px)}
+.estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;width:100%;max-width:1180px;margin:0 auto;display:flex;flex-direction:column;overflow:hidden;gap:clamp(2px,.4vh,6px)}
+.estacion-root.en-inicio .cabecera{flex:none;width:100%;max-width:none;margin-bottom:2px;padding:clamp(3px,.5vh,6px) clamp(8px,1vw,12px);background:rgba(8,18,12,.45)}
 .estacion-root.en-inicio .pie-marca{display:none}
-.estacion-root.en-inicio .aviso-diag{flex:none;margin:0;padding:4px 8px;font-size:clamp(.68rem,1.6vh,.82rem);max-height:2.8em;overflow:hidden}
+.estacion-root.en-inicio .aviso-diag{flex:none;margin:0;padding:3px 8px;font-size:clamp(.64rem,1.5vh,.78rem);max-height:2.6em;overflow:hidden;background:rgba(70,18,8,.55)}
 .estacion-root.en-inicio .aviso-diag strong{display:inline;margin:0 .35em 0 0}
 .estacion-root.en-inicio .aviso-diag p{display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden}
-.estacion-root.en-inicio #v-inicio{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:clamp(3px,.7vh,8px);overflow:hidden}
-.estacion-root.en-inicio .zona-aire,.estacion-root.en-inicio .zona-suelo{flex:1 1 0;min-height:0;display:flex;flex-direction:column;overflow:hidden}
-.estacion-root.en-inicio .zona-aire{flex:1.05 1 0}
-.estacion-root.en-inicio .zona-suelo{flex:1.25 1 0}
-.estacion-root.en-inicio .ind-aire,.estacion-root.en-inicio .sub-grupos{flex:1 1 auto;min-height:0;align-content:stretch}
-.estacion-root.en-inicio .ind{min-height:0;overflow:hidden;justify-content:center;padding:clamp(3px,.6vh,8px) clamp(5px,.8vw,10px);gap:clamp(1px,.3vh,3px)}
-.estacion-root.en-inicio .ind-valor b{font-size:clamp(.95rem,3.4vmin,1.65rem)}
-.estacion-root.en-inicio .ind-grande .ind-valor b{font-size:clamp(1.05rem,4.2vmin,2rem)}
-.estacion-root.en-inicio .ind-mini .ind-valor b{font-size:clamp(.9rem,3vmin,1.25rem)}
-.estacion-root.en-inicio .ind-ext{font-size:clamp(.58rem,1.55vmin,.72rem);flex:0 1 auto;white-space:nowrap}
+.estacion-root.en-inicio #v-inicio{flex:1 1 auto;min-height:0;display:flex;flex-direction:column;gap:clamp(2px,.5vh,6px);overflow:hidden}
+.estacion-root.en-inicio .hueco-planta{flex:1 1 auto;min-height:0;pointer-events:none}
+.estacion-root.en-inicio .zona-aire,.estacion-root.en-inicio .zona-suelo{flex:0 0 auto;min-height:0;overflow:hidden}
+.estacion-root.en-inicio .zona{padding:clamp(2px,.4vh,6px) clamp(4px,.7vw,8px)}
+.estacion-root.en-inicio .zona-aire.vidrio,.estacion-root.en-inicio .zona-suelo{background:rgba(6,16,12,.32);box-shadow:none}
+.estacion-root.en-inicio .ind{background:rgba(0,0,0,.2);padding:clamp(2px,.35vh,5px) clamp(3px,.5vw,7px);gap:0}
+.estacion-root.en-inicio .ind-valor b{font-size:clamp(.85rem,3.1vmin,1.45rem)}
+.estacion-root.en-inicio .ind-grande .ind-valor b{font-size:clamp(.95rem,3.6vmin,1.7rem)}
+.estacion-root.en-inicio .ind-mini .ind-valor b{font-size:clamp(.8rem,2.6vmin,1.15rem)}
+.estacion-root.en-inicio .ind-ext{font-size:clamp(.55rem,1.45vmin,.68rem);flex:0 1 auto;white-space:nowrap}
 .estacion-root.en-inicio .ind-ext>span{white-space:nowrap}
-.estacion-root.en-inicio .zona-tit{font-size:clamp(.75rem,1.8vh,.95rem);margin-bottom:clamp(2px,.4vh,6px)}
-.estacion-root.en-inicio .tarjeta-conexion{flex:none;margin-top:clamp(2px,.4vh,6px);padding:4px 8px;font-size:clamp(.62rem,1.5vh,.75rem)}
+.estacion-root.en-inicio .zona-tit{font-size:clamp(.7rem,1.6vh,.88rem);margin-bottom:2px}
 .estacion-root.en-inicio .ind-aire{grid-template-columns:repeat(3,minmax(0,1fr))}
-.estacion-root.en-inicio .sub-grupos{grid-template-columns:repeat(2,minmax(0,1fr))}
+.estacion-root.en-inicio .sub-grupos{grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(3px,.5vh,6px)}
 .estacion-root.en-inicio .sub-grupo:last-child{grid-column:1/-1}
-.estacion-root.en-inicio .sub-grupo{min-height:0;display:flex;flex-direction:column}
-.estacion-root.en-inicio .sub-grupo .ind-grid{flex:1 1 auto;min-height:0}
+.estacion-root.en-inicio .chip-enlace{font-size:clamp(.62rem,1.4vh,.75rem);color:var(--tenue);white-space:nowrap}
 .estacion-root.en-inicio .pie-info{padding:3px 10px;font-size:.7rem}
 .estacion-root .meta-lectura{margin:0;text-align:left;line-height:1.3;white-space:normal}
 .estacion-root .ind-cuerpo{display:flex;align-items:flex-start;justify-content:space-between;gap:6px 10px;min-width:0;width:100%;flex-wrap:wrap}
@@ -293,18 +291,22 @@
   .estacion-root.en-inicio .sub-grupo h3{display:none}
   .estacion-root.en-inicio .enlace-barra{display:inline-block!important}
 }
-@media (max-height:720px){
-  .estacion-root.en-inicio .ind-sub{display:none}
-  .estacion-root.en-inicio .barra{display:none}
-  .estacion-root.en-inicio .sub-grupo h3{display:none}
-  .estacion-root.en-inicio .zona-tit .ico{width:16px;height:16px}
+@media (max-width:800px),(max-height:860px){
+  .estacion-root.en-inicio .ind-sub,.estacion-root.en-inicio .barra,.estacion-root.en-inicio .sub-grupo h3,.estacion-root.en-inicio .pista,.estacion-root.en-inicio .ind-cab .ico.ind-graf{display:none}
 }
-@media (max-height:560px){
-  .estacion-root{--nav:46px}
-  .estacion-root.en-inicio .cabecera h1{font-size:.95rem}
-  .estacion-root.en-inicio .marca-nodo{font-size:.68rem}
+.estacion-root.en-inicio .ind-cab{font-size:clamp(.62rem,1.5vh,.78rem);gap:3px}
+.estacion-root.en-inicio .ind-cab .ico{width:14px;height:14px}
+.estacion-root.en-inicio .sub-grupo h3,.estacion-root.en-inicio .pista{display:none}
+@media (min-width:1100px) and (min-height:900px){
+  .estacion-root.en-inicio .sub-grupo h3{display:flex}
+  .estacion-root.en-inicio .pista{display:block;margin:2px 0 0}
+}
+@media (max-height:520px){
+  .estacion-root{--nav:44px}
+  .estacion-root.en-inicio .cabecera h1{font-size:.9rem}
+  .estacion-root.en-inicio .marca-nodo,.estacion-root.en-inicio .marca-firma{display:none}
   .estacion-root.en-inicio .ind-cab .ico{display:none}
-  .estacion-root.en-inicio .zona-hora{font-size:.62rem}
+  .estacion-root.en-inicio .ind-ext i{display:none}
 }
 .estacion-root .instalar-btn{padding:6px 10px;font-size:.78rem}
 .estacion-root .instalar-ayuda{font-size:.92rem;line-height:1.45}
@@ -410,4 +412,51 @@
 .estacion-root .lista-cuentas{list-style:none;padding:0;margin:8px 0 0}
 .estacion-root .lista-cuentas li{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--borde)}
 .estacion-root .cabecera .btn{padding:6px 10px;font-size:.8rem}
+
+/* Inicio: franjas compactas arriba y abajo; el centro del viewport queda libre para la planta.
+   Estas reglas van al final para ganar a los @media de tarjetas anchas. */
+.estacion-root.en-inicio .zona{padding:clamp(2px,.35vh,6px) clamp(4px,.6vw,8px)}
+.estacion-root.en-inicio .zona-tit{margin:0 2px 2px;font-size:clamp(.66rem,1.5vh,.84rem);gap:4px}
+.estacion-root.en-inicio .zona-tit .ico{width:14px;height:14px}
+.estacion-root.en-inicio .ind-aire .ind{padding:clamp(2px,.3vh,5px) clamp(3px,.45vw,7px)}
+.estacion-root.en-inicio .ind-grande .ind-valor b{font-size:clamp(.9rem,3.2vmin,1.55rem);line-height:1.05}
+.estacion-root.en-inicio .ind-valor b{font-size:clamp(.82rem,2.8vmin,1.3rem);line-height:1.05}
+.estacion-root.en-inicio .zona-suelo{
+  background:rgba(22,13,7,.28);backdrop-filter:none;-webkit-backdrop-filter:none;box-shadow:none}
+.estacion-root.en-inicio .zona-suelo .ind{background:rgba(10,6,3,.28);padding:clamp(2px,.3vh,5px) clamp(3px,.45vw,7px)}
+@media (max-width:720px),(max-height:640px){
+  .estacion-root.en-inicio .ind-ext{display:none}
+  .estacion-root.en-inicio .marca-nodo{display:none}
+  .estacion-root.en-inicio .zona-tit .ico{display:none}
+  .estacion-root.en-inicio .zona-hora{font-size:.62rem}
+  .estacion-root.en-inicio .conexion{font-size:.72rem}
+  .estacion-root.en-inicio .ultima-lectura{font-size:.62rem}
+  .estacion-root.en-inicio .chip-enlace{font-size:.58rem}
+}
+@media (min-width:700px) and (max-width:1000px){
+  .estacion-root.en-inicio .marca{flex:1 1 100%}
+  .estacion-root.en-inicio .marca-firma{display:none}
+  .estacion-root.en-inicio .cab-acciones{flex:1 1 100%;justify-content:space-between;margin-left:0}
+}
+@media (max-width:420px){
+  .estacion-root.en-inicio .ind{flex-direction:row;align-items:center;justify-content:space-between;gap:4px}
+  .estacion-root.en-inicio .ind-cab{flex:1 1 auto;min-width:0}
+  .estacion-root.en-inicio .ind-cuerpo{width:auto;flex:0 0 auto}
+  .estacion-root.en-inicio .ind .etq-mini{display:inline}
+  .estacion-root.en-inicio .ind .etq-larga:has(+.etq-mini){display:none}
+  .estacion-root.en-inicio .ind-aire .ind:not(#ind-t_aire) .etq-mini{display:inline}
+  .estacion-root.en-inicio .ind-aire .ind:not(#ind-t_aire) .etq-larga{display:none}
+  .estacion-root.en-inicio .ind-valor b,.estacion-root.en-inicio .ind-grande .ind-valor b{font-size:.95rem}
+}
+@media (max-height:700px) and (min-width:800px){
+  .estacion-root.en-inicio #v-inicio{
+    display:grid;grid-template-columns:minmax(148px,22vw) minmax(0,1fr) minmax(168px,26vw);
+    grid-template-rows:minmax(0,1fr);align-items:stretch}
+  .estacion-root.en-inicio .zona-aire{grid-column:1;align-self:start}
+  .estacion-root.en-inicio .hueco-planta{grid-column:2}
+  .estacion-root.en-inicio .zona-suelo{grid-column:3;align-self:end}
+  .estacion-root.en-inicio .ind-aire{grid-template-columns:minmax(0,1fr)}
+  .estacion-root.en-inicio .sub-grupos{grid-template-columns:minmax(0,1fr)}
+  .estacion-root.en-inicio .sub-grupo:last-child{grid-column:auto}
+}
 

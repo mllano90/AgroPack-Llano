@@ -1,13 +1,46 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api';
-import BarrasEnlace from './Enlace';
 import type { Alerta, ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
 import { Icono } from './Icono';
-import { durTxt, edadTxt, fHora, fHoraS, num } from './formato';
+import { durTxt, edadTxt, fHora, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
 import ModalHistorial from './ModalHistorial';
+import fondo from './assets/fondo_continuo.jpg';
 import { fueraDeRango } from './rango';
 import { prefAmbiente, UMBRAL_AMB } from './prefs';
+
+/** Lienzo de fondo_continuo.jpg. La planta (hojas y raíces) se contiene en el hueco central. */
+const LIENZO = { w: 2800, h: 3560 };
+const PLANTA = { w: 942 - 232, h: 719 - 99 };
+
+/** Escala la planta para que quepa en el hueco y su centro coincida con el centro del viewport. */
+function anclarPlanta(hueco: HTMLElement, capa: HTMLElement) {
+  const r = hueco.getBoundingClientRect();
+  if (r.width < 8 || r.height < 8) return;
+  const cx = innerWidth / 2;
+  const cy = innerHeight / 2;
+  const roomX = Math.min(cx - r.left, r.right - cx);
+  const roomY = Math.min(cy - r.top, r.bottom - cy);
+  let s: number;
+  let izquierda: number;
+  let arriba: number;
+  if (roomX >= 12 && roomY >= 12) {
+    s = Math.min((roomX * 2) / PLANTA.w, (roomY * 2) / PLANTA.h) * 0.96;
+    izquierda = cx - (PLANTA.w * s) / 2;
+    arriba = cy - (PLANTA.h * s) / 2;
+  } else {
+    s = Math.min(r.width / PLANTA.w, r.height / PLANTA.h) * 0.96;
+    const pw = PLANTA.w * s, ph = PLANTA.h * s;
+    izquierda = Math.min(Math.max(cx - pw / 2, r.left), r.right - pw);
+    arriba = Math.min(Math.max(cy - ph / 2, r.top), r.bottom - ph);
+  }
+  const x = izquierda - (760 + 232) * s;
+  const y = arriba - (1040 + 99) * s;
+  capa.style.backgroundImage = `url(${fondo})`;
+  capa.style.backgroundRepeat = 'no-repeat';
+  capa.style.backgroundSize = `${LIENZO.w * s}px ${LIENZO.h * s}px`;
+  capa.style.backgroundPosition = `${x}px ${y}px`;
+}
 
 /** Indicador tocable: abre la ventana emergente con su historial. */
 /** Máximo y mínimo de hoy con cuánto duró cada nivel, p. ej. "máx 39.0 °C (2 h)" / "mín 18.0 °C (3 h)".
@@ -51,39 +84,6 @@ function Indicador({ def, valor, err, umb, lo, hi, sub, ext, tam = 'normal', alA
 }
 
 
-/** Tarjeta compacta de conexión LoRa: click despliega lectura, receptora, cola y barras RSSI/SNR. */
-function TarjetaConexion({ d }: { d: Ultimo }) {
-  const [abierta, setAbierta] = useState(false);
-  const A = d.ahora;
-  const fw = (d.receptora?.firmware || '').replace(/^receptora-/, 'v');
-  const resumen = [
-    d.rssi != null ? `RSSI ${d.rssi}` : null,
-    d.snr != null ? `SNR ${Number(d.snr).toFixed(1)}` : null,
-  ].filter(Boolean).join(' · ');
-  return (
-    <button type="button" className={'tarjeta-conexion meta-lectura' + (abierta ? ' abierta' : '')}
-      aria-expanded={abierta} onClick={() => setAbierta(v => !v)}
-      aria-label={abierta ? 'Ocultar detalle de conexión' : 'Ver detalle de conexión'}>
-      <span className="tc-cab">
-        <Icono id="wifi" className="ico" />
-        <span className="tc-tit">Conexión</span>
-        {!abierta && <span className="tc-resumen">{resumen}</span>}
-        <span className="tc-chev" aria-hidden="true">{abierta ? '▾' : '▸'}</span>
-      </span>
-      <BarrasEnlace rssi={d.rssi} snr={d.snr} />
-      {abierta && (
-        <span className="tc-det">
-          <span>Última lectura: <b>{d.ts ? fHoraS.format(d.ts * 1000) : '--'}</b>
-            {d.ts != null && <> (hace {Math.max(0, Math.round((A - d.ts) / 60))} min)</>}
-            {d.tipo != null && <> · paquete {d.tipo} #{d.seq}</>}
-          </span>
-          {d.sin_hora_emisora && <span className="tc-aviso">Emisora sin hora (se usó la de recepción)</span>}
-          {d.receptora && <span>Receptora {fw || '?'}, cola {d.receptora.cola_pendiente ?? '?'}</span>}
-        </span>
-      )}
-    </button>
-  );
-}
 
 
 /** Capa CSS ligera: tinte cálido/frío y haz de sol según aire y piranómetro. No captura clics. */
@@ -130,6 +130,8 @@ function AvisosEnlace() {
 export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: boolean }) {
   const [abierto, setAbierto] = useState<DefIndicador | null>(null);
   const cerrar = useCallback(() => setAbierto(null), []);
+  const hueco = useRef<HTMLDivElement>(null);
+  const capa = useRef<HTMLDivElement>(null);
   const hay = !!(d?.hay_datos && d.aire && d.pir && d.suelo);
   // extremos del día: se piden al llegar una lectura nueva (cada ~2 min), no en cada refresco de 30 s
   const [dia, setDia] = useState<ResumenDia | null>(null);
@@ -141,6 +143,16 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     return () => { vivo = false; };
   }, [hay, tsUlt]);
   const X = dia?.vars ?? {};
+  useLayoutEffect(() => {
+    if (!hay || !hueco.current || !capa.current) return;
+    const h = hueco.current, c = capa.current;
+    const ajustar = () => anclarPlanta(h, c);
+    ajustar();
+    const ro = new ResizeObserver(ajustar);
+    ro.observe(h);
+    window.addEventListener('resize', ajustar);
+    return () => { ro.disconnect(); window.removeEventListener('resize', ajustar); };
+  }, [hay]);
   if (!d) return <section className="vista"><div className="vidrio pie-info">{errorRed ? 'Sin conexión con el servidor' : 'Cargando…'}</div></section>;
   if (!d.hay_datos || !d.aire || !d.pir || !d.suelo) return <section className="vista"><div className="vidrio pie-info">Aún no hay lecturas de este nodo.</div></section>;
   const A = d.ahora, ar = d.aire, U = d.umbrales, su = d.suelo, npk = d.npk;
@@ -153,7 +165,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     <>
     <AvisosEnlace />
     <section id="v-inicio" className="vista">
-      <div className="escena-fondo" aria-hidden="true" />
+      <div ref={capa} className="escena-fondo" aria-hidden="true" />
       <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
@@ -166,10 +178,11 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
           <Indicador def={IND.pir} valor={d.pir.v} err={d.pir.error} umb={U.pir} lo={0} hi={1000} ext={X.pir} tam="grande" alAbrir={abrir}
             sub={d.pir.ok ? ((d.pir.v ?? 0) > 5 ? 'Piranómetro' : 'Sin sol') : d.pir.error} />
         </div>
-        <TarjetaConexion d={d} />
       </div>
 
-      {/* ---------- SUELO: debajo del aire; la planta queda en el fondo, centrada */}
+      <div ref={hueco} className="hueco-planta" aria-hidden="true" />
+
+      {/* ---------- SUELO: franja inferior; la planta queda libre en el centro */}
       <div className="zona zona-suelo" aria-label="Suelo">
         <h2 className="zona-tit"><Icono id="hoja" className="ico hoja" />Sensor de tierra
           <span className="zona-hora">{f.fase === 1 ? `Calentando suelo ${f.min}/${f.tot} min` : f.fase === 2 ? 'Muestreando NPK…' : `Próximo NPK en ~${Math.max(0, f.tot - f.min)} min`}</span></h2>
