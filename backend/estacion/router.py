@@ -364,7 +364,7 @@ async def comandos(request: Request, _u: str = Depends(auth.admin_actual)):
     def fn(cx):
         sv.expirar_comandos(cx, sv.ahora())
         tipo = request.query_params.get("tipo")
-        return 200, {"comandos": sv.listar_comandos(cx, _nodo(cx, request), tipo=tipo if tipo in ("ota", "wifi") else None)}
+        return 200, {"comandos": sv.listar_comandos(cx, _nodo(cx, request), tipo=tipo if tipo in ("ota", "wifi", "enlace") else None)}
     return _resp(await _en_hilo(fn))
 
 
@@ -411,6 +411,30 @@ async def reporte(request: Request, rango: str = "7d", sesion: dict = Depends(au
 @router.get("/wifi")
 async def wifi_estado(request: Request, _u: str = Depends(auth.admin_actual)):
     return _resp(await _en_hilo(lambda cx: (200, sv.estado_wifi(cx, _nodo(cx, request)))))
+
+
+@router.get("/enlace")
+async def enlace_estado(request: Request, _u: str = Depends(auth.admin_actual)):
+    return _resp(await _en_hilo(lambda cx: (200, sv.estado_enlace(cx, _nodo(cx, request)))))
+
+
+@router.post("/enlace")
+async def enlace_ordenar(request: Request, usuario: str = Depends(auth.admin_actual)):
+    cuerpo, e = await _leer_json(request)
+    if e:
+        return e
+    cuerpo = cuerpo if isinstance(cuerpo, dict) else {}
+
+    def fn(cx):
+        try:
+            c = sv.crear_comando_enlace(
+                cx, cuerpo.get("nodo") or _nodo(cx, request), cuerpo.get("accion"), cuerpo.get("n", 0), usuario)
+        except LookupError as ex:
+            return 409, {"ok": False, "error": str(ex)}
+        except ValueError as ex:
+            return 400, {"ok": False, "error": str(ex)}
+        return 200, {"ok": True, "comando": c}
+    return _resp(await _en_hilo(fn))
 
 
 @router.post("/wifi")

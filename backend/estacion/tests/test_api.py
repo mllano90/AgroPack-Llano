@@ -102,6 +102,8 @@ def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
     assert cliente.get(f"{API}/historial?var=t_aire&rango=24h", headers=hv).status_code == 200
     assert cliente.get(f"{API}/historial?var=t_caja&rango=24h", headers=hv).status_code == 403
     assert cliente.get(f"{API}/wifi", headers=hv).status_code == 403
+    assert cliente.get(f"{API}/enlace", headers=hv).status_code == 403
+    assert cliente.post(f"{API}/enlace", json={"accion": "prueba", "n": 0}, headers=hv).status_code == 403
     rep = cliente.get(f"{API}/reporte?rango=24h", headers=hv)
     assert rep.status_code == 200 and "t_caja" not in rep.json()["orden"]
     assert cliente.get(f"{API}/resumen-dia", headers=hv).status_code == 200

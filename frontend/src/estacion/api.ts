@@ -1,6 +1,6 @@
 // Cliente API del módulo estación. Usa VITE_API_URL (vacío = mismo origen) + /api/estacion.
 // En AgroPack puede reemplazarse por su src/lib/api.ts manteniendo estas firmas.
-import type { Alerta, Comando, Config, EstadoWifi, Historial, Reporte, ResumenDia, Ultimo } from './tipos';
+import type { Alerta, Comando, Config, EstadoEnlace, EstadoWifi, Historial, Reporte, ResumenDia, Ultimo } from './tipos';
 
 const BASE = `${(import.meta.env.VITE_API_URL ?? '').replace(/\/$/, '')}/api/estacion`;
 const CLAVE_TOKEN = 'estacion_token';
@@ -53,6 +53,9 @@ export const api = {
   reporte: (rango: string) => pedir<Reporte>(`/reporte?rango=${encodeURIComponent(rango)}`),
   comandos: (tipo?: string) => pedir<{ comandos: Comando[] }>(`/comandos${tipo ? `?tipo=${tipo}` : ''}`),
   wifi: () => pedir<EstadoWifi>('/wifi'),
+  enlace: () => pedir<EstadoEnlace>('/enlace'),
+  ordenEnlace: (accion: 'prueba' | 'usar' | 'fabrica' | 'cancelar', n = 0) =>
+    pedir<{ comando: Comando }>('/enlace', { method: 'POST', body: JSON.stringify({ accion, n }) }),
   aplicarWifi: (b: { ssid: string; clave: string; url: string; red_abierta: boolean; conservar_clave: boolean }) =>
     pedir<{ comando: Comando }>('/wifi', { method: 'POST', body: JSON.stringify(b) }),
   crearComando: (duracion_min: number) => pedir<{ comando: Comando }>('/comandos', { method: 'POST', body: JSON.stringify({ tipo: 'ota', duracion_min }) }),

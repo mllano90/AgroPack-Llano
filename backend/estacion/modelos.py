@@ -122,6 +122,15 @@ class Trabajo(Base):
     valor = Column(BigInteger, nullable=False)
 
 
+class EnlaceNodo(Base):
+    """Último canal LoRa y última prueba de enlace informados por el latido de la receptora."""
+    __tablename__ = "estacion_enlace_nodo"
+    nodo = Column(String(32), primary_key=True)
+    ts = Column(BigInteger, nullable=False)
+    canal_lora = Column(Text)
+    prueba_enlace = Column(Text)
+
+
 class Usuario(Base):
     """Usuarios propios de la estación (independientes de users de AgroPack)."""
     __tablename__ = "estacion_usuarios"
