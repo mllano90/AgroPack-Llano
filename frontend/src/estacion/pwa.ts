@@ -1,7 +1,7 @@
 /** Registra la PWA solo dentro de /estacion/. No toca el <head> de AgroPack al salir. */
 
 const VISTA_BASE = 'width=device-width, initial-scale=1.0';
-const MANIFEST = '/estacion/manifest.webmanifest';
+const MANIFEST = '/estacion/manifest.json';
 const APPLE = '/estacion/icons/apple-touch-icon.png';
 
 function meta(name: string, content: string) {

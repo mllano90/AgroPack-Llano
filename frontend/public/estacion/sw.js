@@ -5,9 +5,10 @@
  * No cachea /api/ ni nada con Authorization: sin red, la estación muestra su aviso
  * de conexión y no reutiliza lecturas, tokens ni comandos viejos.
  */
-const VERSION = 'emsif-shell-v2';
+const VERSION = 'emsif-shell-v3';
 const SCOPE = '/estacion/';
 const ICONOS = [
+  '/estacion/manifest.json',
   '/estacion/manifest.webmanifest',
   '/estacion/icons/icon-192.png',
   '/estacion/icons/icon-512.png',
@@ -63,7 +64,9 @@ self.addEventListener('fetch', e => {
   }
 
   const hashed = url.pathname.startsWith('/assets/');
-  const propio = url.pathname.startsWith('/estacion/icons/') || url.pathname === '/estacion/manifest.webmanifest';
+  const propio = url.pathname.startsWith('/estacion/icons/')
+    || url.pathname === '/estacion/manifest.json'
+    || url.pathname === '/estacion/manifest.webmanifest';
   if (!hashed && !propio) return;
 
   e.respondWith((async () => {
