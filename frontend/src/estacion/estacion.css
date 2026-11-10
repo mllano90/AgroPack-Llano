@@ -25,6 +25,10 @@
 .estacion-root .cab-acciones{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:6px 8px;margin-left:auto;min-width:0;max-width:100%}
 .estacion-root .estado-senal{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:2px 8px;min-width:0}
 .estacion-root .ultima-lectura{color:var(--tenue);font-size:.75rem;line-height:1.25;text-align:right}
+.estacion-root .aviso-diag{margin:0 0 8px;padding:10px 12px;border-radius:14px;background:rgba(70,18,8,.82);border:1px solid rgba(255,140,90,.55);color:#ffe8df;font-size:.9rem;line-height:1.35}
+.estacion-root .aviso-diag p{margin:0}
+.estacion-root .aviso-diag p+p{margin-top:8px}
+.estacion-root .aviso-diag strong{display:block;margin-bottom:2px;color:#ffb38a}
 .estacion-root .conexion{display:flex;align-items:center;gap:6px;font-size:.9rem;color:var(--verde);white-space:nowrap}
 .estacion-root .conexion .ico{width:18px;height:18px}
 .estacion-root .conexion .punto{width:10px;height:10px;border-radius:50%;background:var(--verde);box-shadow:0 0 8px var(--verde)}

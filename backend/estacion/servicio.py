@@ -93,12 +93,7 @@ def evaluar_registro(cx, cfg, nodo, r, ev, t_servidor):
             cx.ejecutar("UPDATE estacion_lecturas SET reinicio = 1 WHERE uid = ?", (r["uid"],))
             alerta_evento(cx, nodo, "reinicio", "reinicio",
                           f"Reinicio de la emisora detectado (seq {ev['ultimo_seq']} → {r['seq']})", ts)
-    for clave, cod, nombre in (("err:A1", r["e_a1"], "Aire 1"), ("err:A2", r["e_a2"], "Aire 2"),
-                               ("err:Pir", r["e_pir"], "Piranómetro"), ("err:Suelo", r["e_suelo"], "Sensor de suelo T/H")):
-        if cod != 0:
-            alerta_abrir(cx, nodo, clave, "error_sensor", f"{nombre}: {texto_error(cod)}", cod, ts)
-        else:
-            alerta_resolver(cx, nodo, clave, ts)
+    _alertas_sensores(cx, nodo, r, ts)
     if r["tipo"] == "C":
         if r["npk_fallo"]:
             alerta_abrir(cx, nodo, "err:NPK", "error_sensor",
@@ -121,15 +116,64 @@ def evaluar_registro(cx, cfg, nodo, r, ev, t_servidor):
             alerta_resolver(cx, nodo, f"rango:{var}", ts)
 
 
+ERR_BUS = 0xE2
+MSG_BUS = ("Ningún sensor del bus RS485 respondió: revisar alimentación 5 V del buck, GND común, A/B y TX/RX")
+MSG_EMISORA = ("La receptora está en línea pero no recibe datos de la emisora "
+               "(revisar emisora, antena o versión)")
+MSG_WIFI = "La receptora no se ha conectado a internet (revisar WiFi de la oficina)"
+_SENSORES = (("err:A1", "e_a1", "Aire 1"), ("err:A2", "e_a2", "Aire 2"),
+             ("err:Pir", "e_pir", "Piranómetro"), ("err:Suelo", "e_suelo", "Sensor de suelo T/H"))
+
+
+def _bus_mudo(r):
+    """True solo si Aire1, Aire2, piranómetro, suelo y la caja (si el paquete la trae) van en timeout 0xE2."""
+    codigos = [r["e_a1"], r["e_a2"], r["e_pir"], r["e_suelo"]]
+    if r.get("e_int") is not None:
+        codigos.append(r["e_int"])
+    return all(c == ERR_BUS for c in codigos)
+
+
+def _alertas_sensores(cx, nodo, r, ts):
+    if _bus_mudo(r):
+        alerta_abrir(cx, nodo, "err:bus", "error_sensor", MSG_BUS, ERR_BUS, ts)
+        for clave, _campo, _nombre in _SENSORES:
+            alerta_resolver(cx, nodo, clave, ts)
+        return
+    alerta_resolver(cx, nodo, "err:bus", ts)
+    for clave, campo, nombre in _SENSORES:
+        cod = r[campo]
+        if cod != 0:
+            alerta_abrir(cx, nodo, clave, "error_sensor", f"{nombre}: {texto_error(cod)}", cod, ts)
+        else:
+            alerta_resolver(cx, nodo, clave, ts)
+
+
+def mensaje_sin_datos(cx, nodo, t, mins, lim_s):
+    """Texto de la alerta en curso. La emisora manda cada ~2 min; el umbral es sin_datos_min (10 por defecto).
+
+    Se distingue con el último latido guardado (estacion_estado_receptora.ts). rssi_wifi, recibidos y
+    err_formato vienen en ese mismo latido y no tienen hora propia: un contador quieto no dice si el
+    silencio es de ahora. No existe ts de recepción en el servidor; si no hay fila, o el reloj del
+    latido va más de 2 min al futuro, el mensaje queda genérico y no se afirma que falle el WiFi.
+    """
+    est = cx.uno("SELECT ts FROM estacion_estado_receptora WHERE nodo = ? ORDER BY ts DESC, id DESC LIMIT 1", (nodo,))
+    if not est or est["ts"] is None or est["ts"] > t + 120:
+        return f"Sin datos desde hace {mins} min"
+    if t - est["ts"] <= lim_s:
+        return MSG_EMISORA
+    return MSG_WIFI
+
+
 def revisar_sin_datos(cx, t=None):
     """Tarea periódica: alerta 'sin datos' en tiempo real + expiración de comandos."""
     t = t or ahora()
     cfg = cfgmod.leer(cx)
+    lim = cfg["sin_datos_min"] * 60
     for ev in cx.todos("SELECT nodo, ultimo_ts FROM estacion_nodo_eval"):
         mins = (t - ev["ultimo_ts"]) // 60
-        if t - ev["ultimo_ts"] > cfg["sin_datos_min"] * 60:
-            alerta_abrir(cx, ev["nodo"], "sin_datos", "sin_datos", f"Sin datos desde hace {mins} min", mins,
-                         ev["ultimo_ts"])
+        if t - ev["ultimo_ts"] > lim:
+            alerta_abrir(cx, ev["nodo"], "sin_datos", "sin_datos",
+                         mensaje_sin_datos(cx, ev["nodo"], t, mins, lim), mins, ev["ultimo_ts"])
             cx.ejecutar("UPDATE estacion_alertas SET ultima = ? WHERE nodo = ? AND clave = 'sin_datos' AND estado = 'activa'",
                         (t, ev["nodo"]))
     expirar_comandos(cx, t)
