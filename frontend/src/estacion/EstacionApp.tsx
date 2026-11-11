@@ -102,11 +102,6 @@ export default function EstacionApp() {
               <Icono id={on ? 'wifi' : 'wifi-off'} className={'ico wifi' + (on ? '' : ' off')} />
             </div>
             <span className="ultima-lectura" title={tituloLectura}>{leyenda}</span>
-            {vistaOk === 'inicio' && ultimo?.hay_datos && (
-              <span className="chip-enlace" title="Enlace LoRa de la última lectura">
-                RSSI {ultimo.rssi ?? '—'} · SNR {ultimo.snr != null ? Number(ultimo.snr).toFixed(1) : '—'}
-              </span>
-            )}
           </div>
           <Instalar />
           <button className="btn" type="button" onClick={salir}>Salir</button>
