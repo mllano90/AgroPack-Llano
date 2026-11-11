@@ -187,6 +187,7 @@
 .estacion-root .btn:disabled{opacity:.5;cursor:not-allowed}
 .estacion-root .acciones{display:flex;gap:10px;align-items:center;margin-top:10px;flex-wrap:wrap}
 .estacion-root .chips{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;scrollbar-width:none}
+.estacion-root .chip-grupo{flex:none;align-self:center;margin-left:6px;font-size:.72rem;font-weight:600;color:var(--tenue);white-space:nowrap}
 .estacion-root .chips button{flex:none;background:rgba(255,255,255,.08);border:1px solid var(--borde);color:var(--texto);border-radius:20px;padding:6px 12px;font-size:.85rem;cursor:pointer}
 .estacion-root .chips button.on{background:var(--verde2);border-color:var(--verde)}
 .estacion-root .fila-ctl{display:flex;justify-content:space-between;align-items:center;gap:10px;margin:8px 0;flex-wrap:wrap}
