@@ -109,7 +109,7 @@ export default function EstacionApp() {
       </header>
       <main>
         {vistaOk === 'inicio' && <Inicio d={ultimo} errorRed={errorRed} />}
-        {vistaOk === 'historial' && <Historial esAdmin={admin} />}
+        {vistaOk === 'historial' && <Historial />}
         {vistaOk === 'rangos' && admin && <Rangos alGuardar={cargar} alSalir={salir} />}
         {vistaOk === 'nodo' && admin && <ConfigNodo ultimo={ultimo} alGuardar={cargar} alSalir={salir} />}
         {vistaOk === 'alertas' && <Alertas alCambiar={cargar} puedeResolver={admin} />}

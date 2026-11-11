@@ -100,12 +100,14 @@ def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
     assert cliente.get(f"{API}/ultimo", headers=hv).status_code == 200
     assert cliente.get(f"{API}/alertas", headers=hv).status_code == 200
     assert cliente.get(f"{API}/historial?var=t_aire&rango=24h", headers=hv).status_code == 200
-    assert cliente.get(f"{API}/historial?var=t_caja&rango=24h", headers=hv).status_code == 403
+    assert cliente.get(f"{API}/historial?var=t_caja&rango=24h", headers=hv).status_code == 200
+    assert cliente.get(f"{API}/historial?var=h_caja&rango=24h", headers=hv).status_code == 200
     assert cliente.get(f"{API}/wifi", headers=hv).status_code == 403
     assert cliente.get(f"{API}/enlace", headers=hv).status_code == 403
     assert cliente.post(f"{API}/enlace", json={"accion": "prueba", "n": 0}, headers=hv).status_code == 403
     rep = cliente.get(f"{API}/reporte?rango=24h", headers=hv)
-    assert rep.status_code == 200 and "t_caja" not in rep.json()["orden"]
+    assert rep.status_code == 200 and rep.json()["orden"].index("h_aire") < rep.json()["orden"].index("t_caja") < rep.json()["orden"].index("t_suelo")
+    assert "h_caja" in rep.json()["orden"]
     assert cliente.get(f"{API}/resumen-dia", headers=hv).status_code == 200
     anon = {"Authorization": ""}
     assert cliente.get(f"{API}/usuarios", headers=anon).status_code == 401
@@ -408,6 +410,53 @@ def test_agregacion_historial(cliente):
     assert cliente.get(f"{API}/historial?var=zz&rango=24h").status_code == 400
     c = cliente.get(f"{API}/historial.csv?rango=30d")
     assert c.status_code == 200 and c.text.lstrip("\ufeff").startswith("hora_hermosillo,ts,seq")
+
+
+def test_historial_caja_visible_y_sin_ceros(cliente):
+    """La caja interna se consulta como el resto del historial. Un paquete viejo o con eInt 255
+    deja un hueco: no entra como 0 °C ni 0 % en la serie, el agregado ni el CSV."""
+    t0 = int(time.time()) // 3600 * 3600 - 2 * 3600
+    ingesta(cliente, [
+        {"csv": csv(1, t0), "id": "caja-sin"},
+        {"csv": csv_caja(2, t0 + 600, tint=285, hint=540), "id": "caja-ok"},
+        {"csv": csv_caja(3, t0 + 1200, eInt=255, tint=0, hint=0), "id": "caja-vacio"},
+    ])
+    procesar(cliente)
+    login(cliente)
+    assert cliente.post(f"{API}/usuarios", json={"usuario": "visorcaja", "clave": "Visor2468ok"}).status_code == 200
+    vis = cliente.post(f"{API}/auth/login", json={"usuario": "visorcaja", "clave": "Visor2468ok"})
+    hv = {"Authorization": "Bearer " + vis.json()["token"]}
+    for headers in (None, hv):
+        h = cliente.get(f"{API}/historial?var=t_caja&rango=24h", headers=headers).json()
+        assert sum(p["n"] for p in h["puntos"]) == 1
+        assert h["puntos"][0]["prom"] == h["puntos"][0]["min"] == h["puntos"][0]["max"] == 28.5
+        assert all(p["min"] != 0 and p["prom"] != 0 and p["max"] != 0 for p in h["puntos"])
+    hh = cliente.get(f"{API}/historial?var=h_caja&rango=7d", headers=hv).json()
+    assert sum(p["n"] for p in hh["puntos"]) == 1 and hh["puntos"][0]["prom"] == 54
+    ven = cliente.get(f"{API}/historial?var=t_caja&desde={t0 - 60}&hasta={t0 + 1800}", headers=hv).json()
+    assert sum(p["n"] for p in ven["puntos"]) == 1 and ven["puntos"][0]["prom"] == 28.5
+    h30 = cliente.get(f"{API}/historial?var=t_caja&rango=30d", headers=hv).json()
+    assert h30["fuente"] == "hora" and sum(p["n"] for p in h30["puntos"]) == 1 and h30["puntos"][0]["prom"] == 28.5
+    rep = cliente.get(f"{API}/reporte?rango=24h", headers=hv).json()
+    assert rep["variables"]["t_caja"]["nombre"] == "Temp. caja"
+    assert rep["variables"]["h_caja"]["nombre"] == "Hum. caja"
+    assert rep["variables"]["t_caja"]["resumen"]["n"] == 1
+    assert rep["variables"]["t_caja"]["resumen"]["prom"] == 28.5
+    k = cx(cliente)
+    agr = k.uno("SELECT prom, vmin, vmax, n FROM estacion_agregados_hora WHERE var = 't_caja'")
+    assert agr["n"] == 1 and abs(agr["prom"] - 28.5) < 1e-6 and agr["vmin"] == 28.5
+    k.s.close()
+    crudo = cliente.get(f"{API}/historial.csv?rango=24h", headers=hv)
+    assert crudo.status_code == 200
+    import csv as csvmod
+    import io
+    filas = list(csvmod.reader(io.StringIO(crudo.text.lstrip("\ufeff"))))
+    cab = filas[0]
+    i_t, i_h = cab.index("t_int"), cab.index("h_int")
+    tint = [float(f[i_t]) if f[i_t] else None for f in filas[1:]]
+    hint = [float(f[i_h]) if f[i_h] else None for f in filas[1:]]
+    assert tint.count(28.5) == 1 and tint.count(None) == 2 and 0.0 not in tint
+    assert hint.count(54.0) == 1 and hint.count(None) == 2 and 0.0 not in hint
 
 
 def test_retencion_conserva_agregados(cliente):

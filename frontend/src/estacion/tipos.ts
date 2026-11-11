@@ -6,7 +6,7 @@ export interface Ultimo {
   receptora: { firmware?: string | null; cola_pendiente?: number | null; ts: number } | null;
   ts?: number; seq?: number; tipo?: string; rssi?: number | null; snr?: number | null; sin_hora_emisora?: boolean;
   aire?: { a1: Sensor; a2: Sensor; t: number | null; h: number | null };
-  /** Interior de caja. La pantalla de Inicio no lo muestra; solo Configuración admin. */
+  /** Lectura en vivo de la caja interna. Inicio no la muestra; Configuración admin sí. El historial (Temp. caja / Hum. caja) lo ven admin y usuario normal. */
   interno?: Sensor | null;
   pir?: Sensor; suelo?: Sensor;
   npk?: { ec: number; ph: number; n: number; p: number; k: number; ts: number; n_npk: number } | null;

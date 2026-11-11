@@ -1,28 +1,28 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import GraficaHist from './GraficaHist';
 import { api } from './api';
 import type { Historial as H, Umbral } from './tipos';
 import { Icono } from './Icono';
 import { RANGOS_REPORTE, descargar, generarReporte } from './reporte';
 
-const VARS: [string, string, string, number, boolean][] = [
-  ['t_aire', 'Temp. aire', '°C', 1, false], ['h_aire', 'Hum. aire', '%', 0, false], ['pir', 'Radiación', 'W/m²', 0, false],
-  ['t_suelo', 'Temp. suelo', '°C', 1, false], ['h_suelo', 'Hum. suelo', '%', 0, false], ['ph', 'pH', '', 1, false],
-  ['ec', 'CE', 'dS/m', 2, false], ['n', 'N', 'mg/kg', 0, false], ['p', 'P', 'mg/kg', 0, false], ['k', 'K', 'mg/kg', 0, false],
-  ['t1', 'T Aire1', '°C', 1, false], ['t2', 'T Aire2', '°C', 1, false],
-  ['t_caja', 'T caja', '°C', 1, true], ['h_caja', 'H caja', '%', 0, true],
-  ['h1', 'H Aire1', '%', 0, false], ['h2', 'H Aire2', '%', 0, false], ['rssi', 'RSSI', 'dBm', 0, false],
+const VARS: [string, string, string, number][] = [
+  ['t_aire', 'Temp. aire', '°C', 1], ['h_aire', 'Hum. aire', '%', 0], ['pir', 'Radiación', 'W/m²', 0],
+  ['t_caja', 'Temp. caja', '°C', 1], ['h_caja', 'Hum. caja', '%', 0],
+  ['t_suelo', 'Temp. suelo', '°C', 1], ['h_suelo', 'Hum. suelo', '%', 0], ['ph', 'pH', '', 1],
+  ['ec', 'CE', 'dS/m', 2], ['n', 'N', 'mg/kg', 0], ['p', 'P', 'mg/kg', 0], ['k', 'K', 'mg/kg', 0],
+  ['t1', 'T Aire1', '°C', 1], ['t2', 'T Aire2', '°C', 1],
+  ['h1', 'H Aire1', '%', 0], ['h2', 'H Aire2', '%', 0], ['rssi', 'RSSI', 'dBm', 0],
 ];
 const RANGOS: [string, string][] = [['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['365d', '1 año']];
+const esCaja = (v: string) => v === 't_caja' || v === 'h_caja';
 
-/** Historial con líneas de rango. La caja solo entra en el selector del administrador. */
-export default function Historial({ esAdmin = false }: { esAdmin?: boolean }) {
-  const visibles = VARS.filter(x => esAdmin || !x[4]);
+/** Historial con líneas de rango. La caja interna (XY-MD01) la ven admin y usuario normal. */
+export default function Historial() {
   const [v, setV] = useState('t_aire');
   const [rango, setRango] = useState('24h');
   const [datos, setDatos] = useState<H | null>(null);
   const [error, setError] = useState('');
-  const def = visibles.find(x => x[0] === v) ?? visibles[0];
+  const def = VARS.find(x => x[0] === v) ?? VARS[0];
   const [umbrales, setUmbrales] = useState<Record<string, Umbral>>({});
   useEffect(() => { api.ultimo().then(u => setUmbrales(u.umbrales || {})).catch(() => {}); }, []);
   const mapa: Record<string, string> = { t1: 't_aire', t2: 't_aire', h1: 'h_aire', h2: 'h_aire' };
@@ -40,8 +40,15 @@ export default function Historial({ esAdmin = false }: { esAdmin?: boolean }) {
   return (
     <section id="v-historial" className="vista">
       <div className="vidrio bloque">
-        <div className="chips">
-          {visibles.map(x => <button key={x[0]} className={x[0] === def[0] ? 'on' : ''} onClick={() => setV(x[0])}>{x[1]}</button>)}
+        <div className="chips" role="tablist" aria-label="Serie del historial">
+          {VARS.map(x => (
+            <Fragment key={x[0]}>
+              {x[0] === 't_caja' && <span className="chip-grupo">Caja interna</span>}
+              <button type="button" role="tab" aria-selected={x[0] === def[0]}
+                className={x[0] === def[0] ? 'on' : ''} onClick={() => setV(x[0])}
+                title={esCaja(x[0]) ? `Caja interna · ${x[1]}` : x[1]}>{x[1]}</button>
+            </Fragment>
+          ))}
         </div>
         <div className="fila-ctl">
           <div className="seg">{RANGOS.map(([r, t]) => <button key={r} className={r === rango ? 'on' : ''} onClick={() => setRango(r)}>{t}</button>)}</div>

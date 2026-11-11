@@ -778,6 +778,7 @@ RANGOS = {   # rango: (duración s, paso s, fuente)
     "24h": (86400, 300, "crudo"), "7d": (7 * 86400, 1800, "crudo"), "30d": (30 * 86400, 7200, "hora"),
     "90d": (90 * 86400, 21600, "hora"), "365d": (365 * 86400, 86400, "hora"),
 }
+# Historial de la caja interna (XY-MD01). Cualquier usuario de la estación puede leerlas.
 VARS_CAJA = {"t_caja", "h_caja"}
 # Segundos que cuentan como "cerca" del máximo o mínimo del día.
 BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0}
@@ -862,7 +863,7 @@ def resumen_dia(cx, nodo, t=None):
 
 ORDEN_REPORTE = ["t_aire", "h_aire", "pir", "t_suelo", "h_suelo", "ec", "ph", "n", "p", "k"]
 EXTRAS_REPORTE = {"t_aire": ["t1", "t2"], "h_aire": ["h1", "h2"]}
-NOMBRE_CAJA = {"t_caja": ("Temperatura de la caja", "°C"), "h_caja": ("Humedad de la caja", "%")}
+NOMBRE_CAJA = {"t_caja": ("Temp. caja", "°C"), "h_caja": ("Hum. caja", "%")}
 
 
 def _resumen_puntos(pts, umbral):
