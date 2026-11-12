@@ -1,5 +1,7 @@
-import { useState } from 'react';
-import type { TipoMercado, TipoRecepcion, Variedad, TipoCultivo, Producto } from '../../types';
+import { useEffect, useState } from 'react';
+import type { TipoMercado, TipoRecepcion, Variedad, TipoCultivo } from '../../types';
+import CatalogoRecepcionForm from '../Catalogo/CatalogoRecepcionForm';
+import { listarProductosCatalogo, type ProductoCatalogo } from '../../lib/catalogoApi';
 import { VariedadSelect, MercadoSelect, TipoCultivoSelect } from '../ui';
 import { useCreateRecepcion } from '../../hooks/useCreateRecepcion';
 import {
@@ -16,7 +18,8 @@ interface RecepcionProps {
 
 export default function Recepcion({ token, onRecepcionRegistered }: RecepcionProps) {
   const [tipoRecepcion, setTipoRecepcion] = useState<TipoRecepcion>('campo');
-  const [productoRecepcion, setProductoRecepcion] = useState<Producto | ''>('');
+  const [productoRecepcion, setProductoRecepcion] = useState('');
+  const [catalogo, setCatalogo] = useState<ProductoCatalogo[]>([]);
   const [variedadRecepcion, setVariedadRecepcion] = useState<Variedad | ''>('');
   const [tipoCultivoRecepcion, setTipoCultivoRecepcion] = useState<TipoCultivo | ''>('');
   const [mercadoRecepcion, setMercadoRecepcion] = useState<TipoMercado>('nacional');
@@ -28,9 +31,17 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
   const [fechaCorte, setFechaCorte] = useState('');
 
   const createRecepcionMutation = useCreateRecepcion(token);
+  const esCatalogo = productoRecepcion.startsWith('cat:');
+
+  useEffect(() => {
+    listarProductosCatalogo(token)
+      .then((rows) => setCatalogo(rows.filter((p) => p.activo && p.configurado)))
+      .catch(() => setCatalogo([]));
+  }, [token]);
 
   const registrarRecepcion = async () => {
     if (!productoRecepcion) return alert('Selecciona un producto');
+    if (esCatalogo) return;
 
     let payload: any;
 
@@ -104,8 +115,7 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
       <select
         value={productoRecepcion}
         onChange={(e) => {
-          const val = e.target.value as Producto | '';
-          setProductoRecepcion(val);
+          setProductoRecepcion(e.target.value);
           setCantidadRecepcion('');
           setLote('');
           setCantidadBins('');
@@ -119,6 +129,11 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
         <option value="uva">Uva</option>
         <option value="limon_amarillo">Limón Amarillo</option>
         <option value="melon">Melón</option>
+        {catalogo.map((p) => (
+          <option key={p.codigo} value={`cat:${p.codigo}`}>
+            {p.nombre}
+          </option>
+        ))}
       </select>
 
       {/* Campos solo para Uva */}
@@ -233,13 +248,23 @@ export default function Recepcion({ token, onRecepcionRegistered }: RecepcionPro
         </>
       )}
 
-      <button
-        onClick={registrarRecepcion}
-        disabled={isSubmitting}
-        style={{ padding: '12px 30px', marginTop: '10px', opacity: isSubmitting ? 0.6 : 1 }}
-      >
-        Registrar Recepción
-      </button>
+      {esCatalogo && (
+        <CatalogoRecepcionForm
+          token={token}
+          codigo={productoRecepcion.slice(4)}
+          onDone={onRecepcionRegistered}
+        />
+      )}
+
+      {!esCatalogo && (
+        <button
+          onClick={registrarRecepcion}
+          disabled={isSubmitting}
+          style={{ padding: '12px 30px', marginTop: '10px', opacity: isSubmitting ? 0.6 : 1 }}
+        >
+          Registrar Recepción
+        </button>
+      )}
     </div>
   );
 }
