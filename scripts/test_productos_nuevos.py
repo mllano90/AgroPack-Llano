@@ -25,6 +25,7 @@ import signal
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -255,15 +256,22 @@ def start_server(db_path: str, port: int) -> subprocess.Popen:
     env["SECRET_KEY"] = "test-productos-nuevos"
     env["DATABASE_URL"] = f"sqlite:///{db_path}"
     env["DEBUG"] = "0"
-    log_path = f"/tmp/agropack_catalogo_{port}.log"
+    log_path = os.path.join(tempfile.gettempdir(), f"agropack_catalogo_{port}.log")
     log = open(log_path, "w")
-    proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
+    kwargs: dict = dict(
         cwd=str(BACKEND),
         env=env,
         stdout=log,
         stderr=subprocess.STDOUT,
-        start_new_session=True,
+    )
+    if os.name == "nt":
+        # Grupo propio: terminate/taskkill no arrastra la consola del test.
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        kwargs["start_new_session"] = True
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
+        **kwargs,
     )
     proc._log_path = log_path  # type: ignore[attr-defined]
     return proc
@@ -289,17 +297,51 @@ def wait_server(proc: subprocess.Popen, port: int) -> str:
     raise SystemExit(f"timeout {port}: {last}\n{log}")
 
 
+def _kill_windows_tree(pid: int) -> None:
+    """taskkill /T mata el proceso y los hijos (uvicorn no se queda en el puerto)."""
+    subprocess.run(
+        ["taskkill", "/F", "/T", "/PID", str(pid)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+
+
 def stop_server(proc: subprocess.Popen | None) -> None:
     if proc is None or proc.poll() is not None:
+        return
+    if os.name == "nt":
+        pid = proc.pid
+        try:
+            proc.terminate()
+        except OSError:
+            pass
+        try:
+            proc.wait(timeout=8)
+        except subprocess.TimeoutExpired:
+            pass
+        _kill_windows_tree(pid)
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            try:
+                proc.kill()
+            except OSError:
+                pass
         return
     try:
         os.killpg(proc.pid, signal.SIGTERM)
     except ProcessLookupError:
         return
+    except OSError:
+        proc.terminate()
     try:
         proc.wait(timeout=8)
     except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            proc.kill()
 
 
 def login(base: str, username: str, password: str) -> str:
