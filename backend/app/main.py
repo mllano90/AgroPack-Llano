@@ -20,6 +20,7 @@ from app.routers.embarques import router as embarques_router
 from app.routers.clientes import router as clientes_router   # ← NUEVO
 from app.routers.correcciones import router as correcciones_router
 from app.routers.reempaque_melon import router as reempaque_melon_router
+from app.routers.catalogo import router as catalogo_router
 
 # Crear tablas y columnas nuevas
 try:
@@ -96,6 +97,7 @@ app.include_router(embarques_router, prefix="/api/embarques", tags=["Embarques"]
 app.include_router(clientes_router, prefix="/api/clientes", tags=["Clientes"])  # ← NUEVO
 app.include_router(correcciones_router, prefix="/api/correcciones", tags=["Correcciones"])
 app.include_router(reempaque_melon_router, prefix="/api/correcciones", tags=["Correcciones"])
+app.include_router(catalogo_router, prefix="/api/catalogo", tags=["Catálogo"])
 
 # Módulo estación climática. Si falla el import o sus tablas, AgroPack sigue.
 try:

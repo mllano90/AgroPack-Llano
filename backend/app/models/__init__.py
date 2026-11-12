@@ -13,3 +13,15 @@ from .inventory import (
     InventarioDesverdizado,
     LoteMelonHectareas,
 )
+from .catalogo import (  # noqa: F401
+    TipoCosechaCatalogo,
+    TipoCajaCatalogo,
+    ProductoCatalogo,
+    ProductoParametro,
+    CatalogoRecepcion,
+    CatalogoInventarioCampo,
+    CatalogoEmpaque,
+    CatalogoInventarioFinal,
+    CatalogoEmbarque,
+    CatalogoEmbarqueLinea,
+)
