@@ -1848,10 +1848,10 @@ export default function Reportes({ token }: ReportesProps) {
             </p>
           ) : a ? (
             <>
-              {/* Misma tarjeta para los indicadores; la fila de arriba es 1ra, 2da y kg/bin */}
+              {/* Primera (RPC + cartón) y Segunda (jugo) suman 100. */}
               <div style={indicadoresGrid}>
                 <div style={{ ...cardPrimary, background: '#dcfce7' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#166534' }}>1ra calidad</div>
+                  <div style={{ ...cardPrimaryLabel, color: '#166534' }}>Primera</div>
                   <div style={{ ...cardPrimaryValue, color: '#14532d' }}>
                     {a.pct_primera}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
@@ -1870,9 +1870,13 @@ export default function Reportes({ token }: ReportesProps) {
                       </div>
                     </div>
                   </div>
+                  <div style={{ fontSize: 11, color: '#166534', marginTop: 6, lineHeight: 1.35 }}>
+                    RPC {fmtKg(a.kg_rpc ?? 0)} kg ({a.cajas_rpc} cajas) · Cartón{' '}
+                    {fmtKg(a.kg_carton ?? 0)} kg ({a.cajas_carton} cajas)
+                  </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#fef9c3' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#854d0e' }}>2da · jugo</div>
+                  <div style={{ ...cardPrimaryLabel, color: '#854d0e' }}>Segunda (jugo)</div>
                   <div style={{ ...cardPrimaryValue, color: '#713f12' }}>
                     {a.pct_segunda}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
@@ -1967,44 +1971,6 @@ export default function Reportes({ token }: ReportesProps) {
                       <div style={{ ...cardStatChipValue, color: '#0c4a6e' }}>
                         {a.parrillas_primera ?? '—'}
                       </div>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#dbeafe' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#1e40af' }}>% 1ra en RPC</div>
-                  <div style={{ ...cardPrimaryValue, color: '#1e3a8a' }}>
-                    {fmtNum(a.pct_rpc_de_primera, 1)}
-                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Kg</div>
-                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
-                        {fmtKg(a.kg_rpc ?? 0)}
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Cajas</div>
-                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>{a.cajas_rpc}</div>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#ffedd5' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#9a3412' }}>% 1ra en cartón</div>
-                  <div style={{ ...cardPrimaryValue, color: '#7c2d12' }}>
-                    {fmtNum(a.pct_carton_de_primera, 1)}
-                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Kg</div>
-                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>
-                        {fmtKg(a.kg_carton ?? 0)}
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Cajas</div>
-                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>{a.cajas_carton}</div>
                     </div>
                   </div>
                 </div>
