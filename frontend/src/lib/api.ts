@@ -456,6 +456,8 @@ export interface CorridaRendimientoApi {
   pct_primera: number;
   pct_segunda: number;
   pct_recuperacion: number;
+  /** Kilos producidos ÷ bins de campo. null si no hay bins. */
+  kg_real_por_bin?: number | null;
   kg_rpc?: number;
   kg_carton?: number;
   kg_granel?: number;
@@ -490,6 +492,8 @@ export interface LoteRendimientoApi {
   pct_primera: number;
   pct_segunda: number;
   pct_recuperacion: number;
+  /** Kilos producidos ÷ bins de campo. null si no hay bins. */
+  kg_real_por_bin?: number | null;
   cajas_rpc: number;
   cajas_carton: number;
   bins_jugo: number;

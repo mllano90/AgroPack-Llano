@@ -80,9 +80,10 @@ class CorridaRendimiento(BaseModel):
     kg_primera: float  # solo final (RPC+cartón) del proceso completo
     kg_segunda: float
     kg_salida: float
-    pct_primera: float  # vs bins de campo (proceso) o vs granel (conversión suelta)
-    pct_segunda: float
-    pct_recuperacion: float  # (1ra+2da) / entrada
+    pct_primera: float  # % del kilo producido (1ra + jugo). Suma 100 con pct_segunda
+    pct_segunda: float  # jugo (bins × 900 kg), resto para que sume 100
+    pct_recuperacion: float  # (1ra+2da) / entrada estimada (bins×260 o granel×22)
+    kg_real_por_bin: float | None = None  # kilos producidos / bins de campo; None si no hay bins
     # Desglose 1ra FINAL del proceso
     kg_rpc: float = 0.0
     kg_carton: float = 0.0
@@ -115,10 +116,11 @@ class LoteRendimiento(BaseModel):
     kg_entrada: float
     kg_primera: float
     kg_segunda: float
-    kg_salida: float  # 1ra + 2da (kg totales producidos)
-    pct_primera: float
-    pct_segunda: float
-    pct_recuperacion: float
+    kg_salida: float  # 1ra + 2da/jugo (kg totales producidos)
+    pct_primera: float  # % del kilo producido; suma 100 con pct_segunda
+    pct_segunda: float  # jugo a 900 kg
+    pct_recuperacion: float  # producido / entrada estimada (bins×260)
+    kg_real_por_bin: float | None = None  # kilos producidos / bins de campo
     cajas_rpc: int
     cajas_carton: int
     bins_jugo: int
@@ -155,9 +157,9 @@ class FactoresProyeccion(BaseModel):
     """Factores derivados del histórico de empaque (por bin de campo)."""
     bins_historicos: int = 0
     kg_entrada_historico: float = 0.0
-    pct_primera: float = 0.0
+    pct_primera: float = 0.0  # % del kilo producido (suma 100 con pct_segunda)
     pct_segunda: float = 0.0
-    pct_recuperacion: float = 0.0
+    pct_recuperacion: float = 0.0  # producido / entrada estimada de 260 kg
     kg_primera_por_bin: float = 0.0
     kg_segunda_por_bin: float = 0.0
     # cajas por bin de campo, por presentación+talla
