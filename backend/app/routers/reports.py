@@ -38,6 +38,7 @@ from app.schemas.reports import (
     EmbarquesReporteResponse,
 )
 from app.utils.limon_inv import parse_detalle_corrida, norm_talla, norm_pres
+from app.utils.limon_pct import kg_real_por_bin, porcentajes_produccion
 
 router = APIRouter(tags=["Reportes"])
 
@@ -157,9 +158,10 @@ def _calcular_rendimiento(
 ) -> CorridaRendimiento:
     """
     kg_primera = solo producto FINAL (RPC/cartón). El granel es WIP y no suma a 1ra.
-    tipo_corrida:
-      - campo / proceso: entrada = bins × 260
-      - conversion_granel: entrada = granel × 22 (solo si va suelta, sin fusionar)
+    kg_segunda = bins de jugo × 900 kg (la 2da es el jugo; ese peso sí es real).
+    El % 1ra y el % 2da son de ese kilo producido y suman 100.
+    kg_entrada sigue siendo la referencia estimada (bins de campo × 260, o granel × 22)
+    y solo alimenta la recuperación, no los porcentajes.
     """
     rpc_granel_usado = 0
     if tipo_corrida == "conversion_granel":
@@ -190,8 +192,7 @@ def _calcular_rendimiento(
         kg_granel = rpc_granel_usado * KG_POR_PRESENTACION.get("rpc_granel", 22)
 
     kg_salida = kg_primera + kg_segunda
-    pct_primera = round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2)
-    pct_segunda = round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2)
+    pct_primera, pct_segunda = porcentajes_produccion(kg_primera, kg_segunda)
     pct_recuperacion = round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2)
     pct_rpc_de_primera = round((kg_rpc / kg_primera * 100) if kg_primera else 0.0, 2)
     pct_carton_de_primera = round((kg_carton / kg_primera * 100) if kg_primera else 0.0, 2)
@@ -226,6 +227,7 @@ def _calcular_rendimiento(
         pct_primera=pct_primera,
         pct_segunda=pct_segunda,
         pct_recuperacion=pct_recuperacion,
+        kg_real_por_bin=kg_real_por_bin(kg_salida, bins_campo),
         kg_rpc=round(kg_rpc, 2),
         kg_carton=round(kg_carton, 2),
         kg_granel=round(kg_g_prod if tipo_corrida != "conversion_granel" else kg_granel, 2),
@@ -466,6 +468,7 @@ def _fusionar_procesos_empaque(empaques: list) -> list[CorridaRendimiento]:
         lotes = paso_campo.lotes_resumen
         if tiene_conv:
             lotes = (lotes or "") + f" · +{len(fr['conv_attached'])} conversión(es) granel"
+        pct_primera, pct_segunda = porcentajes_produccion(kg_primera, kg_segunda)
 
         result.append(
             CorridaRendimiento(
@@ -481,9 +484,10 @@ def _fusionar_procesos_empaque(empaques: list) -> list[CorridaRendimiento]:
                 kg_primera=round(kg_primera, 2),
                 kg_segunda=round(kg_segunda, 2),
                 kg_salida=round(kg_salida, 2),
-                pct_primera=round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2),
-                pct_segunda=round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                pct_primera=pct_primera,
+                pct_segunda=pct_segunda,
                 pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                kg_real_por_bin=kg_real_por_bin(kg_salida, bins_campo),
                 kg_rpc=round(kg_rpc, 2),
                 kg_carton=round(kg_carton, 2),
                 kg_granel=round(kg_g_prod, 2),
@@ -564,6 +568,7 @@ def _acumular(
     parrillas_jugo = float(bins_jugo)
     parrillas_primera = round(parrillas_rpc + parrillas_carton, 2)
     parrillas_total = round(parrillas_primera + parrillas_jugo, 2)
+    pct_primera, pct_segunda = porcentajes_produccion(kg_primera, kg_segunda)
     return CorridaRendimiento(
         id=0,
         fecha="acumulado",
@@ -579,9 +584,10 @@ def _acumular(
         kg_primera=round(kg_primera, 2),
         kg_segunda=round(kg_segunda, 2),
         kg_salida=round(kg_salida, 2),
-        pct_primera=round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2),
-        pct_segunda=round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        pct_primera=pct_primera,
+        pct_segunda=pct_segunda,
         pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        kg_real_por_bin=kg_real_por_bin(kg_salida, bins_campo),
         kg_rpc=round(kg_rpc, 2),
         kg_carton=round(kg_carton, 2),
         kg_granel=round(sum(getattr(c, "kg_granel", 0) or 0 for c in corridas), 2),
@@ -745,6 +751,7 @@ def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
         parrillas_jugo = float(bins_jugo)
         parrillas_primera = round(parrillas_rpc + parrillas_carton, 2)
         parrillas_total = round(parrillas_primera + parrillas_jugo, 2)
+        pct_primera, pct_segunda = porcentajes_produccion(kg_primera, kg_segunda)
         result.append(
             LoteRendimiento(
                 lote=lote,
@@ -753,9 +760,10 @@ def _rendimientos_por_lote(empaques: list) -> list[LoteRendimiento]:
                 kg_primera=round(kg_primera, 2),
                 kg_segunda=round(kg_segunda, 2),
                 kg_salida=round(kg_salida, 2),
-                pct_primera=round((kg_primera / kg_entrada * 100) if kg_entrada else 0.0, 2),
-                pct_segunda=round((kg_segunda / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                pct_primera=pct_primera,
+                pct_segunda=pct_segunda,
                 pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
+                kg_real_por_bin=kg_real_por_bin(kg_salida, bins_campo),
                 cajas_rpc=cajas_rpc,
                 cajas_carton=cajas_carton,
                 bins_jugo=bins_jugo,
@@ -997,11 +1005,14 @@ def _por_talla_y_presentacion(
             }
         )
 
+    # % sobre el kilo producido (1ra + jugo a 900 kg). Los kg por bin de la
+    # proyección siguen siendo kilo real ÷ bin: las cantidades proyectadas no cambian.
+    pct_primera, pct_segunda = porcentajes_produccion(kg1, kg2)
     factores = FactoresProyeccion(
         bins_historicos=bins_total,
         kg_entrada_historico=round(kg_entrada, 2),
-        pct_primera=round((kg1 / kg_entrada * 100) if kg_entrada else 0.0, 2),
-        pct_segunda=round((kg2 / kg_entrada * 100) if kg_entrada else 0.0, 2),
+        pct_primera=pct_primera,
+        pct_segunda=pct_segunda,
         pct_recuperacion=round((kg_salida / kg_entrada * 100) if kg_entrada else 0.0, 2),
         kg_primera_por_bin=round(kg1 / bins_total, 4) if bins_total else 0.0,
         kg_segunda_por_bin=round(kg2 / bins_total, 4) if bins_total else 0.0,

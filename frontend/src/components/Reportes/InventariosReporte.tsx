@@ -906,10 +906,13 @@ export default function InventariosReporte({
                 <strong>Factores del histórico</strong>
                 {proyeccion.factores.con_datos ? (
                   <div style={{ marginTop: 6 }}>
-                    Sobre {proyeccion.factores.bins_historicos} bins empacados:{' '}
+                    Sobre {proyeccion.factores.bins_historicos} bins de campo empacados, del kilo
+                    producido (1ra + jugo a 900 kg):{' '}
                     <strong>{proyeccion.factores.pct_primera}% 1ra</strong> ·{' '}
-                    <strong>{proyeccion.factores.pct_segunda}% 2da</strong> · recup.{' '}
-                    {proyeccion.factores.pct_recuperacion}%
+                    <strong>{proyeccion.factores.pct_segunda}% 2da</strong>. Esos dos suman 100. La
+                    recuperación ({proyeccion.factores.pct_recuperacion}%) es contra la entrada
+                    estimada de 260 kg y no entra en ese 100. Los kilos proyectados siguen siendo
+                    el kilo real histórico por bin.
                   </div>
                 ) : (
                   <div style={{ color: '#b91c1c', marginTop: 6 }}>
