@@ -39,6 +39,40 @@ def porcentajes_produccion(kg_primera: float, kg_segunda: float) -> tuple[float,
     return primera, segunda
 
 
+def porcentajes_rpc_carton_jugo(
+    kg_rpc: float, kg_carton: float, kg_jugo: float
+) -> tuple[float, float, float]:
+    """
+    % de RPC, cartón y jugo sobre el kilo producido (1ra + jugo).
+
+    El jugo queda como resto, así que los tres suman 100 a 1 decimal.
+    """
+
+    def _kg(valor: float) -> float:
+        try:
+            n = float(valor or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        if not math.isfinite(n) or n <= 0:
+            return 0.0
+        return n
+
+    rpc_kg = _kg(kg_rpc)
+    carton_kg = _kg(kg_carton)
+    jugo_kg = _kg(kg_jugo)
+    total = rpc_kg + carton_kg + jugo_kg
+    if not (total > 0):
+        return 0.0, 0.0, 0.0
+    rpc = _redondear(rpc_kg / total * 100, 1)
+    resto = _redondear(100.0 - rpc, 1)
+    resto_kg = carton_kg + jugo_kg
+    if not (resto_kg > 0):
+        return rpc, 0.0, 0.0
+    carton = _redondear(carton_kg / resto_kg * resto, 1)
+    jugo = _redondear(resto - carton, 1)
+    return rpc, carton, jugo
+
+
 def kg_real_por_bin(kg_producidos: float, bins_campo: float) -> float | None:
     """
     Kilos producidos ÷ bins de campo procesados.

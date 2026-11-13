@@ -2,7 +2,11 @@
  * Comprueba los % y el kg/bin de limón (funciones reales del frontend).
  * Lo llama scripts/test_limon_porcentajes.py. No escribe nada.
  */
-import { kgRealPorBin, porcentajesQueSuman100 } from '../frontend/src/components/Reportes/limonKpi.ts';
+import {
+  kgRealPorBin,
+  porcentajesQueSuman100,
+  porcentajesRpcCartonJugo,
+} from '../frontend/src/components/Reportes/limonKpi.ts';
 
 const pares: Array<[number, number, number]> = [
   [61891.4, 28732, 419],
@@ -31,6 +35,28 @@ const resultados = pares.map(([primera, segunda, bins]) => {
   };
 });
 
+const trios: Array<[number, number, number]> = [
+  [1, 1, 1],
+  [263196, 171882, 335700],
+  [10, 0, 0],
+  [0, 10, 0],
+  [0, 0, 10],
+  [0, 0, 0],
+  [1, 2, 3],
+  [61891.4, 0, 28732],
+];
+
+const partes = trios.map(([rpc, carton, jugo]) => {
+  const pct = porcentajesRpcCartonJugo(rpc, carton, jugo);
+  return {
+    rpc,
+    carton,
+    jugo,
+    pct,
+    suma: Math.round((pct.rpc + pct.carton + pct.jugo) * 10) / 10,
+  };
+});
+
 const loteA = { kg: 920, bins: 4 };
 const loteB = { kg: 400, bins: 2 };
 const totalLotes = kgRealPorBin(loteA.kg + loteB.kg, loteA.bins + loteB.bins);
@@ -40,6 +66,7 @@ const promedioDePromedios =
 console.log(
   JSON.stringify({
     resultados,
+    partes,
     totalLotes,
     promedioDePromedios,
     totalCuadra: totalLotes === (loteA.kg + loteB.kg) / (loteA.bins + loteB.bins),
