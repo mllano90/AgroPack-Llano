@@ -235,6 +235,96 @@ def _devolver_stock_limon(
     }
 
 
+def _devolver_stock_melon(
+    db: Session,
+    presentacion: str | None,
+    talla: str | None,
+    calidad: str | None,
+    cantidad: int,
+    mercado=None,
+) -> dict:
+    """
+    Devuelve cajas a la fila de esa caja, talla y calidad (1ra LLANO / 2da Wallys).
+    Prefiere el mismo mercado. Solo crea fila si ese SKU no existe.
+    """
+    from datetime import datetime as dt
+
+    from app.utils.melon_inv import (
+        etiqueta_sku_melon,
+        norm_calidad_melon,
+        norm_presentacion_melon,
+        norm_talla_melon,
+        rows_inv_melon,
+    )
+
+    cant = int(cantidad or 0)
+    if cant <= 0:
+        return {"ok": False, "reason": "cantidad<=0", "delta": 0}
+
+    pres = norm_presentacion_melon(presentacion)
+    talla_n = norm_talla_melon(talla)
+    cal = norm_calidad_melon(calidad)
+    if not pres or not talla_n or not cal:
+        return {
+            "ok": False,
+            "reason": "sku melón incompleto",
+            "presentacion": presentacion,
+            "talla": talla,
+            "calidad": calidad,
+            "delta": 0,
+        }
+
+    rows = rows_inv_melon(db, pres, talla_n, cal, mercado=mercado)
+    inv = next((r for r in rows if int(r.cantidad_stock or 0) > 0), None)
+    if inv is None and rows:
+        inv = rows[0]
+
+    if inv is not None:
+        antes = int(inv.cantidad_stock or 0)
+        inv.cantidad_stock = antes + cant
+        inv.fecha_actualizacion = dt.utcnow()
+        return {
+            "ok": True,
+            "created": False,
+            "inv_id": inv.id,
+            "presentacion": pres,
+            "talla": talla_n,
+            "calidad": cal,
+            "mercado": str(getattr(inv.mercado, "value", inv.mercado)),
+            "antes": antes,
+            "despues": int(inv.cantidad_stock),
+            "delta": cant,
+            "producto": "melon",
+            "sku": etiqueta_sku_melon(pres, talla_n, cal),
+        }
+
+    extra = {"presentacion": pres, "talla": talla_n, "calidad": cal}
+    nuevo = InventarioFinal(
+        producto=Producto.MELON,
+        variedad=None,
+        tipo_cultivo=None,
+        mercado=mercado or TipoMercado.NACIONAL,
+        cantidad_stock=cant,
+        atributos_extra=extra,
+    )
+    db.add(nuevo)
+    db.flush()
+    return {
+        "ok": True,
+        "created": True,
+        "inv_id": nuevo.id,
+        "presentacion": pres,
+        "talla": talla_n,
+        "calidad": cal,
+        "mercado": str(getattr(nuevo.mercado, "value", nuevo.mercado)),
+        "antes": 0,
+        "despues": cant,
+        "delta": cant,
+        "producto": "melon",
+        "sku": etiqueta_sku_melon(pres, talla_n, cal),
+    }
+
+
 def _fill_recepcion_from_desv(r: RecepcionCampo, d: InventarioDesverdizado) -> None:
     """Copia lote/bins/fecha del desverdizado a la recepción si faltan (datos viejos)."""
     if d.lote and not (getattr(r, "lote", None) or "").strip():
@@ -1057,6 +1147,18 @@ def eliminar_embarque(
                 db,
                 d.presentacion,
                 d.talla,
+                cant,
+                mercado=d.mercado,
+            )
+            restaurado.append(info)
+            if info.get("ok"):
+                total_devuelto += cant
+        elif (pval == "melon" or prod == Producto.MELON) and (d.presentacion or "").strip():
+            info = _devolver_stock_melon(
+                db,
+                d.presentacion,
+                d.talla,
+                d.calidad,
                 cant,
                 mercado=d.mercado,
             )

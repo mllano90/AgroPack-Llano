@@ -4,7 +4,7 @@ import type {
   EmbarqueReporteItemApi,
   EmbarquesReporteApi,
 } from '../../lib/api';
-import { labelPresentacionLimon } from '../../lib/constants';
+import { labelCalidadMelon, labelPresentacionLimon, labelPresentacionMelon } from '../../lib/constants';
 
 export type ProductoEmbarqueFiltro = 'limon_amarillo' | 'melon';
 
@@ -99,9 +99,23 @@ function fmtKg(n: number | undefined) {
   return (n ?? 0).toLocaleString(undefined, { maximumFractionDigits: 1 });
 }
 
-function labelPres(p: string | null | undefined) {
+function labelPres(p: string | null | undefined, producto?: string | null) {
   if (!p) return '—';
+  if (
+    producto === 'melon' ||
+    p === 'caja_chica_a' ||
+    p === 'caja_normal_b' ||
+    p === 'caja_jumbo_c'
+  ) {
+    return labelPresentacionMelon(p);
+  }
   return labelPresentacionLimon(p) || p;
+}
+
+function labelCalidadLinea(producto?: string | null, calidad?: string | null) {
+  if (!calidad) return '—';
+  if (producto === 'melon') return labelCalidadMelon(calidad);
+  return calidad;
 }
 
 type DetalleParr = {
@@ -118,6 +132,8 @@ function divisorParrilla(d: DetalleParr): number {
   if (p === 'bins_jugo') return 1;
   if (p === 'caja_40lbs') return 63;
   if (p === 'rpc_12' || p === 'rpc_18') return 45; // default RPC6423
+  if (p === 'caja_chica_a' || p === 'caja_normal_b') return 56;
+  if (p === 'caja_jumbo_c') return 49;
   return 0;
 }
 
@@ -561,9 +577,9 @@ export default function EmbarquesReporte({ data, loading, onRefresh, productoFil
               <tbody>
                 {(embarqueSel.detalles || []).map((d, i) => (
                   <tr key={i} style={{ borderBottom: '1px solid #e2e8f0' }}>
-                    <td style={td}>{labelPres(d.presentacion)}</td>
+                    <td style={td}>{labelPres(d.presentacion, d.producto)}</td>
                     <td style={td}>{d.talla || '—'}</td>
-                    <td style={td}>{d.calidad || '—'}</td>
+                    <td style={td}>{labelCalidadLinea(d.producto, d.calidad)}</td>
                     <td style={{ ...td, fontWeight: 700 }}>
                       {d.presentacion === 'bins_jugo'
                         ? formatParrillasLinea(d.presentacion, d.cantidad_cajas, 1)

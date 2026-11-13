@@ -1,5 +1,5 @@
 from datetime import datetime, date
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session, joinedload
 from app.core.database import get_db
 from app.core.security import require_roles
@@ -15,11 +15,25 @@ from app.schemas.embarques import (
 )
 from app.models.inventory import Embarque, EmbarqueDetalle, InventarioFinal, Cliente
 from app.utils.manifiesto_parser import extract_pdf_text, parse_manifiesto_text
+from app.utils.manifiesto_melon import parse_manifiesto_melon_text
 from app.utils.limon_inv import (
     extra_dict as _extra_dict,
     norm_talla as _norm_talla,
     norm_pres as _norm_pres,
     rows_inv_limon as _rows_inv_limon,
+)
+from app.utils.melon_inv import (
+    CAJAS_POR_PARRILLA_MELON,
+    MENSAJE_TALLA_18_WALLYS,
+    TALLAS_POR_PRESENTACION_MELON,
+    etiqueta_sku_melon,
+    norm_calidad_melon,
+    norm_presentacion_melon,
+    norm_talla_melon,
+    rows_inv_melon,
+    stock_melon,
+    talla_18_prohibida_en_calidad,
+    talla_valida_melon,
 )
 
 router = APIRouter(tags=["Embarques"])
@@ -27,8 +41,18 @@ router = APIRouter(tags=["Embarques"])
 ROLES_EMBARQUE = [Rol.ADMIN, Rol.EMBARQUES]
 
 
+def _es_detalle_melon(detalle: EmbarqueDetalleCreate) -> bool:
+    """Melón solo si el producto es melón. La presentación no alcanza: el limón también la trae."""
+    p = detalle.producto
+    if p == Producto.MELON:
+        return True
+    return str(getattr(p, "value", p) or "").lower() == "melon"
+
+
 def _es_detalle_limon(detalle: EmbarqueDetalleCreate) -> bool:
     """Limón si trae presentación o el producto es limón."""
+    if _es_detalle_melon(detalle):
+        return False
     if _norm_pres(detalle.presentacion):
         return True
     p = detalle.producto
@@ -102,17 +126,144 @@ def _descontar_stock_limon(
         )
 
 
+def _clave_melon(detalle: EmbarqueDetalleCreate) -> tuple[str, str, str]:
+    """Caja + talla + calidad ya normalizadas. No escribe nada."""
+    pres = norm_presentacion_melon(detalle.presentacion)
+    if not pres:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Embarque melón requiere tipo de caja "
+                "(caja_chica_a, caja_normal_b, caja_jumbo_c)"
+            ),
+        )
+    talla_n = norm_talla_melon(detalle.talla)
+    cal = norm_calidad_melon(detalle.calidad)
+    if not cal:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Embarque melón requiere calidad llano (1ra LLANO) "
+                "o wallys (2da Wallys)"
+            ),
+        )
+    if talla_18_prohibida_en_calidad(talla_n, cal):
+        raise HTTPException(status_code=400, detail=MENSAJE_TALLA_18_WALLYS)
+    if not talla_n or not talla_valida_melon(pres, talla_n, cal):
+        validas = ", ".join(TALLAS_POR_PRESENTACION_MELON.get(pres, ()))
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Talla de melón no válida para {pres}: {detalle.talla!s}. "
+                f"Válidas: {validas}"
+            ),
+        )
+    return pres, talla_n, cal
+
+
+def _validar_stock_melon(db: Session, detalles: list[EmbarqueDetalleCreate]) -> None:
+    """
+    Revisa todas las líneas de melón antes de descontar.
+    Si una no alcanza, no se toca inventario ni el embarque.
+    """
+    from collections import defaultdict
+
+    pedido: dict[tuple[str, str, str], int] = defaultdict(int)
+    for detalle in detalles:
+        if not _es_detalle_melon(detalle):
+            continue
+        cant = int(detalle.cantidad_cajas or 0)
+        if cant <= 0:
+            continue
+        pres, talla_n, cal = _clave_melon(detalle)
+        pedido[(pres, talla_n, cal)] += cant
+    for (pres, talla_n, cal), cant in pedido.items():
+        total = stock_melon(db, pres, talla_n, cal)
+        if total < cant:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"No hay suficiente stock de Melón - "
+                    f"{etiqueta_sku_melon(pres, talla_n, cal)}. "
+                    f"Disponible: {total}, solicitado: {cant}"
+                ),
+            )
+
+
+def _descontar_stock_melon(
+    db: Session,
+    presentacion: str,
+    talla: str,
+    calidad: str,
+    cantidad: int,
+    mercado: TipoMercado | None = None,
+) -> None:
+    """Reparte el descuento entre las filas de esa caja, talla y calidad."""
+    if cantidad <= 0:
+        return
+    rows = rows_inv_melon(db, presentacion, talla, calidad, mercado=mercado)
+    total = sum(int(r.cantidad_stock or 0) for r in rows)
+    if total < cantidad:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"No hay suficiente stock de Melón - "
+                f"{etiqueta_sku_melon(presentacion, talla, calidad)}. "
+                f"Disponible: {total}, solicitado: {cantidad}"
+            ),
+        )
+    restante = cantidad
+    for inv in rows:
+        if restante <= 0:
+            break
+        disp = int(inv.cantidad_stock or 0)
+        if disp <= 0:
+            continue
+        usar = min(disp, restante)
+        inv.cantidad_stock = disp - usar
+        inv.fecha_actualizacion = datetime.utcnow()
+        restante -= usar
+    if restante > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No se pudo descontar inventario melón (faltan {restante})",
+        )
+
+
 def _aplicar_detalles_embarque(
     db: Session,
     nuevo_embarque: Embarque,
     detalles: list[EmbarqueDetalleCreate],
 ) -> None:
+    _validar_stock_melon(db, detalles)
     for detalle in detalles:
         cant = int(detalle.cantidad_cajas or 0)
         if cant <= 0:
             raise HTTPException(status_code=400, detail="cantidad_cajas debe ser > 0")
 
-        if _es_detalle_limon(detalle):
+        if _es_detalle_melon(detalle):
+            pres, talla_n, cal = _clave_melon(detalle)
+            _descontar_stock_melon(
+                db, pres, talla_n, cal, cant, mercado=detalle.mercado
+            )
+            cpp = detalle.cajas_por_parrilla
+            if cpp is None:
+                cpp = CAJAS_POR_PARRILLA_MELON.get(pres, 56)
+            db.add(
+                EmbarqueDetalle(
+                    embarque_id=nuevo_embarque.id,
+                    producto=Producto.MELON,
+                    variedad=None,
+                    tipo_cultivo=None,
+                    mercado=detalle.mercado,
+                    cantidad_cajas=cant,
+                    presentacion=pres,
+                    talla=talla_n,
+                    calidad=cal,
+                    cajas_por_parrilla=int(cpp),
+                )
+            )
+        elif _es_detalle_limon(detalle):
             pres = _norm_pres(detalle.presentacion)
             if not pres:
                 raise HTTPException(
@@ -254,15 +405,122 @@ def listar_embarques(db: Session = Depends(get_db)):
     return db.query(Embarque).options(joinedload(Embarque.detalles)).all()
 
 
+def _pedido_es_melon(producto: str | None) -> bool:
+    p = (producto or "").strip().lower()
+    return p in {"melon", "melón"}
+
+
+def _respuesta_manifiesto_melon(db: Session, text: str) -> ManifiestoParseResponse:
+    """Vista previa de un manifiesto de melón. No descuenta inventario."""
+    parsed = parse_manifiesto_melon_text(text)
+    for ln in parsed.lineas_raw:
+        nota = ln.parse_note or ""
+        if nota == MENSAJE_TALLA_18_WALLYS or talla_18_prohibida_en_calidad(
+            ln.talla, ln.calidad
+        ):
+            raise HTTPException(status_code=400, detail=MENSAJE_TALLA_18_WALLYS)
+    if any(MENSAJE_TALLA_18_WALLYS in w for w in parsed.warnings):
+        raise HTTPException(status_code=400, detail=MENSAJE_TALLA_18_WALLYS)
+    if not parsed.lineas_raw and not parsed.detalles:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "No se pudieron leer líneas de producto del PDF. "
+                "Verifica que sea un manifiesto Llano Brand de melón "
+                "(caja, talla y calidad 1ra LLANO o 2da Wallys)."
+            ),
+        )
+
+    detalles_stock: list[ManifiestoDetalleStock] = []
+    puede = True
+    for d in parsed.detalles:
+        try:
+            mercado = TipoMercado(d.get("mercado") or "exportacion")
+        except Exception:
+            mercado = TipoMercado.EXPORTACION
+        pres = d.get("presentacion")
+        talla = d.get("talla")
+        cal = d.get("calidad")
+        cant = int(d.get("cantidad_cajas") or 0)
+        stock = stock_melon(db, pres, talla, cal)
+        ok = stock >= cant and cant > 0
+        if not ok:
+            puede = False
+        cpp = d.get("cajas_por_parrilla")
+        try:
+            cpp_i = int(cpp) if cpp is not None else None
+        except (TypeError, ValueError):
+            cpp_i = None
+        detalles_stock.append(
+            ManifiestoDetalleStock(
+                producto=Producto.MELON,
+                mercado=mercado,
+                cantidad_cajas=cant,
+                presentacion=pres,
+                talla=talla,
+                calidad=cal,
+                cajas_por_parrilla=cpp_i,
+                stock_disponible=stock,
+                suficiente=ok,
+            )
+        )
+
+    if not detalles_stock:
+        puede = False
+
+    cliente = _sugerir_cliente(db, parsed.distribuidor)
+    return ManifiestoParseResponse(
+        fecha_embarque=parsed.fecha_embarque,
+        hora_salida=parsed.hora_salida,
+        numero_manifiesto=parsed.numero_manifiesto,
+        embarcador=parsed.embarcador,
+        distribuidor=parsed.distribuidor,
+        lugar=parsed.lugar,
+        mercado=parsed.mercado,
+        factura=parsed.factura,
+        total_bultos_manifiesto=parsed.total_bultos_manifiesto,
+        total_bultos_parseados=sum(x.bultos for x in parsed.lineas_raw),
+        lineas_raw=[
+            ManifiestoLineaRaw(
+                no=ln.no,
+                bultos=ln.bultos,
+                descripcion=ln.descripcion,
+                lote=ln.lote,
+                etiqueta=ln.etiqueta,
+                pallet=ln.pallet,
+                presentacion=ln.presentacion,
+                talla=ln.talla,
+                calidad=ln.calidad,
+                parse_ok=ln.parse_ok,
+                parse_note=ln.parse_note,
+            )
+            for ln in parsed.lineas_raw
+        ],
+        detalles=detalles_stock,
+        warnings=parsed.warnings,
+        puede_confirmar=puede,
+        cliente_sugerido_id=cliente.id if cliente else None,
+        cliente_sugerido_nombre=(
+            f"{cliente.nombre}" + (f" ({cliente.empresa})" if cliente and cliente.empresa else "")
+            if cliente
+            else None
+        ),
+    )
+
+
 @router.post("/parse-manifiesto", response_model=ManifiestoParseResponse)
 async def parse_manifiesto(
     file: UploadFile = File(...),
+    producto: str | None = Form(None),
     db: Session = Depends(get_db),
     current_user=Depends(require_roles(ROLES_EMBARQUE)),
 ):
     """
     Sube un PDF de manifiesto (formato Llano Brand), extrae líneas y
     cruza con inventario final (sin descontar todavía).
+
+    Sin `producto`, o con limón, se lee como manifiesto de limón.
+    Con `producto=melon` se lee caja, talla y calidad (1ra LLANO / 2da Wallys).
     """
     if not file.filename or not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Sube un archivo PDF (.pdf)")
@@ -277,6 +535,9 @@ async def parse_manifiesto(
         text = extract_pdf_text(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    if _pedido_es_melon(producto):
+        return _respuesta_manifiesto_melon(db, text)
 
     parsed = parse_manifiesto_text(text)
     if not parsed.lineas_raw and not parsed.detalles:
