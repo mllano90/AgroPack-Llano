@@ -430,6 +430,8 @@
     background:rgba(22,13,7,.38);box-shadow:none}
   .estacion-root.en-inicio .zona-tit{font-size:.72rem;margin:0 2px 3px;gap:4px}
   .estacion-root.en-inicio .zona-tit .ico{width:14px;height:14px}
+  .estacion-root.en-inicio .zona-suelo .zona-tit{color:var(--texto);font-weight:600}
+  .estacion-root.en-inicio .zona-suelo .zona-tit .ico.hoja{color:var(--verde)}
   .estacion-root.en-inicio .zona-hora{font-size:.62rem}
   .estacion-root.en-inicio .ind-aire{grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
   .estacion-root.en-inicio .ind-aire .ind:not(#ind-t_aire) .etq-mini{display:inline}
