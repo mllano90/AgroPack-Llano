@@ -289,7 +289,7 @@
   .estacion-root.en-inicio{overflow:hidden}
   .estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
   .estacion-root.en-inicio #v-inicio{flex:1;min-height:0;height:auto;display:grid;
-    grid-template-columns:minmax(260px,1fr) minmax(0,1.7fr) minmax(260px,1fr);
+    grid-template-columns:minmax(240px,1fr) minmax(0,2.15fr) minmax(240px,1fr);
     grid-template-rows:minmax(0,1fr);grid-template-areas:"aire planta suelo";column-gap:clamp(12px,1.6vw,24px)}
   .estacion-root.en-inicio .zona-aire{grid-area:aire;align-self:stretch;min-height:0;max-height:100%;overflow:auto}
   .estacion-root.en-inicio .figura-planta{grid-area:planta;aspect-ratio:auto;width:100%;height:100%;min-height:0;align-self:stretch}
@@ -402,7 +402,7 @@
 .estacion-root .lista-cuentas{list-style:none;padding:0;margin:8px 0 0}
 .estacion-root .lista-cuentas li{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--borde)}
 .estacion-root .cabecera .btn{padding:6px 10px;font-size:.8rem}
-.estacion-root .chip-rssi{display:none}
+.estacion-root .bloque-enlace .enlaces{display:flex;gap:10px 18px;align-items:center;flex-wrap:wrap;margin-top:8px}
 
 /* Teléfono en vertical: Inicio cabe en 100dvh. Aire arriba, planta centrada, suelo abajo.
    El paisaje y el escritorio siguen con sus reglas anteriores. */
@@ -413,11 +413,11 @@
   .estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;width:100%;max-width:none;margin:0;display:flex;flex-direction:column;overflow:hidden;gap:4px}
   .estacion-root.en-inicio .cabecera{flex:none;position:static;margin:0;padding:4px 8px;gap:6px;background:rgba(8,18,12,.45)}
   .estacion-root.en-inicio .cabecera h1{font-size:.95rem}
+  .estacion-root.en-inicio .marca{flex:1 1 8rem;min-width:42%}
   .estacion-root.en-inicio .marca-nodo{font-size:.68rem}
-  .estacion-root.en-inicio .cab-acciones{flex:1 1 auto;flex-basis:auto;min-width:0}
+  .estacion-root.en-inicio .cab-acciones{flex:1 1 auto;flex-basis:auto;min-width:0;justify-content:flex-end;margin-left:auto}
   .estacion-root.en-inicio .estado-senal{flex-wrap:wrap;justify-content:flex-end;gap:1px 6px}
   .estacion-root.en-inicio .ultima-lectura{flex:0 1 auto;font-size:.68rem;text-align:right}
-  .estacion-root.en-inicio .chip-rssi{display:inline;font-size:.68rem;color:var(--tenue);white-space:nowrap}
   .estacion-root.en-inicio .cabecera .btn{padding:4px 8px;font-size:.72rem}
   .estacion-root.en-inicio .aviso-diag{flex:none;margin:0;padding:3px 8px;font-size:.68rem;max-height:2.4em;overflow:hidden}
   .estacion-root.en-inicio .aviso-diag strong{display:inline;margin:0 .3em 0 0}
