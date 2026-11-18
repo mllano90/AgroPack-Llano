@@ -141,8 +141,19 @@
 .estacion-root .graf-barra{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0 4px;font-size:.72rem;color:var(--tenue)}
 .estacion-root .graf-ayuda{min-width:0}
 .estacion-root .btn.mini{padding:5px 10px;font-size:.78rem;border-radius:10px;flex:none}
-.estacion-root .grafica-lienzo{position:relative;height:52vh;min-height:240px;max-height:460px}
+.estacion-root .grafica-lienzo{position:relative;height:52vh;min-height:240px;max-height:460px;touch-action:none}
 .estacion-root .grafica-lienzo canvas{touch-action:none;cursor:grab}
+.estacion-root .graf-controles{display:flex;gap:4px;flex:none}
+.estacion-root .graf-controles .btn.mini{min-width:2rem;padding:4px 8px}
+.estacion-root .graf-mira{position:absolute;top:0;left:0;width:0;z-index:3;pointer-events:none}
+.estacion-root .graf-mira .linea{position:absolute;left:-1px;top:8px;bottom:8px;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+.estacion-root .graf-mira .punta{position:absolute;left:-6px;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent}
+.estacion-root .graf-mira .punta.sup{top:0;border-top:8px solid #fff}
+.estacion-root .graf-mira .punta.inf{bottom:0;border-bottom:8px solid #fff}
+.estacion-root .graf-lectura{position:absolute;top:12px;left:12px;max-width:11.5rem;padding:5px 8px;border-radius:8px;background:rgba(6,16,10,.9);color:#fff;font-size:.75rem;line-height:1.35;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.estacion-root .graf-lectura.izq{left:auto;right:12px}
+.estacion-root .graf-lectura b{font-weight:650}
+.estacion-root .graf-lectura .cuando{color:var(--tenue);white-space:nowrap}
 .estacion-root .graf-zoom.mh-grafica .grafica-lienzo{height:min(42vh,340px);min-height:200px}
 .estacion-root /* ---------- ventana emergente del historial de un indicador */
 .modal-hist .hist-caja{max-width:760px;max-height:calc(100vh - 32px);overflow:auto;padding:14px 16px}
