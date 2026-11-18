@@ -1,74 +1,12 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import type { Alerta, ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
 import { Icono } from './Icono';
 import { durTxt, edadTxt, fHora, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
 import ModalHistorial from './ModalHistorial';
-import fondo from './assets/fondo_continuo.jpg';
+import EscenaFondo from './EscenaFondo';
 import { fueraDeRango } from './rango';
-import { prefAmbiente, UMBRAL_AMB } from './prefs';
-
-/** Lienzo de fondo_continuo.jpg. La foto original (1280×720) está en FOTO; la planta, en PLANTA.
- *  La escala mete la planta entera en el hueco, sin recortarla ni estirarla, y la centra ahí. */
-const LIENZO = { w: 2800, h: 3560 }, FOTO = { x: 760, y: 1040 }, FOTO_TAM = { w: 1280, h: 720 };
-const PLANTA = { x0: 232, x1: 942, y0: 99, y1: 719 };
-
-export function geometriaFondo(hueco: { left: number; top: number; width: number; height: number }, ancla?: { x: number; y: number }) {
-  const pw = PLANTA.x1 - PLANTA.x0, ph = PLANTA.y1 - PLANTA.y0;
-  const s = Math.min(hueco.width / pw, hueco.height / ph);
-  const plantW = pw * s, plantH = ph * s;
-  const ax = ancla?.x ?? hueco.left + hueco.width / 2;
-  const ay = ancla?.y ?? hueco.top + hueco.height / 2;
-  const left = Math.min(Math.max(ax - plantW / 2, hueco.left), hueco.left + hueco.width - plantW);
-  const top = Math.min(Math.max(ay - plantH / 2, hueco.top), hueco.top + hueco.height - plantH);
-  const cx = FOTO.x + (PLANTA.x0 + PLANTA.x1) / 2, cy = FOTO.y + (PLANTA.y0 + PLANTA.y1) / 2;
-  const x = left + plantW / 2 - cx * s, y = top + plantH / 2 - cy * s;
-  const planta = { left: x + (FOTO.x + PLANTA.x0) * s, top: y + (FOTO.y + PLANTA.y0) * s, width: plantW, height: plantH };
-  const foto = { left: x + FOTO.x * s, top: y + FOTO.y * s, width: FOTO_TAM.w * s, height: FOTO_TAM.h * s };
-  return { s, x, y, w: LIENZO.w * s, h: LIENZO.h * s, planta, foto };
-}
-
-/** Hueco real entre cabecera, tarjetas y barra, para centrar la planta en la pantalla y agrandarla. */
-function huecoVisible(fig: DOMRect) {
-  const rect = (sel: string) => document.querySelector(sel)?.getBoundingClientRect();
-  const aire = rect('.zona-aire'), suelo = rect('.zona-suelo');
-  const cab = rect('.cabecera'), nav = rect('nav');
-  const vw = innerWidth, vh = innerHeight;
-  let left = 2, right = vw - 2, top = (cab?.bottom ?? 0) + 4, bottom = (nav?.top ?? vh) - 4;
-  if (aire && suelo && fig.bottom <= Math.min(aire.top, suelo.top) + 10) {
-    bottom = Math.min(bottom, Math.min(aire.top, suelo.top) - 4);
-  } else if (aire && suelo && aire.right < suelo.left - 16) {
-    left = aire.right + 8;
-    right = suelo.left - 8;
-    top = Math.max(top, Math.min(aire.top, suelo.top));
-    bottom = Math.min(bottom, Math.max(aire.bottom, suelo.bottom));
-  } else if (aire && suelo) {
-    top = Math.max(top, aire.bottom + 4);
-    bottom = Math.min(bottom, suelo.top - 4);
-  } else {
-    left = fig.left; right = fig.right; top = fig.top; bottom = fig.bottom;
-  }
-  if (right - left < 48 || bottom - top < 48) {
-    return { left: fig.left, top: fig.top, width: fig.width, height: fig.height };
-  }
-  return { left, top, width: right - left, height: bottom - top };
-}
-
-function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
-  const r = fig.getBoundingClientRect();
-  if (!r.height || !r.width) return;
-  const hueco = huecoVisible(r);
-  const g = geometriaFondo(hueco, { x: innerWidth / 2, y: innerHeight / 2 });
-  capa.style.backgroundImage = `url(${fondo})`;
-  capa.style.backgroundRepeat = 'no-repeat';
-  capa.style.backgroundSize = `${g.w}px ${g.h}px`;
-  capa.style.backgroundPosition = `${g.x}px ${g.y}px`;
-  const redondear = (o: { left: number; top: number; width: number; height: number }) =>
-    [o.left, o.top, o.width, o.height].map(v => Math.round(v)).join(',');
-  capa.dataset.planta = redondear(g.planta);
-  capa.dataset.foto = redondear(g.foto);
-}
 
 /** Indicador tocable: abre la ventana emergente con su historial. */
 /** Máximo y mínimo de hoy con cuánto duró cada nivel, p. ej. "máx 39.0 °C (2 h)" / "mín 18.0 °C (3 h)".
@@ -119,23 +57,6 @@ function Indicador({ def, valor, err, umb, lo, hi, sub, ext, tam = 'normal', alA
 }
 
 
-/** Capa CSS ligera: tinte cálido/frío y haz de sol según aire y piranómetro. No captura clics. */
-function ambienteQuieto(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    || window.matchMedia('(max-width: 699px), (pointer: coarse)').matches;
-}
-
-function CapaAmbiente({ tAire, pir }: { tAire: number | null | undefined; pir: number | null | undefined }) {
-  if (!prefAmbiente.activo() || ambienteQuieto()) return null;
-  const clases = ['capa-ambiente'];
-  if (tAire != null && tAire > UMBRAL_AMB.calor) clases.push('amb-calido');
-  else if (tAire != null && tAire < UMBRAL_AMB.frio) clases.push('amb-frio');
-  if (pir != null && pir >= UMBRAL_AMB.sol) clases.push('amb-sol');
-  if (clases.length === 1) return null; // sin efecto activo
-  return <div className={clases.join(' ')} aria-hidden="true" />;
-}
-
 const sAire = (s: Sensor, c: 't' | 'h', d: number) => (s.ok ? num(s[c], d) : 'err');
 
 /** Avisos de enlace y de bus, los mismos que la lista de Alertas. */
@@ -163,7 +84,6 @@ function AvisosEnlace() {
 export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: boolean }) {
   const [abierto, setAbierto] = useState<DefIndicador | null>(null);
   const cerrar = useCallback(() => setAbierto(null), []);
-  const fig = useRef<HTMLElement>(null), capa = useRef<HTMLDivElement>(null);
   const hay = !!(d?.hay_datos && d.aire && d.pir && d.suelo);
   // extremos del día: se piden al llegar una lectura nueva (cada ~2 min), no en cada refresco de 30 s
   const [dia, setDia] = useState<ResumenDia | null>(null);
@@ -175,23 +95,6 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     return () => { vivo = false; };
   }, [hay, tsUlt]);
   const X = dia?.vars ?? {};
-  useLayoutEffect(() => {
-    if (!hay || !fig.current || !capa.current) return;
-    const f = fig.current, c = capa.current, ajustar = () => alinearFondo(f, c);
-    ajustar();
-    const ro = new ResizeObserver(ajustar);
-    ro.observe(f);
-    const sc = f.closest('.estacion-root');
-    sc?.addEventListener('scroll', ajustar, { passive: true });
-    window.addEventListener('resize', ajustar);
-    window.addEventListener('orientationchange', ajustar);
-    return () => {
-      ro.disconnect();
-      sc?.removeEventListener('scroll', ajustar);
-      window.removeEventListener('resize', ajustar);
-      window.removeEventListener('orientationchange', ajustar);
-    };
-  }, [hay]);
   if (!d) return <section className="vista"><div className="vidrio pie-info">{errorRed ? 'Sin conexión con el servidor' : 'Cargando…'}</div></section>;
   if (!d.hay_datos || !d.aire || !d.pir || !d.suelo) return <section className="vista"><div className="vidrio pie-info">Aún no hay lecturas de este nodo.</div></section>;
   const A = d.ahora, ar = d.aire, U = d.umbrales, su = d.suelo, npk = d.npk;
@@ -204,8 +107,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     <>
     <AvisosEnlace />
     <section id="v-inicio" className="vista">
-      <div ref={capa} className="escena-fondo" aria-hidden="true" />
-      <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
+      <EscenaFondo />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
         <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire</h2>
@@ -220,7 +122,7 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
       </div>
 
       {/* ---------- PLANTA: zona reservada, ninguna tarjeta la cubre */}
-      <figure ref={fig} className="figura-planta" aria-hidden="true" />
+      <figure className="figura-planta" aria-hidden="true" />
 
       {/* ---------- SUELO: en la parte de la tierra, debajo de la planta */}
       <div className="zona zona-suelo" aria-label="Suelo">

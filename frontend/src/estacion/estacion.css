@@ -100,8 +100,18 @@
 .estacion-root .barra i{display:block;height:100%;width:0;border-radius:5px;transition:width .6s}
 .estacion-root .barra i.fuera{background:linear-gradient(90deg,#ff7a1f,#ff4040)!important}
 .estacion-root .figura-planta{margin:0;min-height:0;display:flex;justify-content:center;align-items:stretch;pointer-events:none;user-select:none;-webkit-user-select:none}
-.estacion-root .escena-fondo{position:fixed;inset:0;z-index:-1;background-color:#0d120b;background-repeat:no-repeat;pointer-events:none}
-.estacion-root .escena-fondo::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,15,8,.22),rgba(3,15,8,0) 22%,rgba(3,15,8,0) 75%,rgba(3,10,5,.3))}
+.estacion-root .escena{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none;background:#06140c}
+.estacion-root .escena-relleno{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 1.5s ease}
+.estacion-root .escena-relleno.activa{opacity:1}
+.estacion-root .escena-lienzo{position:absolute;z-index:1;overflow:hidden}
+.estacion-root .fase-capa{position:absolute;inset:0;opacity:0;transition:opacity 1.5s ease}
+.estacion-root .fase-capa.activa{opacity:1}
+.estacion-root .fase-capa picture,.estacion-root .fase-capa img,.estacion-root .fase-capa canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
+.estacion-root .haz{position:absolute;left:calc(var(--hx) * 100%);top:calc(var(--hy) * 100%);width:88%;height:92%;transform-origin:0 0;transform:rotate(var(--rumbo));
+  background:linear-gradient(102deg,rgba(var(--hc),.5),transparent 64%),radial-gradient(ellipse 46% 34% at 0 0,rgba(var(--hc),.82),transparent 70%);
+  mix-blend-mode:screen;pointer-events:none;animation-name:haz-pulso;animation-duration:10s;animation-timing-function:ease-in-out;animation-iteration-count:infinite;will-change:opacity}
+.estacion-root .fase-capa.es-noche .haz{animation-name:haz-luna}
+.estacion-root .escena.sin-anim .haz,.estacion-root .escena.sin-anim canvas{display:none}
 .estacion-root.en-inicio .fondo{background-image:none}
 .estacion-root .zona-suelo{border:1px solid rgba(214,160,98,.26);box-shadow:0 8px 30px rgba(0,0,0,.35);background:rgba(22,13,7,.42);
   backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%)}
@@ -358,48 +368,12 @@
 .estacion-root label.check{display:flex;flex-direction:row;align-items:center;gap:8px;margin:6px 0 8px;color:var(--texto);font-size:.9rem}
 .estacion-root label.check input{width:18px;height:18px;margin:0;flex:none;accent-color:var(--verde2)}
 
-/* ---------- capa de ambiente (Inicio): CSS ligero, bajo las tarjetas */
-.estacion-root .capa-ambiente{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden;contain:strict}
-.estacion-root .capa-ambiente::before,.estacion-root .capa-ambiente::after{content:"";position:absolute;inset:0;opacity:0;transition:opacity 1.1s ease;will-change:opacity,transform}
-.estacion-root .capa-ambiente.amb-calido::before{
-  opacity:1;
-  background:
-    radial-gradient(ellipse 90% 55% at 50% -5%,rgba(255,110,40,.38),transparent 62%),
-    linear-gradient(180deg,rgba(255,70,20,.16),transparent 48%);
-  animation:amb-pulso-calido 4.5s ease-in-out infinite;
-}
-.estacion-root .capa-ambiente.amb-frio::before{
-  opacity:1;
-  background:
-    radial-gradient(ellipse 85% 50% at 50% 0%,rgba(80,170,255,.32),transparent 60%),
-    linear-gradient(180deg,rgba(40,120,220,.14),transparent 50%);
-  animation:amb-pulso-frio 5s ease-in-out infinite;
-}
-.estacion-root .capa-ambiente.amb-sol::after{
-  opacity:1;
-  background:
-    radial-gradient(ellipse 70% 45% at 72% 0%,rgba(255,245,190,.5),transparent 58%),
-    linear-gradient(155deg,rgba(255,236,160,.22) 0%,transparent 42%);
-  transform-origin:72% 0%;
-  animation:amb-haz 5.5s ease-in-out infinite;
-}
-@keyframes amb-pulso-calido{
-  0%,100%{opacity:.72;filter:saturate(1)}
-  50%{opacity:1;filter:saturate(1.15)}
-}
-@keyframes amb-pulso-frio{
-  0%,100%{opacity:.65;filter:saturate(1)}
-  50%{opacity:.95;filter:saturate(1.1)}
-}
-@keyframes amb-haz{
-  0%,100%{opacity:.7;transform:scale(1) rotate(0deg)}
-  50%{opacity:1;transform:scale(1.04) rotate(.4deg)}
-}
+@keyframes haz-pulso{0%,100%{opacity:.38}50%{opacity:.8}}
+@keyframes haz-luna{0%,100%{opacity:.2}50%{opacity:.46}}
 @media (prefers-reduced-motion:reduce){
-  .estacion-root .capa-ambiente::before,.estacion-root .capa-ambiente::after{animation:none!important;opacity:.85}
-}
-@media (max-width:699px),(pointer:coarse){
-  .estacion-root .capa-ambiente::before,.estacion-root .capa-ambiente::after{animation:none!important;filter:none!important}
+  .estacion-root .fase-capa,.estacion-root .escena-relleno{transition:none}
+  .estacion-root .haz{animation:none;opacity:.45}
+  .estacion-root .fase-capa canvas{display:none}
 }
 .estacion-root .lista-cuentas{list-style:none;padding:0;margin:8px 0 0}
 .estacion-root .lista-cuentas li{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--borde)}
