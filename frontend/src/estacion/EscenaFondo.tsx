@@ -180,6 +180,12 @@ export default function EscenaFondo() {
   const fase = useFase();
   const reducido = useReducido();
   const animar = useAnimar() && !reducido;
+  const [oculto, setOculto] = useState(() => typeof document !== 'undefined' && document.hidden);
+  useEffect(() => {
+    const f = () => setOculto(document.hidden);
+    document.addEventListener('visibilitychange', f);
+    return () => document.removeEventListener('visibilitychange', f);
+  }, []);
   const { capas, frente } = useCapas(fase);
   const lienzo = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -212,7 +218,7 @@ export default function EscenaFondo() {
     };
   }, []);
   return (
-    <div className={'escena' + (animar ? '' : ' sin-anim')} data-fase={fase} aria-hidden="true">
+    <div className={'escena' + (animar ? '' : ' sin-anim') + (oculto ? ' en-pausa' : '')} data-fase={fase} aria-hidden="true">
       {capas.map((id, i) => (
         <img key={i} className={'escena-relleno' + (frente === i ? ' activa' : '')} src={FOTOS[id].relleno} alt="" />
       ))}

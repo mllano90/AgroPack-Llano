@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api } from './api';
 import type { Config, Cuenta, Ultimo } from './tipos';
 import { Icono } from './Icono';
@@ -10,6 +10,8 @@ import { prefAmbiente } from './prefs';
 import { fasePreviewGuardada, fijarFasePreview } from './faseReloj';
 import type { FaseId } from './faseDelDia';
 import BarrasEnlace from './Enlace';
+import ModalHistorial from './ModalHistorial';
+import { IND, type DefIndicador } from './indicadores';
 
 function Cuentas() {
   const [lista, setLista] = useState<Cuenta[]>([]);
@@ -54,6 +56,8 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
   const [msg, setMsg] = useState('');
   const [ambiente, setAmbiente] = useState(() => prefAmbiente.activo());
   const [preview, setPreview] = useState<FaseId | ''>(() => fasePreviewGuardada());
+  const [hist, setHist] = useState<DefIndicador | null>(null);
+  const cerrarHist = useCallback(() => setHist(null), []);
   const togAmbiente = () => { const v = !ambiente; prefAmbiente.set(v); setAmbiente(v); };
   const elegirFase = (v: string) => {
     const id = (v || '') as FaseId | '';
@@ -87,25 +91,24 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
       </div>
       <div className="vidrio bloque bloque-caja" aria-label="Interior de la caja">
         <h2>Interior caja</h2>
-        <p className="tenue chico">Sensor de la caja de control. Solo lo ve el administrador; no sale en Inicio.</p>
-        {!hayCaja ? (
-          <p className="tenue">Aún sin lectura de caja{caja?.codigo != null ? ` (código ${caja.codigo})` : ''}.</p>
-        ) : (
-          <div className="caja-vals">
-            <div className={'caja-val' + (caja!.ok ? '' : ' malo')}>
-              <span>Temperatura</span>
-              <b>{caja!.ok ? <>{num(caja!.t, 1)}<small> °C</small></> : (caja!.error || 'Error')}</b>
-            </div>
-            <div className={'caja-val' + (caja!.ok ? '' : ' malo')}>
-              <span>Humedad</span>
-              <b>{caja!.ok ? <>{num(caja!.h, 0)}<small> %</small></> : (caja!.error || 'Error')}</b>
-            </div>
-          </div>
-        )}
+        <p className="tenue chico">Sensor XY-MD01 de la caja. Toca una tarjeta para ver su historial. No sale en Inicio.</p>
+        <div className="caja-vals">
+          <button type="button" className={'caja-val' + (hayCaja && !caja!.ok ? ' malo' : '')}
+            onClick={() => setHist(IND.t_caja)} aria-haspopup="dialog" aria-label="Temperatura de la caja. Ver historial">
+            <span>Temperatura</span>
+            <b>{hayCaja && caja!.ok ? <>{num(caja!.t, 1)}<small> °C</small></> : (hayCaja ? (caja!.error || 'Error') : '—')}</b>
+          </button>
+          <button type="button" className={'caja-val' + (hayCaja && !caja!.ok ? ' malo' : '')}
+            onClick={() => setHist(IND.h_caja)} aria-haspopup="dialog" aria-label="Humedad de la caja. Ver historial">
+            <span>Humedad</span>
+            <b>{hayCaja && caja!.ok ? <>{num(caja!.h, 0)}<small> %</small></> : (hayCaja ? (caja!.error || 'Error') : '—')}</b>
+          </button>
+        </div>
+        {!hayCaja && <p className="tenue chico">Aún sin lectura en vivo{caja?.codigo != null ? ` (código ${caja.codigo})` : ''}. El historial abre las lecturas guardadas.</p>}
       </div>
       <div className="vidrio bloque" aria-label="Ambiente animado">
         <h2>Ambiente en Inicio</h2>
-        <p className="tenue chico">El fondo de Inicio sigue el amanecer y el ocaso de Guaymas: un haz y polvo suave, el mismo momento en la foto. Se apaga con esta casilla o si el teléfono pide menos movimiento. La vista previa dura solo esta sesión.</p>
+        <p className="tenue chico">El fondo de Inicio sigue la hora del sol en Guaymas: noche, amanecer, mañana, mediodía y atardecer. Encima van un haz de luz y partículas (polvo de día, brasas al atardecer, luciérnagas de noche). También se anima en el teléfono. Esta casilla apaga el haz y las partículas; la foto sigue la hora. Si el teléfono pide menos movimiento, o si la app queda en segundo plano, la animación se pausa. La vista previa dura solo esta sesión.</p>
         <label className="check">
           <input type="checkbox" checked={ambiente} onChange={togAmbiente} />
           Animaciones de ambiente {ambiente ? 'activadas' : 'desactivadas'}
@@ -135,6 +138,7 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
       <PruebaEnlace />
       <Mantenimiento />
       <div className="salir"><button className="btn" type="button" onClick={alSalir}><Icono id="salir" />Cerrar sesión</button></div>
+      {hist && <ModalHistorial def={hist} umbral={cfg.umbrales[hist.v]} alCerrar={cerrarHist} />}
     </section>
   );
 }

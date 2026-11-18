@@ -112,6 +112,7 @@
   mix-blend-mode:screen;pointer-events:none;animation-name:haz-pulso;animation-duration:10s;animation-timing-function:ease-in-out;animation-iteration-count:infinite;will-change:opacity}
 .estacion-root .fase-capa.es-noche .haz{animation-name:haz-luna}
 .estacion-root .escena.sin-anim .haz,.estacion-root .escena.sin-anim canvas{display:none}
+.estacion-root .escena.en-pausa .haz{animation-play-state:paused}
 .estacion-root.en-inicio .fondo{background-image:none}
 .estacion-root .zona-suelo{border:1px solid rgba(214,160,98,.26);box-shadow:0 8px 30px rgba(0,0,0,.35);background:rgba(22,13,7,.42);
   backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%)}
@@ -167,7 +168,10 @@
 .estacion-root .mh-pie{margin:8px 0 0;text-align:center;font-size:.72rem;color:var(--tenue)}
 .estacion-root /* ---------- bloques genéricos */
 .bloque{padding:14px;margin-bottom:12px}
-.estacion-root .bloque h2{margin:0 0 10px;font-size:1.15rem}.estacion-root .bloque h3{font-size:1rem;margin:16px 0 8px}
+.estacion-root .bloque h2{margin:0 0 10px;font-size:1.15rem;color:var(--texto);font-weight:600}
+.estacion-root .bloque h2 .ico{color:var(--verde)}
+.estacion-root .bloque h3,.estacion-root .mh-cab h3{color:var(--texto)}
+.estacion-root .bloque h3{font-size:1rem;margin:16px 0 8px}
 .estacion-root label{display:flex;flex-direction:column;gap:4px;font-size:.88rem;margin-bottom:10px;color:var(--tenue)}
 .estacion-root label.inline{flex-direction:row;align-items:center;gap:8px;margin:0}
 .estacion-root input,.estacion-root select{background:rgba(0,0,0,.35);color:var(--texto);border:1px solid var(--borde);border-radius:10px;padding:9px 10px;font-size:1rem;min-width:0}
@@ -361,6 +365,9 @@
 /* ---------- interior caja (Config admin) */
 .estacion-root .bloque-caja .caja-vals{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
 .estacion-root .caja-val{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid rgba(140,255,190,.16)}
+.estacion-root button.caja-val{appearance:none;-webkit-appearance:none;font:inherit;color:inherit;text-align:left;cursor:pointer;width:100%;-webkit-tap-highlight-color:transparent}
+.estacion-root button.caja-val:hover{border-color:rgba(140,255,190,.5)}
+.estacion-root button.caja-val:focus-visible{outline:2px solid var(--verde);outline-offset:2px}
 .estacion-root .caja-val span{font-size:.75rem;color:var(--tenue)}
 .estacion-root .caja-val b{font-size:1.45rem;line-height:1.1}
 .estacion-root .caja-val b small{font-size:.8rem;color:var(--tenue);font-weight:400}
