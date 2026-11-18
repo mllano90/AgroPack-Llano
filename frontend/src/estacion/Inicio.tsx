@@ -75,8 +75,15 @@ function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
  * Móvil (≤480 px): sin unidad (ya está en el valor grande) y, en las tarjetas angostas del suelo (≈65 px útiles),
  * ▲/▼ en lugar de "máx"/"mín"; el título (toque largo / hover) conserva el texto completo con la hora del extremo. */
 function Extremos({ def, e }: { def: DefIndicador; e?: ExtremoDia | null }) {
-  if (!e) return null;
   const u = def.unidad ? ' ' + def.unidad : '';
+  if (!e) {
+    return (
+      <span className="ind-ext" title="Aún sin máximo ni mínimo de hoy">
+        <span className="ext-max"><span className="ext-q">máx </span><span className="ext-f" aria-hidden="true">▲</span>—</span>
+        <span className="ext-min"><span className="ext-q">mín </span><span className="ext-f" aria-hidden="true">▼</span>—</span>
+      </span>
+    );
+  }
   const t = (v: number, ts: number, s: number, q: string) =>
     `${q} de hoy ${num(v, def.dec)}${u} a las ${fHora.format(ts * 1000)}; ${durTxt(s)} cerca de ese nivel (±${num(e.banda, def.dec)}${u})`;
   return (
@@ -230,14 +237,14 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
           <div className="sub-grupo">
             <h3>Salinidad y acidez <span>{npk ? edadTxt(npk.ts, A) : 'NPK aún no medido'}</span></h3>
             <div className="ind-grid c2">
-              <Indicador def={IND.ec} valor={nq('ec')} err={null} umb={U.ec} lo={0} hi={4} alAbrir={abrir} />
-              <Indicador def={IND.ph} valor={nq('ph')} err={null} umb={U.ph} lo={3} hi={10} alAbrir={abrir} />
+              <Indicador def={IND.ec} valor={nq('ec')} err={null} umb={U.ec} lo={0} hi={4} ext={X.ec} alAbrir={abrir} />
+              <Indicador def={IND.ph} valor={nq('ph')} err={null} umb={U.ph} lo={3} hi={10} ext={X.ph} alAbrir={abrir} />
             </div>
           </div>
           <div className="sub-grupo">
             <h3>Nutrientes NPK <span>{npk ? 'mg/kg' : ''}{d.npk_ultimo_fallo && <em className="aviso"> · último muestreo FALLÓ</em>}</span></h3>
             <div className="ind-grid c3">
-              {(['n', 'p', 'k'] as const).map(k => <Indicador key={k} def={IND[k]} valor={nq(k)} err={null} umb={U[k]} tam="mini" alAbrir={abrir} />)}
+              {(['n', 'p', 'k'] as const).map(k => <Indicador key={k} def={IND[k]} valor={nq(k)} err={null} umb={U[k]} ext={X[k]} tam="mini" alAbrir={abrir} />)}
             </div>
           </div>
         </div>

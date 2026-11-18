@@ -454,7 +454,8 @@
   .estacion-root.en-inicio .sub-grupo h3,.estacion-root.en-inicio .pista,
   .estacion-root.en-inicio .ind-cab .ico.ind-graf,.estacion-root.en-inicio .tarjeta-conexion,
   .estacion-root.en-inicio .ind-aire .ind-cab .ico{display:none}
-  .estacion-root.en-inicio .sub-grupos{gap:4px}
+  .estacion-root.en-inicio .sub-grupos{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+  .estacion-root.en-inicio .sub-grupo,.estacion-root.en-inicio .sub-grupo .ind-grid{display:contents}
   .estacion-root.en-inicio .ind-grid{gap:4px}
 }
 @media (max-height:640px) and (orientation:landscape){

@@ -781,7 +781,8 @@ RANGOS = {   # rango: (duración s, paso s, fuente)
 # Historial de la caja interna (XY-MD01). Cualquier usuario de la estación puede leerlas.
 VARS_CAJA = {"t_caja", "h_caja"}
 # Segundos que cuentan como "cerca" del máximo o mínimo del día.
-BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0}
+BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0,
+              "ec": 0.05, "ph": 0.1, "n": 5.0, "p": 5.0, "k": 5.0}
 
 
 def _puntos(cx, nodo, var, desde, hasta, paso, fuente):

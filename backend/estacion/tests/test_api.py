@@ -70,6 +70,25 @@ def test_resumen_del_dia(cliente):
     assert ven.status_code == 200 and ven.json()["rango"] == "ventana" and ven.json()["paso_s"] == 120
 
 
+def test_resumen_dia_incluye_ce_ph_npk(cliente):
+    """CE, pH y NPK usan el mismo resumen del día que el aire y el suelo."""
+    t = int(time.time())
+    ingesta(cliente, [
+        {"csv": csv(1, t - 800, ec=500, ph=55, n=40, p=15, k=70)},
+        {"csv": csv(2, t - 60, ec=1800, ph=72, n=90, p=55, k=130)},
+    ])
+    procesar(cliente, t)
+    login(cliente)
+    vars_ = cliente.get(f"{API}/resumen-dia").json()["vars"]
+    assert vars_["ec"]["min"] == 0.5 and vars_["ec"]["max"] == 1.8
+    assert vars_["ph"]["min"] == 5.5 and vars_["ph"]["max"] == 7.2
+    assert vars_["n"]["min"] == 40 and vars_["n"]["max"] == 90
+    assert vars_["p"]["min"] == 15 and vars_["p"]["max"] == 55
+    assert vars_["k"]["min"] == 70 and vars_["k"]["max"] == 130
+    vacio = cliente.get(f"{API}/resumen-dia?nodo=sin-lecturas").json()["vars"]
+    assert vacio["ec"] is None and vacio["n"] is None
+
+
 def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
     login(cliente)
     malo = [
