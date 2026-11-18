@@ -15,7 +15,7 @@
 .estacion-root main{max-width:1180px;margin:0 auto}
 .estacion-root .cabecera{max-width:1180px;margin:0 auto 10px;display:flex;align-items:center;gap:10px;padding:10px 14px;position:sticky;top:6px;z-index:5;flex-wrap:wrap}
 .estacion-root .cabecera .marca{flex:1;min-width:0;line-height:1.15}
-.estacion-root .cabecera h1{font-size:1.2rem;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
+.estacion-root .cabecera h1{font-size:clamp(.72rem,2.8vw,1.15rem);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em;color:#fff;font-weight:650}
 .estacion-root .marca-nombre{font-size:.78rem;font-weight:400;color:var(--tenue);margin-left:10px;letter-spacing:0}
 .estacion-root .marca-nodo{font-size:.8rem;color:var(--texto);opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .estacion-root .pie-marca{text-align:center;font-size:.7rem;color:var(--tenue);opacity:.75;margin:14px 0 4px}
@@ -416,7 +416,7 @@
     display:flex;flex-direction:column}
   .estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;width:100%;max-width:none;margin:0;display:flex;flex-direction:column;overflow:hidden;gap:4px}
   .estacion-root.en-inicio .cabecera{flex:none;position:static;margin:0;padding:4px 8px;gap:6px;background:rgba(8,18,12,.45)}
-  .estacion-root.en-inicio .cabecera h1{font-size:.95rem}
+  .estacion-root.en-inicio .cabecera h1{font-size:clamp(.68rem,3.5vw,.9rem);color:#fff}
   .estacion-root.en-inicio .marca{flex:1 1 8rem;min-width:42%}
   .estacion-root.en-inicio .marca-nodo{font-size:.68rem}
   .estacion-root.en-inicio .cab-acciones{flex:1 1 auto;flex-basis:auto;min-width:0;justify-content:flex-end;margin-left:auto}
