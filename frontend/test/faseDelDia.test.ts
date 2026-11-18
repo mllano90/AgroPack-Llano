@@ -144,7 +144,11 @@ test('la caja se abre desde Configuración y el texto de ambiente coincide con e
   assert.match(cfg, /setHist\(IND\.h_caja\)/);
   assert.match(cfg, /ModalHistorial/);
   assert.doesNotMatch(cfg, /Tinte cálido|Solo CSS/);
-  assert.match(cfg, /También se anima en el teléfono/);
+  assert.match(cfg, /también se animan en el teléfono/);
+  assert.match(cfg, /todas las pestañas/);
+  const app = readFileSync('src/estacion/EstacionApp.tsx', 'utf8');
+  assert.equal((app.match(/<EscenaFondo/g) || []).length, 1);
+  assert.doesNotMatch(readFileSync('src/estacion/Inicio.tsx', 'utf8'), /EscenaFondo/);
   assert.match(cfg, /segundo plano/);
   assert.match(escena, /document\.hidden/);
   assert.match(escena, /en-pausa/);

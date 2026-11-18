@@ -108,7 +108,7 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
       </div>
       <div className="vidrio bloque" aria-label="Ambiente animado">
         <h2>Ambiente en Inicio</h2>
-        <p className="tenue chico">El fondo de Inicio sigue la hora del sol en Guaymas: noche, amanecer, mañana, mediodía y atardecer. Encima van un haz de luz y partículas (polvo de día, brasas al atardecer, luciérnagas de noche). También se anima en el teléfono. Esta casilla apaga el haz y las partículas; la foto sigue la hora. Si el teléfono pide menos movimiento, o si la app queda en segundo plano, la animación se pausa. La vista previa dura solo esta sesión.</p>
+        <p className="tenue chico">El fondo de la estación sigue la hora del sol en Guaymas en todas las pestañas: noche, amanecer, mañana, mediodía y atardecer. En Inicio, encima van un haz de luz y partículas (polvo de día, brasas al atardecer, luciérnagas de noche); también se animan en el teléfono. Esta casilla apaga el haz y las partículas; la foto sigue la hora. Si el teléfono pide menos movimiento, o si la app queda en segundo plano, la animación se pausa. La vista previa dura solo esta sesión y vale para todas las pestañas.</p>
         <label className="check">
           <input type="checkbox" checked={ambiente} onChange={togAmbiente} />
           Animaciones de ambiente {ambiente ? 'activadas' : 'desactivadas'}

@@ -113,7 +113,11 @@
 .estacion-root .fase-capa.es-noche .haz{animation-name:haz-luna}
 .estacion-root .escena.sin-anim .haz,.estacion-root .escena.sin-anim canvas{display:none}
 .estacion-root .escena.en-pausa .haz{animation-play-state:paused}
-.estacion-root.en-inicio .fondo{background-image:none}
+.estacion-root .escena-lienzo.cubre .fase-capa img{object-fit:cover;object-position:center 42%}
+.estacion-root .escena-velo{position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(180deg,rgba(3,12,8,.62),rgba(3,12,8,.5) 42%,rgba(3,8,6,.68));opacity:1;transition:opacity .45s ease}
+.estacion-root.en-inicio .escena-velo{opacity:0}
+.estacion-root:has(.escena) .fondo{background-image:none}
+.estacion-root:has(.escena) .fondo::after{display:none}
 .estacion-root .zona-suelo{border:1px solid rgba(214,160,98,.26);box-shadow:0 8px 30px rgba(0,0,0,.35);background:rgba(22,13,7,.42);
   backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%)}
 .estacion-root .zona-suelo .ind{background:rgba(10,6,3,.5);border-color:rgba(214,160,98,.22)}

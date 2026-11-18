@@ -5,7 +5,6 @@ import { Icono } from './Icono';
 import { durTxt, edadTxt, fHora, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
 import ModalHistorial from './ModalHistorial';
-import EscenaFondo from './EscenaFondo';
 import { fueraDeRango } from './rango';
 
 /** Indicador tocable: abre la ventana emergente con su historial. */
@@ -107,7 +106,6 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     <>
     <AvisosEnlace />
     <section id="v-inicio" className="vista">
-      <EscenaFondo />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
         <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire</h2>
