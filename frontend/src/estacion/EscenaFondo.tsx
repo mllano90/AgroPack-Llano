@@ -175,11 +175,17 @@ function Capa({ id, activa, animar }: { id: FaseId; activa: boolean; animar: boo
   );
 }
 
-/** Foto, relleno, haz y polvo de una sola fase, en la misma caja que la planta. */
-export default function EscenaFondo() {
+/** Foto de la fase, compartida por toda la estación. El haz y el polvo solo en Inicio. */
+export default function EscenaFondo({ enInicio }: { enInicio: boolean }) {
   const fase = useFase();
   const reducido = useReducido();
-  const animar = useAnimar() && !reducido;
+  const animar = useAnimar() && !reducido && enInicio;
+  const [oculto, setOculto] = useState(() => typeof document !== 'undefined' && document.hidden);
+  useEffect(() => {
+    const f = () => setOculto(document.hidden);
+    document.addEventListener('visibilitychange', f);
+    return () => document.removeEventListener('visibilitychange', f);
+  }, []);
   const { capas, frente } = useCapas(fase);
   const lienzo = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -188,37 +194,68 @@ export default function EscenaFondo() {
     return () => { img.src = ''; };
   }, [fase]);
   useEffect(() => {
-    const fig = document.querySelector('.figura-planta');
     const caja = lienzo.current;
-    if (!(fig instanceof HTMLElement) || !caja) return;
-    const ajustar = () => alinear(fig, caja);
-    ajustar();
-    const ro = new ResizeObserver(ajustar);
-    ro.observe(fig);
-    const sc = fig.closest('.estacion-root');
+    if (!caja) return;
+    if (!enInicio) {
+      const cubrir = () => {
+        caja.style.left = '0';
+        caja.style.top = '0';
+        caja.style.width = '100%';
+        caja.style.height = '100%';
+        caja.style.maskImage = '';
+        caja.style.setProperty('-webkit-mask-image', '');
+      };
+      cubrir();
+      window.addEventListener('resize', cubrir);
+      window.addEventListener('orientationchange', cubrir);
+      return () => {
+        window.removeEventListener('resize', cubrir);
+        window.removeEventListener('orientationchange', cubrir);
+      };
+    }
+    let vivo = true;
+    let ro: ResizeObserver | undefined;
+    let fig: HTMLElement | null = null;
+    const sc = caja.closest('.estacion-root');
+    const vv = window.visualViewport;
+    const ajustar = () => { if (fig) alinear(fig, caja); };
+    const enganchar = () => {
+      if (!vivo) return;
+      const el = document.querySelector('.figura-planta');
+      if (!(el instanceof HTMLElement) || !el.getBoundingClientRect().height) {
+        requestAnimationFrame(enganchar);
+        return;
+      }
+      fig = el;
+      ajustar();
+      ro = new ResizeObserver(ajustar);
+      ro.observe(fig);
+    };
+    enganchar();
     sc?.addEventListener('scroll', ajustar, { passive: true });
     window.addEventListener('resize', ajustar);
     window.addEventListener('orientationchange', ajustar);
-    const vv = window.visualViewport;
     vv?.addEventListener('resize', ajustar);
     vv?.addEventListener('scroll', ajustar);
     return () => {
-      ro.disconnect();
+      vivo = false;
+      ro?.disconnect();
       sc?.removeEventListener('scroll', ajustar);
       window.removeEventListener('resize', ajustar);
       window.removeEventListener('orientationchange', ajustar);
       vv?.removeEventListener('resize', ajustar);
       vv?.removeEventListener('scroll', ajustar);
     };
-  }, []);
+  }, [enInicio]);
   return (
-    <div className={'escena' + (animar ? '' : ' sin-anim')} data-fase={fase} aria-hidden="true">
+    <div className={'escena' + (animar ? '' : ' sin-anim') + (oculto ? ' en-pausa' : '')} data-fase={fase} aria-hidden="true">
       {capas.map((id, i) => (
         <img key={i} className={'escena-relleno' + (frente === i ? ' activa' : '')} src={FOTOS[id].relleno} alt="" />
       ))}
-      <div ref={lienzo} className="escena-lienzo">
+      <div ref={lienzo} className={'escena-lienzo' + (enInicio ? '' : ' cubre')}>
         {capas.map((id, i) => <Capa key={i + '-' + id} id={id} activa={frente === i} animar={animar} />)}
       </div>
+      <div className="escena-velo" />
     </div>
   );
 }

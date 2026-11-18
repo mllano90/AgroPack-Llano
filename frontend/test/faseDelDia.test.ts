@@ -136,6 +136,27 @@ test('el polvo sigue dentro de la foto y un hueco no lo dispara', () => {
   assert.equal(crearParticulas('luciernaga', 18, () => 0.2).length, 18);
 });
 
+test('la caja se abre desde Configuración y el texto de ambiente coincide con el código', () => {
+  const cfg = readFileSync('src/estacion/ConfigNodo.tsx', 'utf8');
+  const escena = readFileSync('src/estacion/EscenaFondo.tsx', 'utf8');
+  const hist = readFileSync('src/estacion/Historial.tsx', 'utf8');
+  assert.match(cfg, /setHist\(IND\.t_caja\)/);
+  assert.match(cfg, /setHist\(IND\.h_caja\)/);
+  assert.match(cfg, /ModalHistorial/);
+  assert.doesNotMatch(cfg, /Tinte cálido|Solo CSS/);
+  assert.match(cfg, /también se animan en el teléfono/);
+  assert.match(cfg, /todas las pestañas/);
+  const app = readFileSync('src/estacion/EstacionApp.tsx', 'utf8');
+  assert.equal((app.match(/<EscenaFondo/g) || []).length, 1);
+  assert.doesNotMatch(readFileSync('src/estacion/Inicio.tsx', 'utf8'), /EscenaFondo/);
+  assert.match(cfg, /segundo plano/);
+  assert.match(escena, /document\.hidden/);
+  assert.match(escena, /en-pausa/);
+  assert.match(hist, /t_caja/);
+  assert.match(hist, /h_caja/);
+  assert.doesNotMatch(readFileSync('src/estacion/Inicio.tsx', 'utf8'), /IND\.t_caja|IND\.h_caja/);
+});
+
 test('la escena usa una ficha y apaga el bucle al desmontarse', () => {
   const src = readFileSync('src/estacion/EscenaFondo.tsx', 'utf8');
   const inicio = readFileSync('src/estacion/Inicio.tsx', 'utf8');

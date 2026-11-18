@@ -13,6 +13,7 @@ import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, MARCA_TITULO, NODO_POR_DEFECTO } from
 import { leyendaLectura } from './formato';
 import Instalar from './Instalar';
 import { ensancharLienzo, montarMetaPWA, registrarWorkerEstacion } from './pwa';
+import EscenaFondo from './EscenaFondo';
 
 type Vista = 'inicio' | 'historial' | 'rangos' | 'nodo' | 'alertas';
 type Rol = 'admin' | 'normal';
@@ -87,7 +88,7 @@ export default function EstacionApp() {
   return (
     <div className={'estacion-root' + (vistaOk === 'inicio' ? ' en-inicio' : '')}>
       <SpriteIconos />
-      <div className="fondo" />
+      <EscenaFondo enInicio={vistaOk === 'inicio'} />
       <header className="vidrio cabecera">
         <Icono id="hoja" className="ico hoja" />
         <div className="marca">
