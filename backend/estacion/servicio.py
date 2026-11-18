@@ -792,7 +792,16 @@ HUECO_EXTREMO_S = {
     "t_suelo": _HUECO_SUELO_S, "h_suelo": _HUECO_SUELO_S,
     "ec": _HUECO_NPK_S, "ph": _HUECO_NPK_S, "n": _HUECO_NPK_S, "p": _HUECO_NPK_S, "k": _HUECO_NPK_S,
 }
-# Misma precisión que la tarjeta (indicadores.ts).
+_MUESTRA_RAPIDA_S = 5 * 60      # aire, radiación, caja
+_MUESTRA_SUELO_S = 6 * 60
+_MUESTRA_NPK_S = 30 * 60
+MUESTRA_EXTREMO_S = {
+    "t_aire": _MUESTRA_RAPIDA_S, "h_aire": _MUESTRA_RAPIDA_S, "pir": _MUESTRA_RAPIDA_S,
+    "t1": _MUESTRA_RAPIDA_S, "t2": _MUESTRA_RAPIDA_S, "h1": _MUESTRA_RAPIDA_S, "h2": _MUESTRA_RAPIDA_S,
+    "t_caja": _MUESTRA_RAPIDA_S, "h_caja": _MUESTRA_RAPIDA_S, "rssi": _MUESTRA_RAPIDA_S, "snr": _MUESTRA_RAPIDA_S,
+    "t_suelo": _MUESTRA_SUELO_S, "h_suelo": _MUESTRA_SUELO_S,
+    "ec": _MUESTRA_NPK_S, "ph": _MUESTRA_NPK_S, "n": _MUESTRA_NPK_S, "p": _MUESTRA_NPK_S, "k": _MUESTRA_NPK_S,
+}
 DECIMALES_VISTA = {
     "t_aire": 1, "h_aire": 0, "pir": 0, "t1": 1, "t2": 1, "h1": 0, "h2": 0,
     "t_caja": 1, "h_caja": 0, "t_suelo": 1, "h_suelo": 0,
@@ -823,12 +832,12 @@ def redondear_vista(valor: float, decimales: int) -> float:
     return float(format(float(valor), f".{decimales}f"))
 
 
-def segundos_en_extremo(puntos, decimales: int, hueco_max_s: int) -> dict | None:
+def segundos_en_extremo(puntos, decimales: int, hueco_max_s: int, muestra_s: int) -> dict | None:
     """Min y máx del periodo a la precisión de la tarjeta, y cuántos segundos se sostuvieron.
 
-    El tramo entre una lectura y la siguiente se atribuye a la primera, solo si cabe
-    en hueco_max_s. Un silencio más largo no cuenta como tiempo en ese nivel.
-    La última lectura no abre un tramo: no hay lectura siguiente.
+    El tramo hasta la lectura siguiente cuenta si cabe en el ciclo (hueco_max_s).
+    Si no hay siguiente, o el silencio es más largo que el ciclo, esa lectura cuenta
+    como un intervalo de muestreo (muestra_s): nunca queda en 0 si hubo una lectura.
     """
     limpios = [(int(t), float(v)) for t, v in puntos if t is not None and v is not None]
     if not limpios:
@@ -838,14 +847,17 @@ def segundos_en_extremo(puntos, decimales: int, hueco_max_s: int) -> dict | None
     valores = [v for _, v in vistos]
     vmax, vmin = max(valores), min(valores)
     s_max = s_min = 0
-    for i in range(len(vistos) - 1):
-        dt = vistos[i + 1][0] - vistos[i][0]
-        if dt <= 0 or dt > hueco_max_s:
-            continue
-        if vistos[i][1] == vmax:
-            s_max += dt
-        if vistos[i][1] == vmin:
-            s_min += dt
+    ultimo = len(vistos) - 1
+    for i, (_ts, valor) in enumerate(vistos):
+        if i < ultimo:
+            dt = vistos[i + 1][0] - vistos[i][0]
+            credito = dt if 0 < dt <= hueco_max_s else muestra_s
+        else:
+            credito = muestra_s
+        if valor == vmax:
+            s_max += credito
+        if valor == vmin:
+            s_min += credito
     return {"min": vmin, "max": vmax, "min_s": s_min, "max_s": s_max,
             "min_min": int(round(s_min / 60)), "max_min": int(round(s_max / 60))}
 
@@ -861,7 +873,8 @@ def _lecturas_crudas(cx, nodo, var, desde, hasta):
 def _extremo_periodo(cx, nodo, var, desde, hasta):
     return segundos_en_extremo(
         _lecturas_crudas(cx, nodo, var, desde, hasta),
-        DECIMALES_VISTA.get(var, 1), HUECO_EXTREMO_S.get(var, _HUECO_RAPIDO_S))
+        DECIMALES_VISTA.get(var, 1), HUECO_EXTREMO_S.get(var, _HUECO_RAPIDO_S),
+        MUESTRA_EXTREMO_S.get(var, _MUESTRA_RAPIDA_S))
 
 
 def historial(cx, nodo, var, rango, t=None):
