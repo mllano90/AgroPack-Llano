@@ -780,7 +780,24 @@ RANGOS = {   # rango: (duración s, paso s, fuente)
 }
 # Historial de la caja interna (XY-MD01). Cualquier usuario de la estación puede leerlas.
 VARS_CAJA = {"t_caja", "h_caja"}
-# Segundos que cuentan como "cerca" del máximo o mínimo del día.
+# Segundos máximos entre dos lecturas seguidas que aún cuentan como “se mantuvo”.
+# Un hueco mayor (emisora callada, ciclo sin muestra) no suma tiempo.
+_HUECO_RAPIDO_S = 10 * 60     # aire, radiación, caja: paquete ~2 min
+_HUECO_SUELO_S = 25 * 60      # T/H de suelo: muestra nueva ~6–12 min
+_HUECO_NPK_S = 75 * 60        # CE, pH y NPK: un ciclo ~30 min
+HUECO_EXTREMO_S = {
+    "t_aire": _HUECO_RAPIDO_S, "h_aire": _HUECO_RAPIDO_S, "pir": _HUECO_RAPIDO_S,
+    "t1": _HUECO_RAPIDO_S, "t2": _HUECO_RAPIDO_S, "h1": _HUECO_RAPIDO_S, "h2": _HUECO_RAPIDO_S,
+    "t_caja": _HUECO_RAPIDO_S, "h_caja": _HUECO_RAPIDO_S, "rssi": _HUECO_RAPIDO_S, "snr": _HUECO_RAPIDO_S,
+    "t_suelo": _HUECO_SUELO_S, "h_suelo": _HUECO_SUELO_S,
+    "ec": _HUECO_NPK_S, "ph": _HUECO_NPK_S, "n": _HUECO_NPK_S, "p": _HUECO_NPK_S, "k": _HUECO_NPK_S,
+}
+# Misma precisión que la tarjeta (indicadores.ts).
+DECIMALES_VISTA = {
+    "t_aire": 1, "h_aire": 0, "pir": 0, "t1": 1, "t2": 1, "h1": 0, "h2": 0,
+    "t_caja": 1, "h_caja": 0, "t_suelo": 1, "h_suelo": 0,
+    "ec": 2, "ph": 1, "n": 0, "p": 0, "k": 0, "rssi": 0, "snr": 1,
+}
 BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0,
               "ec": 0.05, "ph": 0.1, "n": 5.0, "p": 5.0, "k": 5.0}
 
@@ -801,6 +818,52 @@ def _puntos(cx, nodo, var, desde, hasta, paso, fuente):
              "n": int(f["n"])} for f in filas]
 
 
+def redondear_vista(valor: float, decimales: int) -> float:
+    """Misma cifra que muestra la tarjeta (toFixed)."""
+    return float(format(float(valor), f".{decimales}f"))
+
+
+def segundos_en_extremo(puntos, decimales: int, hueco_max_s: int) -> dict | None:
+    """Min y máx del periodo a la precisión de la tarjeta, y cuántos segundos se sostuvieron.
+
+    El tramo entre una lectura y la siguiente se atribuye a la primera, solo si cabe
+    en hueco_max_s. Un silencio más largo no cuenta como tiempo en ese nivel.
+    La última lectura no abre un tramo: no hay lectura siguiente.
+    """
+    limpios = [(int(t), float(v)) for t, v in puntos if t is not None and v is not None]
+    if not limpios:
+        return None
+    limpios.sort(key=lambda p: p[0])
+    vistos = [(t, redondear_vista(v, decimales)) for t, v in limpios]
+    valores = [v for _, v in vistos]
+    vmax, vmin = max(valores), min(valores)
+    s_max = s_min = 0
+    for i in range(len(vistos) - 1):
+        dt = vistos[i + 1][0] - vistos[i][0]
+        if dt <= 0 or dt > hueco_max_s:
+            continue
+        if vistos[i][1] == vmax:
+            s_max += dt
+        if vistos[i][1] == vmin:
+            s_min += dt
+    return {"min": vmin, "max": vmax, "min_s": s_min, "max_s": s_max,
+            "min_min": int(round(s_min / 60)), "max_min": int(round(s_max / 60))}
+
+
+def _lecturas_crudas(cx, nodo, var, desde, hasta):
+    expr, tcol, filtro = VARS_HIST[var]
+    filas = cx.todos(
+        f"SELECT {tcol} AS t, ({expr}) AS v FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? "
+        f"AND ({expr}) IS NOT NULL {filtro} ORDER BY {tcol}", (nodo, desde, hasta))
+    return [(f["t"], f["v"]) for f in filas if f["t"] is not None and f["v"] is not None]
+
+
+def _extremo_periodo(cx, nodo, var, desde, hasta):
+    return segundos_en_extremo(
+        _lecturas_crudas(cx, nodo, var, desde, hasta),
+        DECIMALES_VISTA.get(var, 1), HUECO_EXTREMO_S.get(var, _HUECO_RAPIDO_S))
+
+
 def historial(cx, nodo, var, rango, t=None):
     t = t or ahora()
     if var not in VARS_HIST or rango not in RANGOS:
@@ -808,7 +871,8 @@ def historial(cx, nodo, var, rango, t=None):
     dur, paso, fuente = RANGOS[rango]
     desde = t - dur
     return {"var": var, "rango": rango, "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": t,
-            "puntos": _puntos(cx, nodo, var, desde, t, paso, fuente)}
+            "puntos": _puntos(cx, nodo, var, desde, t, paso, fuente),
+            "extremo": _extremo_periodo(cx, nodo, var, desde, t)}
 
 
 def historial_ventana(cx, nodo, var, desde, hasta, t=None):
@@ -823,7 +887,8 @@ def historial_ventana(cx, nodo, var, desde, hasta, t=None):
     else:
         paso, fuente = 3600, "hora"
     return {"var": var, "rango": "ventana", "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": hasta,
-            "puntos": _puntos(cx, nodo, var, desde, hasta, paso, fuente)}
+            "puntos": _puntos(cx, nodo, var, desde, hasta, paso, fuente),
+            "extremo": _extremo_periodo(cx, nodo, var, desde, hasta)}
 
 
 def _inicio_dia_hmo(t):

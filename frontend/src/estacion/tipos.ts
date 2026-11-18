@@ -13,7 +13,8 @@ export interface Ultimo {
   npk_ultimo_fallo?: boolean; fase?: { fase: number; min: number; tot: number };
 }
 export interface Punto { t: number; prom: number; min: number; max: number; n: number }
-export interface Historial { var: string; rango: string; paso_s: number; fuente: string; desde: number; hasta: number; puntos: Punto[] }
+export interface ExtremoPeriodo { min: number; max: number; min_s: number; max_s: number; min_min: number; max_min: number }
+export interface Historial { var: string; rango: string; paso_s: number; fuente: string; desde: number; hasta: number; puntos: Punto[]; extremo?: ExtremoPeriodo | null }
 export interface Config {
   nombre_nodo: string; sin_datos_min: number; offline_min: number; bateria_min_v: number;
   rango_banda?: boolean;

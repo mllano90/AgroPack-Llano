@@ -149,6 +149,8 @@
 .estacion-root .mh-stats b{font-size:1.3rem;white-space:nowrap}
 .estacion-root .mh-stats b small{font-size:.75rem;color:var(--tenue);font-weight:400}
 .estacion-root .mh-stats .st-min b{color:#69c8ff}.estacion-root .mh-stats .st-prom b{color:var(--verde)}.estacion-root .mh-stats .st-max b{color:var(--ambar)}
+.estacion-root .mh-permanencia{margin:8px 0 0;text-align:center;font-size:.92rem;line-height:1.4;color:var(--texto)}
+.estacion-root .mh-permanencia b{font-weight:650}
 .estacion-root .grafica.mh-grafica{height:min(42vh,340px);min-height:200px;margin-top:34px}
 .estacion-root .mh-vacio{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--tenue);
   border:1px dashed var(--borde);border-radius:12px;padding:12px}
@@ -447,8 +449,8 @@
   .estacion-root.en-inicio .zona-suelo .ind-cab{font-size:.64rem}
   .estacion-root.en-inicio .zona-suelo .ind-valor b{font-size:clamp(.85rem,3.8vw,1.1rem);line-height:1.05}
   .estacion-root.en-inicio .ind-cuerpo{flex-wrap:nowrap;align-items:center;gap:2px 4px}
-  .estacion-root.en-inicio .ind-valor{flex:0 1 auto}
-  .estacion-root.en-inicio .ind-ext{display:flex;flex:0 1 auto;min-width:0;max-width:none;font-size:.55rem;line-height:1.15;gap:0}
+  .estacion-root.en-inicio .ind-valor{flex:1 1 auto;min-width:0}
+  .estacion-root.en-inicio .ind-ext{display:flex;flex:0 0 auto;min-width:0;max-width:none;font-size:.68rem;line-height:1.15;gap:0}
   .estacion-root.en-inicio .ind-ext>span{white-space:nowrap}
   .estacion-root.en-inicio .ind-sub,.estacion-root.en-inicio .barra,
   .estacion-root.en-inicio .sub-grupo h3,.estacion-root.en-inicio .pista,

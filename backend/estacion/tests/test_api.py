@@ -89,6 +89,31 @@ def test_resumen_dia_incluye_ce_ph_npk(cliente):
     assert vacio["ec"] is None and vacio["n"] is None
 
 
+def test_duracion_en_el_extremo_del_periodo(cliente):
+    """El tiempo en el máx/mín usa la precisión de la tarjeta y no cuenta un hueco largo."""
+    from estacion.servicio import segundos_en_extremo
+    puntos = [(0, 20.0), (120, 32.4), (240, 32.36), (240 + 7200, 18.1), (240 + 7200 + 120, 18.14)]
+    r = segundos_en_extremo(puntos, 1, 600)
+    assert r["max"] == 32.4 and r["min"] == 18.1
+    assert r["max_s"] == 120 and r["max_min"] == 2
+    assert r["min_s"] == 120 and r["min_min"] == 2
+    medio = segundos_en_extremo([(0, 32.44), (60, 32.45), (120, 10.0)], 1, 600)
+    assert medio["max"] == 32.5 and medio["max_s"] == 60
+    assert segundos_en_extremo([], 1, 600) is None
+    solo = segundos_en_extremo([(0, 5.0)], 0, 600)
+    assert solo["max"] == solo["min"] == 5 and solo["max_s"] == solo["min_s"] == 0
+    t = int(time.time())
+    ingesta(cliente, [
+        {"csv": csv(1, t - 360, t1=200, t2=200)},
+        {"csv": csv(2, t - 240, t1=324, t2=324)},
+        {"csv": csv(3, t - 120, t1=324, t2=324)},
+    ])
+    login(cliente)
+    ext = cliente.get(f"{API}/historial?var=t_aire&rango=8h").json()["extremo"]
+    assert ext["max"] == 32.4 and ext["min"] == 20.0
+    assert ext["max_min"] == 2 and ext["max_s"] == 120
+
+
 def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
     login(cliente)
     malo = [
