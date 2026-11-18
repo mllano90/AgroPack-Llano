@@ -6,7 +6,9 @@ import { num } from './formato';
 import Mantenimiento from './Mantenimiento';
 import RedWifi from './RedWifi';
 import PruebaEnlace from './PruebaEnlace';
-import { prefAmbiente, UMBRAL_AMB } from './prefs';
+import { prefAmbiente } from './prefs';
+import { fasePreviewGuardada, fijarFasePreview } from './faseReloj';
+import type { FaseId } from './faseDelDia';
 import BarrasEnlace from './Enlace';
 
 function Cuentas() {
@@ -51,7 +53,13 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [msg, setMsg] = useState('');
   const [ambiente, setAmbiente] = useState(() => prefAmbiente.activo());
+  const [preview, setPreview] = useState<FaseId | ''>(() => fasePreviewGuardada());
   const togAmbiente = () => { const v = !ambiente; prefAmbiente.set(v); setAmbiente(v); };
+  const elegirFase = (v: string) => {
+    const id = (v || '') as FaseId | '';
+    setPreview(id);
+    fijarFasePreview(id);
+  };
   useEffect(() => { api.config().then(setCfg).catch(e => setMsg(e.message)); }, []);
   if (!cfg) return <section className="vista"><div className="vidrio bloque">{msg || 'Cargando…'}</div></section>;
   const guardar = async (e: FormEvent) => {
@@ -97,10 +105,20 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
       </div>
       <div className="vidrio bloque" aria-label="Ambiente animado">
         <h2>Ambiente en Inicio</h2>
-        <p className="tenue chico">Tinte cálido por encima de {UMBRAL_AMB.calor} °C, frío por debajo de {UMBRAL_AMB.frio} °C y más brillo si la radiación pasa de {UMBRAL_AMB.sol} W/m². Solo CSS. En el móvil y con movimiento reducido queda quieto. Se guarda en este navegador.</p>
+        <p className="tenue chico">El fondo de Inicio sigue el amanecer y el ocaso de Guaymas: un haz y polvo suave, el mismo momento en la foto. Se apaga con esta casilla o si el teléfono pide menos movimiento. La vista previa dura solo esta sesión.</p>
         <label className="check">
           <input type="checkbox" checked={ambiente} onChange={togAmbiente} />
           Animaciones de ambiente {ambiente ? 'activadas' : 'desactivadas'}
+        </label>
+        <label>Vista previa del fondo
+          <select value={preview} onChange={e => elegirFase(e.target.value)}>
+            <option value="">Según el sol (Guaymas)</option>
+            <option value="noche">Noche</option>
+            <option value="amanecer">Amanecer</option>
+            <option value="manana">Mañana</option>
+            <option value="mediodia">Mediodía y tarde</option>
+            <option value="atardecer">Atardecer</option>
+          </select>
         </label>
       </div>
       <form className="vidrio bloque" onSubmit={guardar}>
