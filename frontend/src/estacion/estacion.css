@@ -145,8 +145,9 @@
 .estacion-root .graf-barra{display:flex;justify-content:space-between;align-items:center;gap:8px;margin:6px 0 4px;font-size:.72rem;color:var(--tenue)}
 .estacion-root .graf-ayuda{min-width:0}
 .estacion-root .btn.mini{padding:5px 10px;font-size:.78rem;border-radius:10px;flex:none}
-.estacion-root .grafica-lienzo{position:relative;height:52vh;min-height:240px;max-height:460px;touch-action:none}
-.estacion-root .grafica-lienzo canvas{touch-action:none;cursor:grab}
+.estacion-root .grafica-lienzo{position:relative;height:52vh;min-height:240px;max-height:460px}
+.estacion-root .grafica-lienzo canvas{cursor:default}
+.estacion-root .graf-toque{position:absolute;z-index:2;touch-action:pan-y;cursor:grab}
 .estacion-root .graf-controles{display:flex;gap:4px;flex:none}
 .estacion-root .graf-controles .btn.mini{min-width:2rem;padding:4px 8px}
 .estacion-root .graf-mira{position:absolute;top:0;left:0;width:0;z-index:3;pointer-events:none}

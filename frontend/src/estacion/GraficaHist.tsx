@@ -7,13 +7,15 @@ import { anotacionesRango, ejeConRango } from './rango';
 import { fDia, fFecha, fHora } from './formato';
 import { huecoMs } from './cadencia';
 import { lecturaEnCursor, limitesPaneo, type Muestra } from './lecturaMira';
+import { decidirGesto, razonPellizcoVertical } from './gestosGrafica';
 
 Chart.register(zoomPlugin);
 
 export interface Serie { v: string; nombre: string; color: string }
 
 type GraficaZoom = Chart & {
-  zoom: (amount: { x?: number; y?: number }, transition?: string) => void;
+  pan: (delta: { x?: number; y?: number }, enabled?: unknown, transition?: string) => void;
+  zoom: (amount: { x?: number; y?: number; focalPoint?: { x: number; y: number } }, transition?: string) => void;
   zoomScale: (id: string, range: { min: number; max: number }, transition?: string) => void;
 };
 
@@ -23,9 +25,10 @@ const SIN_SERIES: Serie[] = [];
 const SIN_DATOS: H[] = [];
 
 /**
- * Historial: un dedo (o el mouse) desplaza el tiempo bajo una línea fija al centro.
- * El pellizco vertical, Shift+rueda y los botones +/− escalan solo el eje de valores.
- * El pellizco horizontal no cambia el tiempo. La exportación PDF/PNG no usa este componente.
+ * Historial: dentro del área de trazado, un dedo horizontal mueve el tiempo bajo la línea.
+ * Un dedo vertical deja pasar el scroll de la página. El pellizco vertical (dos dedos),
+ * Shift+rueda y los botones +/− escalan solo los valores. Fuera del trazado, la página se comporta normal.
+ * La exportación PDF/PNG no usa este componente.
  */
 export default function GraficaHist({ principal, extras = SIN_SERIES, datos, datosExtras = SIN_DATOS, unidad, dec, banda, umbral = null,
   rangoBanda = true, className = '' }: {
@@ -33,6 +36,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
   umbral?: Umbral | null; rangoBanda?: boolean; className?: string;
 }) {
   const lienzo = useRef<HTMLCanvasElement>(null);
+  const toque = useRef<HTMLDivElement>(null);
   const mira = useRef<HTMLDivElement>(null);
   const etiqueta = useRef<HTMLDivElement>(null);
   const grafica = useRef<GraficaZoom | null>(null);
@@ -88,6 +92,13 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
       const t = crudo;
       caja.style.transform = `translate(${cx}px, ${area.top}px)`;
       caja.style.height = `${area.bottom - area.top}px`;
+      const zona = toque.current;
+      if (zona) {
+        zona.style.left = `${area.left}px`;
+        zona.style.top = `${area.top}px`;
+        zona.style.width = `${area.width}px`;
+        zona.style.height = `${area.height}px`;
+      }
       const lecturas = metas.map(m => ({ ...m, lec: lecturaEnCursor(m.pts, t, hueco(m.v, datos.paso_s)) }));
       const conDato = lecturas.find(l => l.lec.hay);
       const cuando = fFecha.format((conDato && conDato.lec.hay ? conDato.lec.t : t));
@@ -151,13 +162,18 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
           tooltip: { enabled: false },
           zoom: {
             limits: { x: { min: pan.min, max: pan.max, minRange: pan.ancho * 0.98 }, y: yLim },
-            pan: { enabled: true, mode: 'x', threshold: 4 },
+            pan: { enabled: false },
             zoom: {
               mode: 'y',
               wheel: { enabled: true, modifierKey: 'shift', speed: 0.12 },
-              pinch: { enabled: true },
+              pinch: { enabled: false },
               drag: { enabled: false },
-              onZoomComplete: ({ chart }) => marcarZoom(chart),
+              onZoomStart: (ctx: { chart: Chart; point: { x: number | null; y: number | null } }) => {
+                const a = ctx.chart.chartArea;
+                const p = ctx.point;
+                if (p.x == null || p.y == null || p.x < a.left || p.x > a.right || p.y < a.top || p.y > a.bottom) return false;
+              },
+              onZoomComplete: ({ chart }: { chart: Chart }) => marcarZoom(chart),
             },
           },
         },
@@ -177,24 +193,91 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
       grafica.current.zoomScale('y', { min: base.min, max: base.max }, 'none');
       setYZoom(false);
     };
-    let toque = 0, tx = 0, ty = 0;
+    let toqueEn = 0, tx = 0, ty = 0;
     const doble = (x: number, y: number) => {
       const ahora = performance.now();
-      if (ahora - toque < 320 && Math.hypot(x - tx, y - ty) < 28) { restablecerY.current(); toque = 0; }
-      else { toque = ahora; tx = x; ty = y; }
+      if (ahora - toqueEn < 320 && Math.hypot(x - tx, y - ty) < 28) { restablecerY.current(); toqueEn = 0; }
+      else { toqueEn = ahora; tx = x; ty = y; }
     };
-    const alDoble = (e: MouseEvent) => { e.preventDefault(); restablecerY.current(); };
-    const alToque = (e: TouchEvent) => {
-      if (e.touches.length) return;
+    const zona = toque.current;
+    let modo: 'esperar' | 'horizontal' | 'vertical' | 'pellizco' = 'esperar';
+    let ox = 0, oy = 0, ultimoX = 0;
+    let sepY = 0;
+    const alInicio = (e: TouchEvent) => {
+      if (e.touches.length >= 2) { modo = 'pellizco'; sepY = Math.abs(e.touches[0].clientY - e.touches[1].clientY); return; }
+      modo = 'esperar';
+      ox = e.touches[0].clientX; oy = e.touches[0].clientY; ultimoX = ox;
+    };
+    const alMover = (e: TouchEvent) => {
+      const chz = grafica.current;
+      if (!chz) return;
+      if (e.touches.length >= 2) {
+        const dx = e.touches[0].clientX - e.touches[1].clientX;
+        const dy = e.touches[0].clientY - e.touches[1].clientY;
+        const razon = razonPellizcoVertical(dx, dy, sepY);
+        sepY = Math.abs(dy);
+        if (razon == null) return;
+        if (e.cancelable) e.preventDefault();
+        const rect = canvas.getBoundingClientRect();
+        chz.zoom({
+          y: razon,
+          focalPoint: {
+            x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left,
+            y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top,
+          },
+        }, 'none');
+        marcarZoom(chz);
+        return;
+      }
+      if (modo === 'vertical' || modo === 'pellizco') return;
+      const x = e.touches[0].clientX, y = e.touches[0].clientY;
+      if (modo === 'esperar') {
+        const decision = decidirGesto(x - ox, y - oy);
+        if (decision === 'esperar') return;
+        modo = decision;
+        if (modo === 'vertical') return;
+      }
+      if (e.cancelable) e.preventDefault();
+      chz.pan({ x: x - ultimoX }, undefined, 'none');
+      ultimoX = x;
+    };
+    const alFin = (e: TouchEvent) => {
+      if (e.touches.length >= 2) return;
+      if (e.touches.length === 1) { modo = 'esperar'; ultimoX = e.touches[0].clientX; return; }
       const c = e.changedTouches[0];
-      if (c) doble(c.clientX, c.clientY);
+      if (c && modo !== 'horizontal') doble(c.clientX, c.clientY);
+      modo = 'esperar';
     };
-    canvas.addEventListener('dblclick', alDoble);
-    canvas.addEventListener('touchend', alToque);
+    let arrastre = false, ratonX = 0;
+    const alRatonAbajo = (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      arrastre = true; ratonX = e.clientX;
+    };
+    const alRatonMover = (e: MouseEvent) => {
+      if (!arrastre || !grafica.current) return;
+      grafica.current.pan({ x: e.clientX - ratonX }, undefined, 'none');
+      ratonX = e.clientX;
+    };
+    const alRatonSoltar = () => { arrastre = false; };
+    const alDobleRaton = (e: MouseEvent) => { e.preventDefault(); restablecerY.current(); };
+    zona?.addEventListener('touchstart', alInicio, { passive: true });
+    zona?.addEventListener('touchmove', alMover, { passive: false });
+    zona?.addEventListener('touchend', alFin);
+    zona?.addEventListener('touchcancel', alFin);
+    zona?.addEventListener('mousedown', alRatonAbajo);
+    zona?.addEventListener('dblclick', alDobleRaton);
+    window.addEventListener('mousemove', alRatonMover);
+    window.addEventListener('mouseup', alRatonSoltar);
     setYZoom(false);
     return () => {
-      canvas.removeEventListener('dblclick', alDoble);
-      canvas.removeEventListener('touchend', alToque);
+      zona?.removeEventListener('touchstart', alInicio);
+      zona?.removeEventListener('touchmove', alMover);
+      zona?.removeEventListener('touchend', alFin);
+      zona?.removeEventListener('touchcancel', alFin);
+      zona?.removeEventListener('mousedown', alRatonAbajo);
+      zona?.removeEventListener('dblclick', alDobleRaton);
+      window.removeEventListener('mousemove', alRatonMover);
+      window.removeEventListener('mouseup', alRatonSoltar);
       ch.destroy();
       if (grafica.current === ch) grafica.current = null;
     };
@@ -213,7 +296,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
   return (
     <div className={'graf-zoom ' + className}>
       <div className="graf-barra">
-        <span className="graf-ayuda">Arrastra para leer bajo la línea · pellizco vertical o Shift+rueda cambia la escala</span>
+        <span className="graf-ayuda">Desliza en horizontal sobre la gráfica para leer · pellizco vertical cambia la escala</span>
         <span className="graf-controles">
           <button type="button" className="btn mini" aria-label="Acercar valores" onClick={() => zoomY(1.3)}>+</button>
           <button type="button" className="btn mini" aria-label="Alejar valores" onClick={() => zoomY(0.75)}>−</button>
@@ -222,6 +305,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
       </div>
       <div className="grafica-lienzo">
         <canvas ref={lienzo} />
+        <div ref={toque} className="graf-toque" />
         <div ref={mira} className="graf-mira" aria-hidden="true">
           <span className="punta sup" />
           <span className="linea" />
