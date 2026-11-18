@@ -1,7 +1,7 @@
 {
   "id": "/estacion/",
   "name": "EM SIF – Estación Meteorológica SIF",
-  "short_name": "EM SIF",
+  "short_name": "EM SIF - By: HAD",
   "description": "Estación Meteorológica SIF: aire, radiación y suelo del cultivo en tiempo real.",
   "lang": "es-MX",
   "dir": "ltr",

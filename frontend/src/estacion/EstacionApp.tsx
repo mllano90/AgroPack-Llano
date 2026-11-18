@@ -9,7 +9,7 @@ import Historial from './Historial';
 import Rangos from './Rangos';
 import ConfigNodo from './ConfigNodo';
 import Alertas from './Alertas';
-import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, NODO_POR_DEFECTO } from './marca';
+import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, MARCA_TITULO, NODO_POR_DEFECTO } from './marca';
 import { leyendaLectura } from './formato';
 import Instalar from './Instalar';
 import { ensancharLienzo, montarMetaPWA, registrarWorkerEstacion } from './pwa';
@@ -91,7 +91,7 @@ export default function EstacionApp() {
       <header className="vidrio cabecera">
         <Icono id="hoja" className="ico hoja" />
         <div className="marca">
-          <h1>{MARCA}<span className="marca-nombre">{MARCA_NOMBRE}</span><span className="marca-firma">{MARCA_FIRMA}</span></h1>
+          <h1>{MARCA_TITULO}</h1>
           <div className="marca-nodo">{ultimo?.nombre_nodo ?? NODO_POR_DEFECTO}</div>
         </div>
         <div className="cab-acciones">

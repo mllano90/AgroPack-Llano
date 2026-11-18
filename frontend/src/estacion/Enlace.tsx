@@ -1,5 +1,5 @@
 /**
- * Barras del enlace LoRa (pie de Inicio). Escalas lineales en dB:
+ * Barras del enlace LoRa (Configuración del nodo). Escalas lineales en dB:
  *  - VERDE "Fuerza de enlace" (RSSI): -120 dBm = vacía, -40 dBm o mejor = llena.
  *  - ROJA "Interferencia" (SNR, inverso): SNR >= +10 dB = vacía (señal limpia); SNR <= -20 dB = llena
  *    (ruido por encima de la señal; SF7 deja de decodificar cerca de -7.5 dB).

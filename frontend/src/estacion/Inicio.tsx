@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { api } from './api';
-import BarrasEnlace from './Enlace';
 import type { Alerta, ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
 import { Icono } from './Icono';
-import { durTxt, edadTxt, fHora, fHoraS, num } from './formato';
+import { durTxt, edadTxt, fHora, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
 import ModalHistorial from './ModalHistorial';
 import fondo from './assets/fondo_continuo.jpg';
@@ -15,20 +14,52 @@ import { prefAmbiente, UMBRAL_AMB } from './prefs';
 const LIENZO = { w: 2800, h: 3560 }, FOTO = { x: 760, y: 1040 }, FOTO_TAM = { w: 1280, h: 720 };
 const PLANTA = { x0: 232, x1: 942, y0: 99, y1: 719 };
 
-export function geometriaFondo(hueco: { left: number; top: number; width: number; height: number }) {
+export function geometriaFondo(hueco: { left: number; top: number; width: number; height: number }, ancla?: { x: number; y: number }) {
   const pw = PLANTA.x1 - PLANTA.x0, ph = PLANTA.y1 - PLANTA.y0;
   const s = Math.min(hueco.width / pw, hueco.height / ph);
+  const plantW = pw * s, plantH = ph * s;
+  const ax = ancla?.x ?? hueco.left + hueco.width / 2;
+  const ay = ancla?.y ?? hueco.top + hueco.height / 2;
+  const left = Math.min(Math.max(ax - plantW / 2, hueco.left), hueco.left + hueco.width - plantW);
+  const top = Math.min(Math.max(ay - plantH / 2, hueco.top), hueco.top + hueco.height - plantH);
   const cx = FOTO.x + (PLANTA.x0 + PLANTA.x1) / 2, cy = FOTO.y + (PLANTA.y0 + PLANTA.y1) / 2;
-  const x = hueco.left + hueco.width / 2 - cx * s, y = hueco.top + hueco.height / 2 - cy * s;
-  const planta = { left: x + (FOTO.x + PLANTA.x0) * s, top: y + (FOTO.y + PLANTA.y0) * s, width: pw * s, height: ph * s };
+  const x = left + plantW / 2 - cx * s, y = top + plantH / 2 - cy * s;
+  const planta = { left: x + (FOTO.x + PLANTA.x0) * s, top: y + (FOTO.y + PLANTA.y0) * s, width: plantW, height: plantH };
   const foto = { left: x + FOTO.x * s, top: y + FOTO.y * s, width: FOTO_TAM.w * s, height: FOTO_TAM.h * s };
   return { s, x, y, w: LIENZO.w * s, h: LIENZO.h * s, planta, foto };
+}
+
+/** Hueco real entre cabecera, tarjetas y barra, para centrar la planta en la pantalla y agrandarla. */
+function huecoVisible(fig: DOMRect) {
+  const rect = (sel: string) => document.querySelector(sel)?.getBoundingClientRect();
+  const aire = rect('.zona-aire'), suelo = rect('.zona-suelo');
+  const cab = rect('.cabecera'), nav = rect('nav');
+  const vw = innerWidth, vh = innerHeight;
+  let left = 2, right = vw - 2, top = (cab?.bottom ?? 0) + 4, bottom = (nav?.top ?? vh) - 4;
+  if (aire && suelo && fig.bottom <= Math.min(aire.top, suelo.top) + 10) {
+    bottom = Math.min(bottom, Math.min(aire.top, suelo.top) - 4);
+  } else if (aire && suelo && aire.right < suelo.left - 16) {
+    left = aire.right + 8;
+    right = suelo.left - 8;
+    top = Math.max(top, Math.min(aire.top, suelo.top));
+    bottom = Math.min(bottom, Math.max(aire.bottom, suelo.bottom));
+  } else if (aire && suelo) {
+    top = Math.max(top, aire.bottom + 4);
+    bottom = Math.min(bottom, suelo.top - 4);
+  } else {
+    left = fig.left; right = fig.right; top = fig.top; bottom = fig.bottom;
+  }
+  if (right - left < 48 || bottom - top < 48) {
+    return { left: fig.left, top: fig.top, width: fig.width, height: fig.height };
+  }
+  return { left, top, width: right - left, height: bottom - top };
 }
 
 function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
   const r = fig.getBoundingClientRect();
   if (!r.height || !r.width) return;
-  const g = geometriaFondo(r);
+  const hueco = huecoVisible(r);
+  const g = geometriaFondo(hueco, { x: innerWidth / 2, y: innerHeight / 2 });
   capa.style.backgroundImage = `url(${fondo})`;
   capa.style.backgroundRepeat = 'no-repeat';
   capa.style.backgroundSize = `${g.w}px ${g.h}px`;
@@ -44,8 +75,15 @@ function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
  * Móvil (≤480 px): sin unidad (ya está en el valor grande) y, en las tarjetas angostas del suelo (≈65 px útiles),
  * ▲/▼ en lugar de "máx"/"mín"; el título (toque largo / hover) conserva el texto completo con la hora del extremo. */
 function Extremos({ def, e }: { def: DefIndicador; e?: ExtremoDia | null }) {
-  if (!e) return null;
   const u = def.unidad ? ' ' + def.unidad : '';
+  if (!e) {
+    return (
+      <span className="ind-ext" title="Aún sin máximo ni mínimo de hoy">
+        <span className="ext-max"><span className="ext-q">máx </span><span className="ext-f" aria-hidden="true">▲</span>—</span>
+        <span className="ext-min"><span className="ext-q">mín </span><span className="ext-f" aria-hidden="true">▼</span>—</span>
+      </span>
+    );
+  }
   const t = (v: number, ts: number, s: number, q: string) =>
     `${q} de hoy ${num(v, def.dec)}${u} a las ${fHora.format(ts * 1000)}; ${durTxt(s)} cerca de ese nivel (±${num(e.banda, def.dec)}${u})`;
   return (
@@ -76,41 +114,6 @@ function Indicador({ def, valor, err, umb, lo, hi, sub, ext, tam = 'normal', alA
       </span>
       {ancho != null && <span className="barra"><i className={fuera ? 'fuera' : ''} style={{ width: `${ancho}%`, background: def.color }} /></span>}
       {sub && <span className="ind-sub">{sub}</span>}
-    </button>
-  );
-}
-
-
-/** Tarjeta compacta de conexión LoRa: click despliega lectura, receptora, cola y barras RSSI/SNR. */
-function TarjetaConexion({ d }: { d: Ultimo }) {
-  const [abierta, setAbierta] = useState(false);
-  const A = d.ahora;
-  const fw = (d.receptora?.firmware || '').replace(/^receptora-/, 'v');
-  const resumen = [
-    d.rssi != null ? `RSSI ${d.rssi}` : null,
-    d.snr != null ? `SNR ${Number(d.snr).toFixed(1)}` : null,
-  ].filter(Boolean).join(' · ');
-  return (
-    <button type="button" className={'tarjeta-conexion meta-lectura' + (abierta ? ' abierta' : '')}
-      aria-expanded={abierta} onClick={() => setAbierta(v => !v)}
-      aria-label={abierta ? 'Ocultar detalle de conexión' : 'Ver detalle de conexión'}>
-      <span className="tc-cab">
-        <Icono id="wifi" className="ico" />
-        <span className="tc-tit">Conexión</span>
-        {!abierta && <span className="tc-resumen">{resumen}</span>}
-        <span className="tc-chev" aria-hidden="true">{abierta ? '▾' : '▸'}</span>
-      </span>
-      <BarrasEnlace rssi={d.rssi} snr={d.snr} />
-      {abierta && (
-        <span className="tc-det">
-          <span>Última lectura: <b>{d.ts ? fHoraS.format(d.ts * 1000) : '--'}</b>
-            {d.ts != null && <> (hace {Math.max(0, Math.round((A - d.ts) / 60))} min)</>}
-            {d.tipo != null && <> · paquete {d.tipo} #{d.seq}</>}
-          </span>
-          {d.sin_hora_emisora && <span className="tc-aviso">Emisora sin hora (se usó la de recepción)</span>}
-          {d.receptora && <span>Receptora {fw || '?'}, cola {d.receptora.cola_pendiente ?? '?'}</span>}
-        </span>
-      )}
     </button>
   );
 }
@@ -214,7 +217,6 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
           <Indicador def={IND.pir} valor={d.pir.v} err={d.pir.error} umb={U.pir} lo={0} hi={1000} ext={X.pir} tam="grande" alAbrir={abrir}
             sub={d.pir.ok ? ((d.pir.v ?? 0) > 5 ? 'Piranómetro' : 'Sin sol') : d.pir.error} />
         </div>
-        <TarjetaConexion d={d} />
       </div>
 
       {/* ---------- PLANTA: zona reservada, ninguna tarjeta la cubre */}
@@ -235,14 +237,14 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
           <div className="sub-grupo">
             <h3>Salinidad y acidez <span>{npk ? edadTxt(npk.ts, A) : 'NPK aún no medido'}</span></h3>
             <div className="ind-grid c2">
-              <Indicador def={IND.ec} valor={nq('ec')} err={null} umb={U.ec} lo={0} hi={4} alAbrir={abrir} />
-              <Indicador def={IND.ph} valor={nq('ph')} err={null} umb={U.ph} lo={3} hi={10} alAbrir={abrir} />
+              <Indicador def={IND.ec} valor={nq('ec')} err={null} umb={U.ec} lo={0} hi={4} ext={X.ec} alAbrir={abrir} />
+              <Indicador def={IND.ph} valor={nq('ph')} err={null} umb={U.ph} lo={3} hi={10} ext={X.ph} alAbrir={abrir} />
             </div>
           </div>
           <div className="sub-grupo">
             <h3>Nutrientes NPK <span>{npk ? 'mg/kg' : ''}{d.npk_ultimo_fallo && <em className="aviso"> · último muestreo FALLÓ</em>}</span></h3>
             <div className="ind-grid c3">
-              {(['n', 'p', 'k'] as const).map(k => <Indicador key={k} def={IND[k]} valor={nq(k)} err={null} umb={U[k]} tam="mini" alAbrir={abrir} />)}
+              {(['n', 'p', 'k'] as const).map(k => <Indicador key={k} def={IND[k]} valor={nq(k)} err={null} umb={U[k]} ext={X[k]} tam="mini" alAbrir={abrir} />)}
             </div>
           </div>
         </div>

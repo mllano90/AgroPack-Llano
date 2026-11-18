@@ -85,6 +85,13 @@ export default function ModalHistorial({ def, umbral, rangoBanda = true, alCerra
           {conRango && <div className="st-rango" title={`Rango ideal ${txtRango}`}><span>En rango</span>
             <b>{enRango != null ? num(enRango, 0) : '--'}<small> %</small></b></div>}
         </div>
+        <p className="mh-permanencia">
+          {datos?.extremo ? <>
+            <b>Máx {num(datos.extremo.max, def.dec)}{u} ({datos.extremo.max_min} min)</b>
+            <span> · </span>
+            <b>Mín {num(datos.extremo.min, def.dec)}{u} ({datos.extremo.min_min} min)</b>
+          </> : datos && !cargando ? <>Máx — · Mín —</> : null}
+        </p>
         {r && datos ? (
           <GraficaHist className="mh-grafica" datos={datos} datosExtras={extras} unidad={def.unidad} dec={def.dec}
             banda={rango === '7d' || rango === '30d'} extras={def.extras} umbral={umbral} rangoBanda={rangoBanda}

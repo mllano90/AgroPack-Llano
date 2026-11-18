@@ -87,8 +87,14 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
         interaction: { mode: 'nearest', axis: 'x', intersect: false },
         scales: {
           x: { type: 'linear', min: x0, max: x1, grid: { color: 'rgba(255,255,255,.06)' },
-            ticks: { color: '#a9c3b1', maxTicksLimit: 6, maxRotation: 0,
-              callback(val) { const s = this.chart.scales.x; return fmtVentana((s.max - s.min) / 1000)(Number(val)); } } },
+            ticks: { color: '#a9c3b1', maxTicksLimit: window.innerWidth < 520 ? 4 : 6, maxRotation: 0, autoSkip: true, autoSkipPadding: 12,
+              callback(val) {
+                const escala = this.chart.scales.x;
+                const span = (escala.max - escala.min) / 1000;
+                const ms = Number(val);
+                if (this.chart.width < 480) return span <= 2 * 86400 ? fHora.format(ms) : fDia.format(ms);
+                return fmtVentana(span)(ms);
+              } } },
           y: { ...ejeConRango(umbral), ticks: { color: '#a9c3b1' }, grid: { color: 'rgba(255,255,255,.08)' }, title: { display: !!unidad, text: unidad, color: '#a9c3b1' } },
         },
         plugins: {

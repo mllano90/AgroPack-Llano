@@ -7,6 +7,7 @@ import Mantenimiento from './Mantenimiento';
 import RedWifi from './RedWifi';
 import PruebaEnlace from './PruebaEnlace';
 import { prefAmbiente, UMBRAL_AMB } from './prefs';
+import BarrasEnlace from './Enlace';
 
 function Cuentas() {
   const [lista, setLista] = useState<Cuenta[]>([]);
@@ -69,6 +70,13 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
   const hayCaja = !!(caja && caja.codigo !== 255 && caja.codigo != null);
   return (
     <section id="v-config-nodo" className="vista">
+      <div className="vidrio bloque bloque-enlace" aria-label="Enlace LoRa">
+        <h2>Enlace LoRa</h2>
+        <p className="tenue chico">Fuerza de la señal e interferencia de la última lectura. No se muestran en Inicio.</p>
+        {ultimo?.hay_datos && (ultimo.rssi != null || ultimo.snr != null)
+          ? <BarrasEnlace rssi={ultimo.rssi} snr={ultimo.snr} />
+          : <p className="tenue">Aún sin datos de enlace.</p>}
+      </div>
       <div className="vidrio bloque bloque-caja" aria-label="Interior de la caja">
         <h2>Interior caja</h2>
         <p className="tenue chico">Sensor de la caja de control. Solo lo ve el administrador; no sale en Inicio.</p>
