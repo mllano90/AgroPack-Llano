@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
-import type { EmpaqueRecord } from '../../types';
+import { useCallback, useEffect, useMemo, useState, type CSSProperties } from 'react';
+import type { EmpaqueRecord, InventarioFinalItem } from '../../types';
 import {
   HECTAREAS_MELON,
   HECTAREAS_MELON_POR_LOTE,
@@ -13,7 +13,7 @@ import {
   variedadDesdeLoteMelon,
 } from '../../lib/constants';
 import { formatFechaCorta } from '../../lib/dates';
-import { getMelonHectareas } from '../../lib/api';
+import { getDashboard, getEmbarques, getEmpaquesMelon, getMelonHectareas } from '../../lib/api';
 import {
   agregarDistribucionTallas,
   esProcesoCampoMelon,
@@ -27,6 +27,15 @@ import {
   type MelonPesosConfig,
 } from '../../lib/melonPesos';
 import { filaKgPorBin, kgPorBin, porcentajesQueSuman100 } from './melonKpi';
+import {
+  SIN_LOTE,
+  distribucionDesdeLineas,
+  filtrarLineasPorVariedad,
+  kpiDesdeLineas,
+  lineasProducidasMelon,
+  variedadDeLinea,
+  type EmbarqueCaja,
+} from '../../lib/melonCajasInventario';
 
 type Props = {
   empaques: EmpaqueRecord[];
@@ -308,7 +317,7 @@ function buildProcesos(
       (det as any).lotes_resumen ||
       consumos.map((c) => c.lote).filter(Boolean).join(', ') ||
       e.lote_desverdizado ||
-      '—';
+      SIN_LOTE;
 
     let cajasLlano = 0;
     let cajasWallys = 0;
@@ -364,7 +373,7 @@ function lotesDeProceso(p: ProcesoMelon, empaques: EmpaqueRecord[]): string[] {
   return String(p.lote || '')
     .split(',')
     .map((s) => s.trim())
-    .filter(Boolean);
+    .filter((s) => s && s !== '—' && s !== '-' && s !== SIN_LOTE);
 }
 
 function buildKpiFromProcesos(
@@ -411,7 +420,50 @@ function buildKpiFromProcesos(
 
 export default function MelonReportes({ empaques, token }: Props) {
   const { pesos } = useMelonPesos();
-  const procesos = useMemo(() => buildProcesos(empaques, pesos), [empaques, pesos]);
+  /** Corridas completas de melón. El listado general solo trae las últimas 100. */
+  const [empaquesTodos, setEmpaquesTodos] = useState<EmpaqueRecord[] | null>(null);
+  const [inventario, setInventario] = useState<InventarioFinalItem[]>([]);
+  const [embarques, setEmbarques] = useState<EmbarqueCaja[]>([]);
+  const [listo, setListo] = useState(false);
+
+  useEffect(() => {
+    let cancel = false;
+    if (!token) {
+      setEmpaquesTodos(empaques);
+      setInventario([]);
+      setEmbarques([]);
+      setListo(true);
+      return () => {
+        cancel = true;
+      };
+    }
+    setListo(false);
+    Promise.all([
+      getEmpaquesMelon(token).catch(() => empaques),
+      getDashboard(token).catch(() => null),
+      getEmbarques(token).catch(() => []),
+    ]).then(([emps, dash, embs]) => {
+      if (cancel) return;
+      setEmpaquesTodos(emps);
+      setInventario(dash?.inventario_final || []);
+      setEmbarques(embs);
+      setListo(true);
+    });
+    return () => {
+      cancel = true;
+    };
+  }, [token, empaques]);
+
+  const fuente = empaquesTodos ?? empaques;
+  const procesos = useMemo(() => buildProcesos(fuente, pesos), [fuente, pesos]);
+  const lineasProducidas = useMemo(
+    () => lineasProducidasMelon(inventario, embarques),
+    [inventario, embarques]
+  );
+  const pesoKg = useCallback(
+    (pres: string, talla?: string | null) => pesoCajaDesdeConfig(pesos, pres, talla),
+    [pesos]
+  );
 
   /** lote → hectáreas (API o fallback local) */
   const [haPorLote, setHaPorLote] = useState<Record<string, number>>(HECTAREAS_MELON_POR_LOTE);
@@ -456,12 +508,19 @@ export default function MelonReportes({ empaques, token }: Props) {
   const variedadesDisponibles = useMemo(() => {
     const set = new Set<string>();
     for (const p of procesos) {
-      for (const lote of lotesDeProceso(p, empaques)) {
-        set.add(variedadDesdeLoteMelon(lote));
-      }
+      const lots = lotesDeProceso(p, fuente);
+      if (lots.length === 0) set.add(SIN_LOTE);
+      for (const lote of lots) set.add(variedadDesdeLoteMelon(lote));
     }
-    return [...set].filter((v) => v && v !== 'Sin variedad').sort((a, b) => a.localeCompare(b));
-  }, [procesos, empaques]);
+    for (const ln of lineasProducidas) set.add(variedadDeLinea(ln.lote));
+    return [...set]
+      .filter((v) => v && v !== 'Sin variedad')
+      .sort((a, b) => {
+        if (a === SIN_LOTE) return 1;
+        if (b === SIN_LOTE) return -1;
+        return a.localeCompare(b, 'es');
+      });
+  }, [procesos, fuente, lineasProducidas]);
 
   const corridasDisponibles = useMemo(
     () =>
@@ -497,22 +556,24 @@ export default function MelonReportes({ empaques, token }: Props) {
     }
   }, [filtroTipo, variedadesDisponibles, corridasDisponibles, filtroValor]);
 
-  const procesosKpi = useMemo(
-    () =>
-      filtrarProcesosAcumulado(
-        procesos,
-        (p) => lotesDeProceso(p, empaques),
-        { tipo: filtroTipo, variedad: filtroValor, corridaIds: filtroCorridas },
-        variedadDesdeLoteMelon
-      ),
-    [procesos, empaques, filtroTipo, filtroValor, filtroCorridas]
-  );
+  const procesosKpi = useMemo(() => {
+    if (filtroTipo === 'variedad' && filtroValor === SIN_LOTE) {
+      return procesos.filter((p) => lotesDeProceso(p, fuente).length === 0);
+    }
+    return filtrarProcesosAcumulado(
+      procesos,
+      (p) => lotesDeProceso(p, fuente),
+      { tipo: filtroTipo, variedad: filtroValor, corridaIds: filtroCorridas },
+      variedadDesdeLoteMelon
+    );
+  }, [procesos, fuente, filtroTipo, filtroValor, filtroCorridas]);
 
   const haParaKpi = useMemo(() => {
     if (filtroTipo === 'todos') {
       return haTotalCatalogo > 0 ? haTotalCatalogo : HECTAREAS_MELON;
     }
     if (filtroTipo === 'variedad') {
+      if (filtroValor === SIN_LOTE) return 0;
       if (!filtroValor) return haTotalCatalogo > 0 ? haTotalCatalogo : HECTAREAS_MELON;
       // Ha plantadas de esa variedad en catálogo
       let sum = 0;
@@ -526,36 +587,67 @@ export default function MelonReportes({ empaques, token }: Props) {
     const procs = procesosKpi;
     const lotes = new Set<string>();
     for (const p of procs) {
-      for (const l of lotesDeProceso(p, empaques)) lotes.add(l);
+      for (const l of lotesDeProceso(p, fuente)) lotes.add(l);
     }
     let sum = 0;
     for (const l of lotes) sum += haDeLote(l);
     return sum > 0 ? sum : HECTAREAS_POR_LOTE_MELON;
-  }, [filtroTipo, filtroValor, filtroCorridas, haTotalCatalogo, haPorLote, procesosKpi, empaques]);
+  }, [filtroTipo, filtroValor, filtroCorridas, haTotalCatalogo, haPorLote, procesosKpi, fuente]);
 
-  const acumulado = useMemo(
-    () => buildKpiFromProcesos(procesosKpi, haParaKpi),
-    [procesosKpi, haParaKpi]
-  );
+  const lineasKpi = useMemo(() => {
+    if (filtroTipo === 'corrida') return null;
+    if (filtroTipo === 'variedad') return filtrarLineasPorVariedad(lineasProducidas, filtroValor);
+    return lineasProducidas;
+  }, [filtroTipo, filtroValor, lineasProducidas]);
+
+  const acumulado = useMemo(() => {
+    if (lineasKpi) {
+      const bins = procesosKpi.reduce((s, p) => s + p.bins, 0);
+      return kpiDesdeLineas(lineasKpi, bins, haParaKpi, pesoKg);
+    }
+    return buildKpiFromProcesos(procesosKpi, haParaKpi);
+  }, [lineasKpi, procesosKpi, haParaKpi, pesoKg]);
 
   /** Mismas corridas que las tarjetas. Cada proceso cuenta una vez. */
   const kgBinPorVariedad = useMemo(() => {
     const map = new Map<string, { bins: number; kgLlano: number; kgWallys: number }>();
+    const touch = (nombre: string) => {
+      const row = map.get(nombre) || { bins: 0, kgLlano: 0, kgWallys: 0 };
+      map.set(nombre, row);
+      return row;
+    };
     for (const p of procesosKpi) {
-      const variedades = [
-        ...new Set(lotesDeProceso(p, empaques).map((l) => variedadDesdeLoteMelon(l))),
-      ];
+      const lots = lotesDeProceso(p, fuente);
+      const variedades = [...new Set(lots.map((l) => variedadDesdeLoteMelon(l)))];
       const nombre =
-        variedades.length === 0
-          ? 'Sin variedad'
+        lots.length === 0
+          ? SIN_LOTE
           : variedades.length === 1
             ? variedades[0]
             : variedades.join(' + ');
-      const row = map.get(nombre) || { bins: 0, kgLlano: 0, kgWallys: 0 };
-      row.bins += p.bins;
-      row.kgLlano += p.kgLlano;
-      row.kgWallys += p.kgWallys;
-      map.set(nombre, row);
+      touch(nombre).bins += p.bins;
+    }
+    if (lineasKpi) {
+      for (const ln of lineasKpi) {
+        const row = touch(variedadDeLinea(ln.lote));
+        const kg = ln.cajas * pesoKg(ln.presentacion, ln.talla);
+        if (ln.calidad === 'wallys') row.kgWallys += kg;
+        else row.kgLlano += kg;
+      }
+    } else {
+      for (const p of procesosKpi) {
+        const lots = lotesDeProceso(p, fuente);
+        const variedades = [...new Set(lots.map((l) => variedadDesdeLoteMelon(l)))];
+        const nombre =
+          lots.length === 0
+            ? SIN_LOTE
+            : variedades.length === 1
+              ? variedades[0]
+              : variedades.join(' + ');
+        const row = touch(nombre);
+        row.kgLlano += p.kgLlano;
+        row.kgWallys += p.kgWallys;
+      }
     }
     const filas = [...map.entries()]
       .map(([variedad, r]) => filaKgPorBin(variedad, r.bins, r.kgLlano, r.kgWallys))
@@ -567,7 +659,7 @@ export default function MelonReportes({ empaques, token }: Props) {
       filas.reduce((s, f) => s + f.kgWallys, 0)
     );
     return { filas, total };
-  }, [procesosKpi, empaques]);
+  }, [procesosKpi, fuente, lineasKpi, pesoKg]);
 
   /** Vista del pastel/tabla de tallas: simple (#6s…) o tipos de caja (#6s Jumbo…). */
   const [vistaTallas, setVistaTallas] = useState<'simple' | 'tipos_caja'>('simple');
@@ -575,32 +667,13 @@ export default function MelonReportes({ empaques, token }: Props) {
   /** Mismos empaques que las tarjetas del filtro activo. */
   const empaquesDistribucion = useMemo(() => {
     const ids = new Set(procesosKpi.map((p) => p.id));
-    return empaques.filter((e) => ids.has(e.id));
-  }, [empaques, procesosKpi]);
+    return fuente.filter((e) => ids.has(e.id));
+  }, [fuente, procesosKpi]);
 
-  /** Distribución por talla + tipo de caja (todas las calidades, kg). */
-  const porTallaCaja = useMemo(
-    () =>
-      agregarDistribucionTallas(
-        empaquesDistribucion,
-        (pres, talla) => pesoCajaDesdeConfig(pesos, pres, talla),
-        'tipos_caja'
-      ),
-    [empaquesDistribucion, pesos]
-  );
-
-  /** Distribución solo por talla (#6s, #9s…), sumando todos los tipos de caja. */
-  const porTallaSimple = useMemo(
-    () =>
-      agregarDistribucionTallas(
-        empaquesDistribucion,
-        (pres, talla) => pesoCajaDesdeConfig(pesos, pres, talla),
-        'simple'
-      ),
-    [empaquesDistribucion, pesos]
-  );
-
-  const distribucionTallas = vistaTallas === 'simple' ? porTallaSimple : porTallaCaja;
+  const distribucionTallas = useMemo(() => {
+    if (lineasKpi) return distribucionDesdeLineas(lineasKpi, pesoKg, vistaTallas);
+    return agregarDistribucionTallas(empaquesDistribucion, pesoKg, vistaTallas);
+  }, [lineasKpi, empaquesDistribucion, pesoKg, vistaTallas]);
   const totalesTallas = sumaKgTallas(distribucionTallas);
 
   const porLote = useMemo(() => {
@@ -626,73 +699,43 @@ export default function MelonReportes({ empaques, token }: Props) {
       parrillas: 0,
     });
     for (const p of procesos) {
-      // Un proceso puede listar varios lotes en el resumen; usar consumos reales
-      const e = empaques.find((x) => x.id === p.id);
+      const e = fuente.find((x) => x.id === p.id);
       const det = parseDetalle(e?.detalle_corrida);
       const consumos = det.consumos || [];
-      const prod = det.produccion || [];
-      const kgProd = prod.reduce(
-        (s, ln) =>
-          s +
-          (Number(ln.cantidad) || 0) *
-            pesoCajaDesdeConfig(pesos, String(ln.presentacion || ''), ln.talla),
-        0
-      );
-      const kgLlano = prod
-        .filter((ln) => String(ln.calidad || '').toLowerCase() !== 'wallys')
-        .reduce(
-          (s, ln) =>
-            s +
-            (Number(ln.cantidad) || 0) *
-              pesoCajaDesdeConfig(pesos, String(ln.presentacion || ''), ln.talla),
-          0
-        );
-      const kgWallys = kgProd - kgLlano;
-      const cajasLlano = prod
-        .filter((ln) => String(ln.calidad || '').toLowerCase() !== 'wallys')
-        .reduce((s, ln) => s + (Number(ln.cantidad) || 0), 0);
-      const cajasWallys = prod
-        .filter((ln) => String(ln.calidad || '').toLowerCase() === 'wallys')
-        .reduce((s, ln) => s + (Number(ln.cantidad) || 0), 0);
-      const parr = prod.reduce((s, ln) => {
-        const cajas = Number(ln.cantidad) || 0;
-        const cpp =
-          Number(ln.cajas_por_parrilla) ||
-          cajasPorParrillaMelon(String(ln.presentacion || ''));
-        return s + (Number(ln.cantidad_parrillas) || (cpp > 0 ? cajas / cpp : 0));
-      }, 0);
-
-      const totalBins = consumos.reduce((s, c) => s + (Number(c.bins) || 0), 0) || 1;
       if (consumos.length === 0) {
-        const lote = p.lote || '—';
+        const crudo = String(p.lote || '').trim();
+        const lote = !crudo || crudo === '—' ? SIN_LOTE : crudo;
         const row = map.get(lote) || empty(lote);
         row.bins += p.bins;
-        row.kg += kgProd;
-        row.kgLlano += kgLlano;
-        row.kgWallys += kgWallys;
-        row.cajasLlano += cajasLlano;
-        row.cajasWallys += cajasWallys;
-        row.parrillas += parr;
         map.set(lote, row);
         continue;
       }
       for (const c of consumos) {
-        const lote = String(c.lote || '—').trim() || '—';
-        const share = (Number(c.bins) || 0) / totalBins;
+        const lote = String(c.lote || '').trim() || SIN_LOTE;
         const row = map.get(lote) || empty(lote);
         row.bins += Number(c.bins) || 0;
-        row.kg += kgProd * share;
-        row.kgLlano += kgLlano * share;
-        row.kgWallys += kgWallys * share;
-        row.cajasLlano += cajasLlano * share;
-        row.cajasWallys += cajasWallys * share;
-        row.parrillas += parr * share;
         map.set(lote, row);
       }
     }
+    for (const ln of lineasProducidas) {
+      const lote = String(ln.lote || '').trim() || SIN_LOTE;
+      const row = map.get(lote) || empty(lote);
+      const kg = ln.cajas * pesoKg(ln.presentacion, ln.talla);
+      const cpp = cajasPorParrillaMelon(ln.presentacion);
+      row.kg += kg;
+      row.parrillas += cpp > 0 ? ln.cajas / cpp : 0;
+      if (ln.calidad === 'wallys') {
+        row.kgWallys += kg;
+        row.cajasWallys += ln.cajas;
+      } else {
+        row.kgLlano += kg;
+        row.cajasLlano += ln.cajas;
+      }
+      map.set(lote, row);
+    }
     return [...map.values()]
       .map((r) => {
-        const ha = haDeLote(r.lote);
+        const ha = r.lote === SIN_LOTE ? 0 : haDeLote(r.lote);
         return {
           ...r,
           kg: Math.round(r.kg * 10) / 10,
@@ -706,7 +749,7 @@ export default function MelonReportes({ empaques, token }: Props) {
         };
       })
       .sort((a, b) => b.kg - a.kg);
-  }, [procesos, empaques, pesos, haPorLote]);
+  }, [procesos, fuente, pesos, haPorLote, lineasProducidas, pesoKg]);
 
   /** Calidades por variedad: ton/ha y cajas/ha (LLANO + Wallys) por variedad. */
   const porVariedad = useMemo(() => {
@@ -723,7 +766,7 @@ export default function MelonReportes({ empaques, token }: Props) {
       }
     >();
     for (const l of porLote) {
-      const variedad = variedadDesdeLoteMelon(l.lote);
+      const variedad = l.lote === SIN_LOTE ? SIN_LOTE : variedadDesdeLoteMelon(l.lote);
       const row = map.get(variedad) || {
         variedad,
         kgLlano: 0,
@@ -786,7 +829,9 @@ export default function MelonReportes({ empaques, token }: Props) {
         <strong>Bins/parrilla = bins ÷ parrillas empacadas</strong>
       </p>
 
-      {procesos.length === 0 ? (
+      {!listo ? (
+        <p style={{ color: '#64748b' }}>Cargando indicadores de melón…</p>
+      ) : procesos.length === 0 && lineasProducidas.every((l) => l.cajas <= 0) ? (
         <p style={{ color: '#64748b' }}>
           No hay empaques de melón registrados todavía. Captura recepción + empaque para ver
           indicadores.
@@ -796,6 +841,11 @@ export default function MelonReportes({ empaques, token }: Props) {
           <h3 style={{ margin: '12px 0 8px', textAlign: 'center' }}>
             Acumulado — indicadores principales
           </h3>
+          <p style={{ fontSize: 12, color: '#64748b', marginTop: 0, textAlign: 'center' }}>
+            {filtroTipo === 'corrida'
+              ? 'La corrida muestra las cajas capturadas en ese empaque.'
+              : 'Cajas = inventario final + embarcado. Sin embarques, coincide con el producto final. Lo que no trae lote queda en «sin lote».'}
+          </p>
 
           {/* Filtro opcional: todos | variedad | corrida */}
           <div
@@ -983,7 +1033,7 @@ export default function MelonReportes({ empaques, token }: Props) {
               </>
             )}
           </p>
-          {procesosKpi.length === 0 ? (
+          {acumulado.cajasTotal <= 0 && procesosKpi.length === 0 ? (
             <p style={{ color: '#94a3b8', fontSize: 13, textAlign: 'center' }}>
               No hay datos para este filtro.
             </p>
@@ -1266,8 +1316,10 @@ export default function MelonReportes({ empaques, token }: Props) {
           {/* Acumulado de procesos */}
           <h3 style={{ margin: '8px 0 6px' }}>Acumulado de procesos de empacado</h3>
           <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-            Cada registro de empaque (un lote por corrida). {procesos.length} proceso(s). Filas del
-            mismo día comparten fondo; al cambiar de fecha alterna blanco / azul claro.
+            Cada registro de empaque (un lote por corrida). {procesos.length} proceso(s). Esta
+            lista es la captura de cada corrida; las tarjetas de arriba cuentan el inventario final
+            más lo embarcado, así que un ajuste o una alta manual puede hacer que no sumen igual.
+            Filas del mismo día comparten fondo; al cambiar de fecha alterna blanco / azul claro.
           </p>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13, minWidth: 720 }}>
