@@ -299,6 +299,9 @@ def main():
             embarque_id=anulado.id,
             producto=Producto.MELON,
             mercado=TipoMercado.NACIONAL,
+            presentacion="caja_normal_b",
+            talla="9",
+            calidad="llano",
             cantidad_cajas=999,
         )
     )
@@ -342,8 +345,13 @@ def main():
             "notas": "salida melon",
             "detalles": [
                 {
+                    # Caja, talla y calidad: en main el descuento usa la
+                    # presentación; el manifiesto de melón las exige las tres.
                     "producto": "melon",
                     "mercado": "nacional",
+                    "presentacion": "caja_normal_b",
+                    "talla": "9",
+                    "calidad": "llano",
                     "cantidad_cajas": 5,
                 }
             ],
