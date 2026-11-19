@@ -70,7 +70,7 @@ type ProcesoMelon = {
 const cardPrimary: CSSProperties = {
   width: '100%',
   minWidth: 0,
-  padding: '10px 8px 8px',
+  padding: '10px 6px 8px',
   borderRadius: 12,
   border: '1px solid #e2e8f0',
   boxSizing: 'border-box',
@@ -81,34 +81,40 @@ const cardLabel: CSSProperties = {
   fontWeight: 700,
   letterSpacing: 0.2,
   marginBottom: 4,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
+  lineHeight: 1.2,
+  whiteSpace: 'normal',
 };
 
 const cardValue: CSSProperties = {
-  fontSize: 22,
+  fontSize: 'clamp(16px, 1.5vw, 22px)',
   fontWeight: 800,
   lineHeight: 1.1,
   whiteSpace: 'nowrap',
 };
 
 const chip: CSSProperties = {
-  flex: 1,
   background: 'rgba(255,255,255,0.55)',
   borderRadius: 8,
-  padding: '5px 6px',
+  padding: '5px 4px',
   minWidth: 0,
+  containerType: 'inline-size',
 };
 
 const chipLabel: CSSProperties = { fontSize: 10, color: '#64748b', fontWeight: 600 };
-const chipValue: CSSProperties = {
-  fontSize: 12,
-  fontWeight: 800,
-  whiteSpace: 'nowrap',
-  overflow: 'hidden',
-  textOverflow: 'ellipsis',
-};
+
+/** Más chica si el texto es largo, para que el número quepa entero en la sub-caja. */
+function chipValueStyle(text: string, color: string): CSSProperties {
+  const n = text.length;
+  const max = n >= 11 ? 11 : n >= 9 ? 12 : n >= 7 ? 13 : 14;
+  return {
+    color,
+    fontSize: `clamp(10px, 15cqi, ${max}px)`,
+    fontWeight: 800,
+    lineHeight: 1.15,
+    whiteSpace: 'nowrap',
+    fontVariantNumeric: 'tabular-nums',
+  };
+}
 
 const th: CSSProperties = { padding: '8px 10px', fontWeight: 700, fontSize: 12 };
 const td: CSSProperties = { padding: '8px 10px', verticalAlign: 'top' };
@@ -125,6 +131,13 @@ function fmtKg(n: number): string {
 function fmtKgBin(n: number | null | undefined): string {
   if (n == null || !Number.isFinite(n)) return '—';
   return fmtNum(n, 1);
+}
+
+/** En la tarjeta, a partir de 1,000 kg se ve en toneladas con 1 decimal. */
+function fmtPesoTarjeta(kg: number): string {
+  if (!Number.isFinite(kg)) return '—';
+  if (Math.abs(kg) >= 1000) return `${fmtNum(kg / 1000, 1)} t`;
+  return fmtNum(kg, 0);
 }
 
 function parseDetalle(raw: unknown): {
@@ -167,34 +180,70 @@ type MelonKpiData = {
   kgBinTotal: number | null;
 };
 
+function ChipNum({ text, color, title }: { text: string; color: string; title?: string }) {
+  return (
+    <div style={chipValueStyle(text, color)} title={title || text}>
+      {text}
+    </div>
+  );
+}
+
 /** Tarjetas KPI: LLANO · Wallys · ton/ha · cajas/ha · bins/parrilla */
 function MelonKpiCards({ data }: { data: MelonKpiData }) {
+  const pesoLlano = fmtPesoTarjeta(data.kgLlano);
+  const pesoWallys = fmtPesoTarjeta(data.kgWallys);
+  const cajasLlano = fmtNum(data.cajasLlano, 0);
+  const cajasWallys = fmtNum(data.cajasWallys, 0);
+  const cajasHa = Number.isFinite(data.cajasHa) ? fmtNum(data.cajasHa, 0) : '—';
+  const cajasLlanoHa = fmtNum(data.cajasLlanoHa, 0);
+  const cajasWallysHa = fmtNum(data.cajasWallysHa, 0);
+  const bins = fmtNum(data.bins, 0);
+  const parrillas = fmtNum(data.parrillas, 1);
+  const kgBin = fmtKgBin(data.kgBinTotal);
+  const kgBinLlano = fmtKgBin(data.kgBinLlano);
+  const kgBinWallys = fmtKgBin(data.kgBinWallys);
+  const pair: CSSProperties = {
+    display: 'grid',
+    gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+    gap: 4,
+    marginTop: 6,
+  };
+
   return (
-    <div style={{ overflowX: 'auto', width: '100%', marginBottom: 16 }}>
-    <div
-      style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
-        gap: 10,
-        alignItems: 'stretch',
-        width: '100%',
-        minWidth: 860,
-      }}
-    >
+    <div style={{ width: '100%', marginBottom: 16 }}>
+    <style>{`
+      .melon-kpi-grid {
+        display: grid;
+        gap: 8px;
+        align-items: stretch;
+        width: min(100%, calc(100vw - 48px));
+        grid-template-columns: minmax(0, 1fr);
+      }
+      @media (min-width: 520px) {
+        .melon-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      }
+      @media (min-width: 760px) {
+        .melon-kpi-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      }
+      @media (min-width: 1024px) {
+        .melon-kpi-grid { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+      }
+    `}</style>
+    <div className="melon-kpi-grid">
       <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
         <div style={{ ...cardLabel, color: '#075985' }}>1ra LLANO</div>
         <div style={{ ...cardValue, color: '#0c4a6e' }}>
           {data.pctLlano}
           <span style={{ fontSize: 15, fontWeight: 700 }}>%</span>
         </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <div style={pair}>
           <div style={chip}>
             <div style={chipLabel}>Cajas</div>
-            <div style={{ ...chipValue, color: '#0c4a6e' }}>{fmtNum(data.cajasLlano, 0)}</div>
+            <ChipNum text={cajasLlano} color="#0c4a6e" />
           </div>
           <div style={chip}>
-            <div style={chipLabel}>Kg</div>
-            <div style={{ ...chipValue, color: '#0c4a6e' }}>{fmtNum(data.kgLlano, 0)}</div>
+            <div style={chipLabel}>{Math.abs(data.kgLlano) >= 1000 ? 'Ton' : 'Kg'}</div>
+            <ChipNum text={pesoLlano} color="#0c4a6e" title={`${fmtNum(data.kgLlano, 0)} kg`} />
           </div>
         </div>
       </div>
@@ -205,14 +254,14 @@ function MelonKpiCards({ data }: { data: MelonKpiData }) {
           {data.pctWallys}
           <span style={{ fontSize: 15, fontWeight: 700 }}>%</span>
         </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <div style={pair}>
           <div style={chip}>
             <div style={chipLabel}>Cajas</div>
-            <div style={{ ...chipValue, color: '#78350f' }}>{fmtNum(data.cajasWallys, 0)}</div>
+            <ChipNum text={cajasWallys} color="#78350f" />
           </div>
           <div style={chip}>
-            <div style={chipLabel}>Kg</div>
-            <div style={{ ...chipValue, color: '#78350f' }}>{fmtNum(data.kgWallys, 0)}</div>
+            <div style={chipLabel}>{Math.abs(data.kgWallys) >= 1000 ? 'Ton' : 'Kg'}</div>
+            <ChipNum text={pesoWallys} color="#78350f" title={`${fmtNum(data.kgWallys, 0)} kg`} />
           </div>
         </div>
       </div>
@@ -222,39 +271,29 @@ function MelonKpiCards({ data }: { data: MelonKpiData }) {
         <div style={{ ...cardValue, color: '#14532d' }}>
           {Number.isFinite(data.tonHa) ? data.tonHa.toFixed(2) : '—'}
         </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <div style={pair}>
           <div style={chip}>
             <div style={chipLabel}>LLANO</div>
-            <div style={{ ...chipValue, color: '#14532d' }}>
-              {fmtNum(data.kgLlanoHa / 1000, 2)} t
-            </div>
+            <ChipNum text={`${fmtNum(data.kgLlanoHa / 1000, 2)} t`} color="#14532d" />
           </div>
           <div style={chip}>
             <div style={chipLabel}>Wallys</div>
-            <div style={{ ...chipValue, color: '#854d0e' }}>
-              {fmtNum(data.kgWallysHa / 1000, 2)} t
-            </div>
+            <ChipNum text={`${fmtNum(data.kgWallysHa / 1000, 2)} t`} color="#854d0e" />
           </div>
         </div>
       </div>
 
       <div style={{ ...cardPrimary, background: '#fdf4ff' }}>
         <div style={{ ...cardLabel, color: '#86198f' }}>Cajas / ha</div>
-        <div style={{ ...cardValue, color: '#701a75' }}>
-          {Number.isFinite(data.cajasHa) ? fmtNum(data.cajasHa, 0) : '—'}
-        </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <div style={{ ...cardValue, color: '#701a75' }}>{cajasHa}</div>
+        <div style={pair}>
           <div style={chip}>
             <div style={chipLabel}>LLANO</div>
-            <div style={{ ...chipValue, color: '#0c4a6e' }}>
-              {fmtNum(data.cajasLlanoHa, 0)}
-            </div>
+            <ChipNum text={cajasLlanoHa} color="#0c4a6e" />
           </div>
           <div style={chip}>
             <div style={chipLabel}>Wallys</div>
-            <div style={{ ...chipValue, color: '#92400e' }}>
-              {fmtNum(data.cajasWallysHa, 0)}
-            </div>
+            <ChipNum text={cajasWallysHa} color="#92400e" />
           </div>
         </div>
       </div>
@@ -262,19 +301,19 @@ function MelonKpiCards({ data }: { data: MelonKpiData }) {
       <div style={{ ...cardPrimary, background: '#fff7ed' }}>
         <div style={{ ...cardLabel, color: '#9a3412' }}>Kg / bin</div>
         <div style={{ ...cardValue, color: '#7c2d12' }}>
-          {fmtKgBin(data.kgBinTotal)}
+          {kgBin}
           {data.kgBinTotal != null && (
             <span style={{ fontSize: 15, fontWeight: 700 }}> kg</span>
           )}
         </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <div style={pair}>
           <div style={chip}>
             <div style={chipLabel}>LLANO</div>
-            <div style={{ ...chipValue, color: '#9a3412' }}>{fmtKgBin(data.kgBinLlano)}</div>
+            <ChipNum text={kgBinLlano} color="#9a3412" />
           </div>
           <div style={chip}>
             <div style={chipLabel}>Wallys</div>
-            <div style={{ ...chipValue, color: '#9a3412' }}>{fmtKgBin(data.kgBinWallys)}</div>
+            <ChipNum text={kgBinWallys} color="#9a3412" />
           </div>
         </div>
       </div>
@@ -284,14 +323,14 @@ function MelonKpiCards({ data }: { data: MelonKpiData }) {
         <div style={{ ...cardValue, color: '#155e75' }}>
           {data.binsPorParr != null ? data.binsPorParr : '—'}
         </div>
-        <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+        <div style={pair}>
           <div style={chip}>
             <div style={chipLabel}>Bins</div>
-            <div style={{ ...chipValue, color: '#155e75' }}>{fmtNum(data.bins, 0)}</div>
+            <ChipNum text={bins} color="#155e75" />
           </div>
           <div style={chip}>
             <div style={chipLabel}>Parrillas</div>
-            <div style={{ ...chipValue, color: '#155e75' }}>{fmtNum(data.parrillas, 1)}</div>
+            <ChipNum text={parrillas} color="#155e75" />
           </div>
         </div>
       </div>
