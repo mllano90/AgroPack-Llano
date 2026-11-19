@@ -16,7 +16,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "backend"))
 
-from app.utils.limon_pct import kg_real_por_bin, porcentajes_produccion  # noqa: E402
+from app.utils.limon_pct import (  # noqa: E402
+    kg_real_por_bin,
+    porcentajes_produccion,
+    porcentajes_rpc_carton_jugo,
+)
 
 FAILS = []
 
@@ -94,6 +98,22 @@ def main():
             check(js_bin is None, f"js bins 0 {etiqueta}")
         else:
             check(js_bin is not None and abs(js_bin - py_bin) < 1e-9, f"js kg/bin {etiqueta}")
+
+    for r in data["partes"]:
+        py = porcentajes_rpc_carton_jugo(r["rpc"], r["carton"], r["jugo"])
+        etiqueta = f"rpc {r['rpc']}+cartón {r['carton']}+jugo {r['jugo']}"
+        check(
+            r["pct"]["rpc"] == py[0] and r["pct"]["carton"] == py[1] and r["pct"]["jugo"] == py[2],
+            f"js=py {etiqueta} {r['pct']} {py}",
+        )
+        if r["rpc"] + r["carton"] + r["jugo"] > 0:
+            check(r["suma"] == 100, f"tres suman 100 {etiqueta} {r['suma']}")
+        else:
+            check(r["suma"] == 0, f"sin kilos en tres {r['pct']}")
+
+    # 1+1+1 redondeado por separado da 99.9. El resto tiene que cerrar en 100.
+    uno = porcentajes_rpc_carton_jugo(1, 1, 1)
+    check(round(uno[0] + uno[1] + uno[2], 1) == 100, f"1+1+1 {uno}")
 
     check(data["totalCuadra"], "js total es kilos ÷ bins")
     check(data["noEsPromedioDePromedios"], "js no promedia los promedios")

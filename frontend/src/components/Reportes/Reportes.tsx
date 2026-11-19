@@ -26,7 +26,7 @@ import EmbarquesReporte from './EmbarquesReporte';
 import InventariosReporte from './InventariosReporte';
 import MapaCuadrosLimon from './MapaCuadrosLimon';
 import MelonReportes from './MelonReportes';
-import { kgRealPorBin, porcentajesQueSuman100 } from './limonKpi';
+import { kgRealPorBin, porcentajesQueSuman100, porcentajesRpcCartonJugo } from './limonKpi';
 
 type Corrida = CorridaRendimientoApi;
 type Lote = LoteRendimientoApi;
@@ -119,11 +119,11 @@ const cardStatChipValue: CSSProperties = {
 
 const indicadoresGrid: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-  gridAutoRows: '1fr',
+  gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
   gap: 10,
-  marginBottom: 12,
   alignItems: 'stretch',
+  width: '100%',
+  minWidth: 1080,
 };
 
 function fmtKg(n: number) {
@@ -425,6 +425,20 @@ function TallaPieChart({
   );
 }
 
+type VistaKgLote = 'mixtas' | 'primera' | 'segunda';
+
+const VISTA_KG_LOTE: Array<{ id: VistaKgLote; label: string }> = [
+  { id: 'primera', label: 'Solo primera' },
+  { id: 'segunda', label: 'Solo segunda' },
+  { id: 'mixtas', label: 'Mixtas' },
+];
+
+function kgDeVista(l: Lote, vista: VistaKgLote): number {
+  if (vista === 'primera') return Number(l.kg_primera) || 0;
+  if (vista === 'segunda') return Number(l.kg_segunda) || 0;
+  return Number(l.kg_salida) || 0;
+}
+
 /**
  * Barras de producción por lote (máx. 8), orden mayor→menor.
  * Cada barra es apilada según el mix de variedades de la sección (S1C1…).
@@ -436,6 +450,7 @@ function LoteBarrasChart({
   lotes: Lote[];
   fmtKg: (n: number) => string;
 }) {
+  const [vista, setVista] = useState<VistaKgLote>('mixtas');
   const [hover, setHover] = useState<{
     lote: string;
     x: number;
@@ -444,11 +459,15 @@ function LoteBarrasChart({
 
   const bars = useMemo(() => {
     return [...lotes]
-      .filter((l) => (Number(l.kg_salida) || 0) > 0 || (Number(l.bins_campo) || 0) > 0)
-      .sort((a, b) => (Number(b.kg_salida) || 0) - (Number(a.kg_salida) || 0))
+      .filter((l) => {
+        const kg = kgDeVista(l, vista);
+        if (vista === 'mixtas') return kg > 0 || (Number(l.bins_campo) || 0) > 0;
+        return kg > 0;
+      })
+      .sort((a, b) => kgDeVista(b, vista) - kgDeVista(a, vista))
       .slice(0, 8)
       .map((l) => {
-        const kg = Number(l.kg_salida) || 0;
+        const kg = kgDeVista(l, vista);
         const mix = mixVariedadParaLote(l.lote);
         const seccion = seccionDesdeLote(l.lote);
         const segments =
@@ -469,19 +488,44 @@ function LoteBarrasChart({
                   label: 'Sin mix definido',
                 },
               ];
-        return { lote: l.lote, seccion, kg, bins: l.bins_campo, segments };
+        return {
+          lote: l.lote,
+          seccion,
+          kg,
+          kgPrimera: Number(l.kg_primera) || 0,
+          kgSegunda: Number(l.kg_segunda) || 0,
+          bins: l.bins_campo,
+          segments,
+        };
       });
-  }, [lotes]);
+  }, [lotes, vista]);
 
   const maxKg = Math.max(...bars.map((b) => b.kg), 1);
-  const chartH = 220;
-  const chartPadTop = 16;
+  const chartH = 228;
+  const chartPadTop = 18;
   const chartPadBottom = 36;
   const innerH = chartH - chartPadTop - chartPadBottom;
   const barGap = 12;
   const n = Math.max(bars.length, 1);
-  const chartW = Math.max(520, n * 72);
-  const barW = Math.min(48, (chartW - barGap * (n + 1)) / n);
+  const etiquetaEje = (v: number) => (v <= 0 ? '0' : formatKg(v));
+  const yAxisW = Math.max(72, etiquetaEje(maxKg).length * 6.8 + 12);
+  const plotLeft = yAxisW;
+  const plotRight = 8;
+  const innerPlotW = Math.max(440, n * (48 + barGap));
+  const chartW = plotLeft + innerPlotW + plotRight;
+  const barW = Math.min(48, (innerPlotW - barGap * (n + 1)) / n);
+  const tituloVista =
+    vista === 'primera'
+      ? 'Producción por lote (kg 1ra)'
+      : vista === 'segunda'
+        ? 'Producción por lote (kg 2da)'
+        : 'Producción por lote (kg total)';
+  const detalleVista =
+    vista === 'primera'
+      ? 'Solo primera (RPC + cartón).'
+      : vista === 'segunda'
+        ? 'Solo segunda (jugo a 900 kg).'
+        : 'Mixtas: primera + segunda.';
 
   const variedadesUsadas = useMemo(() => {
     const set = new Set<VariedadLimonCampo>();
@@ -493,25 +537,69 @@ function LoteBarrasChart({
     return Array.from(set);
   }, [bars]);
 
-  if (bars.length === 0) {
-    return (
-      <p style={{ color: '#64748b', fontSize: 13 }}>
-        No hay producción por lote para graficar.
-      </p>
-    );
-  }
-
-  const hovered = hover ? bars.find((b) => b.lote === hover.lote) : null;
+  const hovered = hover && bars.length > 0 ? bars.find((b) => b.lote === hover.lote) : null;
 
   return (
     <div style={{ marginTop: 8, marginBottom: 20 }}>
-      <h4 style={{ margin: '0 0 6px' }}>Producción por lote (kg total)</h4>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 10,
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 6,
+        }}
+      >
+        <h4 style={{ margin: 0 }}>{tituloVista}</h4>
+        <div
+          style={{
+            display: 'inline-flex',
+            border: '1px solid #cbd5e1',
+            borderRadius: 8,
+            overflow: 'hidden',
+            background: '#fff',
+          }}
+        >
+          {VISTA_KG_LOTE.map((op) => {
+            const activo = vista === op.id;
+            return (
+              <button
+                key={op.id}
+                type="button"
+                onClick={() => {
+                  setVista(op.id);
+                  setHover(null);
+                }}
+                style={{
+                  border: 'none',
+                  borderRight: op.id === 'mixtas' ? 'none' : '1px solid #e2e8f0',
+                  background: activo ? '#14532d' : '#fff',
+                  color: activo ? '#fff' : '#334155',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  padding: '6px 12px',
+                  cursor: 'pointer',
+                }}
+              >
+                {op.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-        {bars.length} barra(s), mayor → menor. Colores = mix de variedades por sección. Pasa el
-        cursor para ver el detalle.
+        {detalleVista} {bars.length} barra(s), mayor → menor. Colores = mix de variedades por
+        sección. Pasa el cursor para ver el detalle.
       </p>
 
       <div style={{ position: 'relative', overflowX: 'auto' }}>
+        {bars.length === 0 ? (
+          <p style={{ color: '#64748b', fontSize: 13 }}>
+            No hay kilos de esta vista para graficar.
+          </p>
+        ) : (
+        <>
         <svg
           width={chartW}
           height={chartH}
@@ -525,22 +613,27 @@ function LoteBarrasChart({
             return (
               <g key={t}>
                 <line
-                  x1={40}
-                  x2={chartW - 8}
+                  x1={plotLeft}
+                  x2={chartW - plotRight}
                   y1={y}
                   y2={y}
                   stroke="#e2e8f0"
                   strokeWidth={1}
                 />
-                <text x={36} y={y + 3} textAnchor="end" style={{ fontSize: 9, fill: '#94a3b8' }}>
-                  {t === 0 ? '0' : formatKg(maxKg * t)}
+                <text
+                  x={plotLeft - 8}
+                  y={y + 3}
+                  textAnchor="end"
+                  style={{ fontSize: 10, fill: '#64748b' }}
+                >
+                  {etiquetaEje(maxKg * t)}
                 </text>
               </g>
             );
           })}
 
           {bars.map((b, i) => {
-            const x = 48 + i * (barW + barGap);
+            const x = plotLeft + barGap + i * (barW + barGap);
             let yCursor = chartPadTop + innerH;
             return (
               <g
@@ -623,8 +716,17 @@ function LoteBarrasChart({
               {hovered.lote}
               {hovered.seccion ? ` · ${hovered.seccion}` : ''}
             </div>
-            <div style={{ color: '#cbd5e1', marginBottom: 6 }}>
-              {formatKg(hovered.kg)} kg · {hovered.bins} bins
+            <div style={{ color: '#cbd5e1', marginBottom: 4 }}>
+              {vista === 'primera'
+                ? `${formatKg(hovered.kg)} kg de 1ra`
+                : vista === 'segunda'
+                  ? `${formatKg(hovered.kg)} kg de 2da (jugo)`
+                  : `${formatKg(hovered.kg)} kg total`}
+              {' · '}
+              {hovered.bins} bins
+            </div>
+            <div style={{ color: '#94a3b8', marginBottom: 6 }}>
+              1ra {formatKg(hovered.kgPrimera)} kg · 2da {formatKg(hovered.kgSegunda)} kg
             </div>
             {hovered.segments.map((s) => (
               <div
@@ -651,6 +753,8 @@ function LoteBarrasChart({
               </div>
             ))}
           </div>
+        )}
+        </>
         )}
       </div>
 
@@ -1491,6 +1595,10 @@ export default function Reportes({ token }: ReportesProps) {
 
   /** Indicadores visibles: total o selección */
   const a = resumenVista;
+  const partesCalidad = a
+    ? porcentajesRpcCartonJugo(a.kg_rpc ?? 0, a.kg_carton ?? 0, a.kg_segunda || 0)
+    : { rpc: 0, carton: 0, jugo: 0 };
+  const pctPrimeraTotal = Math.round((partesCalidad.rpc + partesCalidad.carton) * 10) / 10;
   const modoSeleccion = graficaModo === 'seleccion';
   const sinSeleccion = modoSeleccion && corridasSeleccionadas.length === 0;
 
@@ -1848,37 +1956,61 @@ export default function Reportes({ token }: ReportesProps) {
             </p>
           ) : a ? (
             <>
-              {/* Primera (RPC + cartón) y Segunda (jugo) suman 100. */}
+              {/* Seis tarjetas en una fila. RPC + cartón + jugo = 100. */}
+              <div style={{ overflowX: 'auto', width: '100%', marginBottom: 12 }}>
               <div style={indicadoresGrid}>
-                <div style={{ ...cardPrimary, background: '#dcfce7' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#166534' }}>Primera</div>
-                  <div style={{ ...cardPrimaryValue, color: '#14532d' }}>
-                    {a.pct_primera}
+                <div style={{ ...cardPrimary, background: '#dbeafe' }}>
+                  <div style={{ ...cardPrimaryLabel, color: '#1e40af' }}>% 1ra RPC</div>
+                  <div style={{ ...cardPrimaryValue, color: '#1e3a8a' }}>
+                    {partesCalidad.rpc}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                     <div style={cardStatChip}>
                       <div style={cardStatChipLabel}>Kg</div>
-                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
-                        {fmtKg(a.kg_primera)}
+                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
+                        {fmtKg(a.kg_rpc ?? 0)}
                       </div>
                     </div>
                     <div style={cardStatChip}>
                       <div style={cardStatChipLabel}>Kg/ha</div>
-                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
-                        {fmtNum(a.kg_primera_por_ha)}
+                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
+                        {fmtNum(kgHa(a.kg_rpc ?? 0, hectareas))}
                       </div>
                     </div>
                   </div>
-                  <div style={{ fontSize: 11, color: '#166534', marginTop: 6, lineHeight: 1.35 }}>
-                    RPC {fmtKg(a.kg_rpc ?? 0)} kg ({a.cajas_rpc} cajas) · Cartón{' '}
-                    {fmtKg(a.kg_carton ?? 0)} kg ({a.cajas_carton} cajas)
+                  <div style={{ fontSize: 11, color: '#1e40af', marginTop: 6 }}>
+                    {a.cajas_rpc} cajas
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#ffedd5' }}>
+                  <div style={{ ...cardPrimaryLabel, color: '#9a3412' }}>% 1ra cartón</div>
+                  <div style={{ ...cardPrimaryValue, color: '#7c2d12' }}>
+                    {partesCalidad.carton}
+                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg</div>
+                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>
+                        {fmtKg(a.kg_carton ?? 0)}
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg/ha</div>
+                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>
+                        {fmtNum(kgHa(a.kg_carton ?? 0, hectareas))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#9a3412', marginTop: 6 }}>
+                    {a.cajas_carton} cajas
                   </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#fef9c3' }}>
                   <div style={{ ...cardPrimaryLabel, color: '#854d0e' }}>Segunda (jugo)</div>
                   <div style={{ ...cardPrimaryValue, color: '#713f12' }}>
-                    {a.pct_segunda}
+                    {partesCalidad.jugo}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
@@ -1933,27 +2065,8 @@ export default function Reportes({ token }: ReportesProps) {
                       return Number.isFinite(tonHa) ? tonHa.toFixed(1) : '—';
                     })()}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>1ra</div>
-                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
-                        {fmtNum(a.pct_primera, 1)}%
-                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b' }}>
-                          {' '}
-                          ({fmtKg(a.kg_primera)})
-                        </span>
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Jugo</div>
-                      <div style={{ ...cardStatChipValue, color: '#854d0e' }}>
-                        {fmtNum(a.pct_segunda, 1)}%
-                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b' }}>
-                          {' '}
-                          ({fmtKg(a.kg_segunda)})
-                        </span>
-                      </div>
-                    </div>
+                  <div style={{ fontSize: 11, color: '#166534', marginTop: 6, lineHeight: 1.35 }}>
+                    1ra {fmtNum(pctPrimeraTotal, 1)}% ({fmtKg(a.kg_primera)} kg)
                   </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
@@ -1974,6 +2087,7 @@ export default function Reportes({ token }: ReportesProps) {
                     </div>
                   </div>
                 </div>
+              </div>
               </div>
 
               {/* Gráfica de pastel alineada al mismo alcance */}
