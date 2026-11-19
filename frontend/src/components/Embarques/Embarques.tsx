@@ -3,6 +3,7 @@ import type { Cliente, EmbarqueDetalle, InventarioFinalItem } from '../../types'
 import { InventarioFinalSelector } from '../ui';
 import { useCreateEmbarque } from '../../hooks/useCreateEmbarque';
 import { useCreateCliente } from '../../hooks/useClientes';
+import { labelCalidadMelon, labelPresentacionMelon } from '../../lib/constants';
 import {
   parseManifiesto,
   confirmarManifiesto,
@@ -36,7 +37,10 @@ export default function Embarques({
   const [selectedFinalStock, setSelectedFinalStock] = useState<InventarioFinalItem | null>(null);
   const [selectedCantidad, setSelectedCantidad] = useState('');
 
-  // Manifiesto PDF
+  // Manifiesto PDF. Limón es el flujo de siempre; melón es opt-in.
+  const [manifestProducto, setManifestProducto] = useState<'limon_amarillo' | 'melon'>(
+    'limon_amarillo'
+  );
   const [manifestFile, setManifestFile] = useState<File | null>(null);
   const [manifestPreview, setManifestPreview] = useState<ManifiestoParseResult | null>(null);
   const [manifestLoading, setManifestLoading] = useState(false);
@@ -221,8 +225,21 @@ export default function Embarques({
 
   const isSubmittingEmbarque = createEmbarqueMutation.isPending;
 
-  const getPresentacionLabel = (presentacion?: string | null, talla?: string | null) => {
+  const getPresentacionLabel = (
+    presentacion?: string | null,
+    talla?: string | null,
+    producto?: string | null
+  ) => {
     if (!presentacion) return '';
+    const esMelon =
+      producto === 'melon' ||
+      presentacion === 'caja_chica_a' ||
+      presentacion === 'caja_normal_b' ||
+      presentacion === 'caja_jumbo_c';
+    if (esMelon) {
+      const base = labelPresentacionMelon(presentacion);
+      return talla ? `${base} #${talla}` : base;
+    }
     const map: Record<string, string> = {
       rpc_12: 'RPC 12',
       rpc_18: 'RPC 18',
@@ -239,7 +256,11 @@ export default function Embarques({
     setManifestError('');
     setManifestPreview(null);
     try {
-      const data = await parseManifiesto(token, manifestFile);
+      const data = await parseManifiesto(
+        token,
+        manifestFile,
+        manifestProducto === 'melon' ? 'melon' : undefined
+      );
       setManifestPreview(data);
       if (data.cliente_sugerido_id) {
         setClienteIdEmbarque(String(data.cliente_sugerido_id));
@@ -357,7 +378,9 @@ export default function Embarques({
       const detalles = manifestPreview.detalles
         .filter((d) => (d.cantidad_cajas || 0) > 0)
         .map((d) => ({
-          producto: 'limon_amarillo' as const,
+          producto: (d.producto === 'melon' ? 'melon' : 'limon_amarillo') as
+            | 'melon'
+            | 'limon_amarillo',
           mercado: (d.mercado === 'nacional' ? 'nacional' : 'exportacion') as
             | 'nacional'
             | 'exportacion',
@@ -420,10 +443,58 @@ export default function Embarques({
         }}
       >
         <h3 style={{ marginTop: 0, color: '#0c4a6e' }}>📄 Cargar manifiesto (PDF)</h3>
-        <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
-          Sube el manifiesto de exportación (formato Llano Brand). Se leen las líneas, se agrupan
-          por presentación/talla y al confirmar se descuenta el inventario final automáticamente.
-        </p>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 10 }}>
+          <button
+            type="button"
+            onClick={() => {
+              setManifestProducto('limon_amarillo');
+              setManifestPreview(null);
+              setManifestError('');
+            }}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 999,
+              border: manifestProducto === 'limon_amarillo' ? 'none' : '1px solid #bae6fd',
+              background: manifestProducto === 'limon_amarillo' ? '#0369a1' : 'white',
+              color: manifestProducto === 'limon_amarillo' ? 'white' : '#0369a1',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Limón
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setManifestProducto('melon');
+              setManifestPreview(null);
+              setManifestError('');
+            }}
+            style={{
+              padding: '6px 14px',
+              borderRadius: 999,
+              border: manifestProducto === 'melon' ? 'none' : '1px solid #bbf7d0',
+              background: manifestProducto === 'melon' ? '#15803d' : 'white',
+              color: manifestProducto === 'melon' ? 'white' : '#15803d',
+              fontWeight: 700,
+              cursor: 'pointer',
+            }}
+          >
+            Melón
+          </button>
+        </div>
+        {manifestProducto === 'melon' ? (
+          <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+            Mismo formato Llano Brand. Cada línea indica caja (chica A, normal B o jumbo C), talla
+            (#9s, #12s, #15s o #6s en jumbo) y calidad (1ra LLANO o 2da Wallys). Al confirmar se
+            descuentan esas cajas del inventario de melón.
+          </p>
+        ) : (
+          <p style={{ fontSize: 13, color: '#475569', marginTop: 0 }}>
+            Sube el manifiesto de exportación (formato Llano Brand). Se leen las líneas, se agrupan
+            por presentación/talla y al confirmar se descuenta el inventario final automáticamente.
+          </p>
+        )}
 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
           <input
@@ -597,8 +668,12 @@ export default function Embarques({
                         }}
                       >
                         <td style={td}>
-                          {getPresentacionLabel(d.presentacion, d.talla)}
-                          <div style={{ fontSize: 11, color: '#64748b' }}>{d.calidad}</div>
+                          {getPresentacionLabel(d.presentacion, d.talla, d.producto)}
+                          <div style={{ fontSize: 11, color: '#64748b' }}>
+                            {d.producto === 'melon' && d.calidad
+                              ? labelCalidadMelon(d.calidad)
+                              : d.calidad}
+                          </div>
                         </td>
                         <td style={td}>
                           <input
