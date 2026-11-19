@@ -78,11 +78,12 @@ export default function EstacionApp() {
       : 'Hora de la última lectura. En línea solo indica si esa lectura es reciente.';
   const ir = (v: Vista) => { location.hash = v; setVista(v); window.scrollTo(0, 0); };
   const salir = () => { sesion.borrar(); setToken(null); setRol(null); };
-  const vistaOk: Vista = !admin && (vista === 'nodo' || vista === 'rangos') ? 'inicio' : vista;
+  const vistaOk: Vista = !admin && vista === 'nodo' ? 'inicio' : vista;
   const nav: [Vista, string, string][] = [
     ['inicio', 'casa', 'Inicio'],
     ['historial', 'grafica', 'Historial'],
-    ...(admin ? [['rangos', 'rangos', 'Rangos'] as [Vista, string, string], ['nodo', 'engrane', 'Config'] as [Vista, string, string]] : []),
+    ['rangos', 'rangos', 'Rangos'],
+    ...(admin ? [['nodo', 'engrane', 'Config'] as [Vista, string, string]] : []),
     ['alertas', 'campana', 'Alertas'],
   ];
   return (
@@ -105,13 +106,12 @@ export default function EstacionApp() {
             <span className="ultima-lectura" title={tituloLectura}>{leyenda}</span>
           </div>
           <Instalar />
-          <button className="btn" type="button" onClick={salir}>Salir</button>
         </div>
       </header>
       <main>
         {vistaOk === 'inicio' && <Inicio d={ultimo} errorRed={errorRed} />}
         {vistaOk === 'historial' && <Historial />}
-        {vistaOk === 'rangos' && admin && <Rangos alGuardar={cargar} alSalir={salir} />}
+        {vistaOk === 'rangos' && <Rangos esAdmin={admin} alGuardar={cargar} alSalir={salir} />}
         {vistaOk === 'nodo' && admin && <ConfigNodo ultimo={ultimo} alGuardar={cargar} alSalir={salir} />}
         {vistaOk === 'alertas' && <Alertas alCambiar={cargar} puedeResolver={admin} />}
         <footer className="pie-marca">{MARCA} · {MARCA_NOMBRE} · <span>{MARCA_FIRMA}</span></footer>
