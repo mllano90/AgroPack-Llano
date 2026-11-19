@@ -124,6 +124,16 @@ export async function getEmpaques(token?: string): Promise<EmpaqueRecord[]> {
   return res.data;
 }
 
+/** Todas las corridas de melón. El listado general sigue cortado en las últimas 100. */
+export async function getEmpaquesMelon(token?: string): Promise<EmpaqueRecord[]> {
+  const headers = token ? { Authorization: `Bearer ${token}` } : {};
+  const res = await api.get<EmpaqueRecord[]>('/api/empaque/', {
+    headers,
+    params: { producto: 'melon' },
+  });
+  return res.data;
+}
+
 export interface DesverdizadoAdminItem {
   id: number;
   lote: string;
