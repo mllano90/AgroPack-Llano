@@ -466,6 +466,20 @@ def listar_desverdizado_admin(
         .limit(200)
         .all()
     )
+    # Las filas devueltas sin recepción no deben perderse por el límite de 200.
+    huerfanos = (
+        db.query(InventarioDesverdizado)
+        .filter(
+            InventarioDesverdizado.recepcion_id.is_(None),
+            InventarioDesverdizado.cantidad_bins > 0,
+        )
+        .all()
+    )
+    by_id = {d.id: d for d in items}
+    for d in huerfanos:
+        if (d.estado or "").lower() == "eliminado":
+            continue
+        by_id.setdefault(d.id, d)
     return [
         {
             "id": d.id,
@@ -475,8 +489,10 @@ def listar_desverdizado_admin(
             "fecha_tentativa_salida": str(d.fecha_tentativa_salida) if d.fecha_tentativa_salida else None,
             "estado": d.estado,
             "producto": _producto_val(d.producto) or "limon_amarillo",
+            "recepcion_id": d.recepcion_id,
+            "huerfano": d.recepcion_id is None,
         }
-        for d in items
+        for d in by_id.values()
     ]
 
 

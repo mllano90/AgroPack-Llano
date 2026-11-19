@@ -133,6 +133,9 @@ export interface DesverdizadoAdminItem {
   estado?: string | null;
   /** limon_amarillo | melon */
   producto?: string | null;
+  recepcion_id?: number | null;
+  /** Bins devueltos al cancelar un empaque, sin recepción ligada */
+  huerfano?: boolean;
 }
 
 /** Lotes en desverdizado (admin / correcciones) */
@@ -387,6 +390,27 @@ export async function eliminarInventarioCampoAdmin(
     `/api/correcciones/inventario/campo/${id}`,
     { headers: { Authorization: `Bearer ${token}` } }
   );
+  return res.data;
+}
+
+/** Quita una fila de bins devueltos sin recepción. Solo esa fila. */
+export async function eliminarBinsDevueltos(
+  token: string,
+  desverdizadoId: number
+): Promise<{
+  message: string;
+  id: number;
+  lote?: string | null;
+  bins_eliminados: number;
+}> {
+  const res = await api.delete<{
+    message: string;
+    id: number;
+    lote?: string | null;
+    bins_eliminados: number;
+  }>(`/api/correcciones/bins-devueltos/${desverdizadoId}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
   return res.data;
 }
 
