@@ -232,6 +232,7 @@
 .estacion-root .pasos{display:flex;gap:4px;margin:8px 0}.estacion-root .pasos i{flex:1;height:6px;border-radius:3px;background:rgba(255,255,255,.12)}.estacion-root .pasos i.on{background:var(--verde)}
 .estacion-root .instr{font-size:.88rem;line-height:1.5;padding-left:20px;color:var(--texto)}
 .estacion-root .salir{text-align:center;margin:8px 0 20px}
+.estacion-root .salir-btn{display:inline-flex;align-items:center;gap:8px;color:var(--texto);border-color:rgba(238,247,240,.45);background:rgba(8,18,12,.55);min-width:12rem;justify-content:center}
 .estacion-root .lista-alertas{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:8px}
 .estacion-root .lista-alertas li{display:grid;grid-template-columns:10px 1fr auto;gap:10px;align-items:start;padding:10px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08)}
 .estacion-root .lista-alertas li .marca{width:10px;height:10px;border-radius:50%;margin-top:5px;background:var(--rojo);box-shadow:0 0 6px var(--rojo)}
@@ -414,11 +415,11 @@
   .estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;width:100%;max-width:none;margin:0;display:flex;flex-direction:column;overflow:hidden;gap:4px}
   .estacion-root.en-inicio .cabecera{flex:none;position:static;margin:0;padding:4px 8px;gap:6px;background:rgba(8,18,12,.45)}
   .estacion-root.en-inicio .cabecera h1{font-size:clamp(.68rem,3.5vw,.9rem);color:#fff}
-  .estacion-root.en-inicio .marca{flex:1 1 8rem;min-width:42%}
+  .estacion-root.en-inicio .marca{flex:1 1 auto;min-width:0}
   .estacion-root.en-inicio .marca-nodo{font-size:.68rem}
-  .estacion-root.en-inicio .cab-acciones{flex:1 1 auto;flex-basis:auto;min-width:0;justify-content:flex-end;margin-left:auto}
-  .estacion-root.en-inicio .estado-senal{flex-wrap:wrap;justify-content:flex-end;gap:1px 6px}
-  .estacion-root.en-inicio .ultima-lectura{flex:0 1 auto;font-size:.68rem;text-align:right}
+  .estacion-root.en-inicio .cab-acciones{flex:0 1 auto;flex-basis:auto;min-width:0;justify-content:flex-end;margin-left:auto}
+  .estacion-root.en-inicio .estado-senal{flex-wrap:nowrap;justify-content:flex-end;gap:1px 8px}
+  .estacion-root.en-inicio .ultima-lectura{flex:0 1 auto;font-size:.68rem;text-align:right;white-space:nowrap}
   .estacion-root.en-inicio .cabecera .btn{padding:4px 8px;font-size:.72rem}
   .estacion-root.en-inicio .aviso-diag{flex:none;margin:0;padding:3px 8px;font-size:.68rem;max-height:2.4em;overflow:hidden}
   .estacion-root.en-inicio .aviso-diag strong{display:inline;margin:0 .3em 0 0}
