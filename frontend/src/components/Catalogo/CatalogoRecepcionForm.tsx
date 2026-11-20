@@ -24,6 +24,7 @@ export default function CatalogoRecepcionForm({ token, codigo, onDone }: Props) 
   const [lote, setLote] = useState('');
   const [cantidad, setCantidad] = useState('');
   const [fecha, setFecha] = useState('');
+  const [forma, setForma] = useState('');
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -41,6 +42,12 @@ export default function CatalogoRecepcionForm({ token, codigo, onDone }: Props) 
   }, [token, codigo]);
 
   if (!producto) return <p style={{ color: '#64748b' }}>Cargando producto…</p>;
+  const formas = producto.formas?.length
+    ? producto.formas
+    : producto.peso_contenedor_kg
+      ? [{ codigo: producto.tipo_cosecha, nombre: producto.tipo_cosecha_nombre, peso_kg: producto.peso_contenedor_kg }]
+      : [];
+  const formaSel = formas.find((f) => f.codigo === forma) || (formas.length === 1 ? formas[0] : undefined);
   if (!producto.configurado) {
     return (
       <p style={{ color: '#92400e' }}>
@@ -50,9 +57,13 @@ export default function CatalogoRecepcionForm({ token, codigo, onDone }: Props) 
     );
   }
 
-  const unidad = producto.tipo_cosecha_nombre.toLowerCase();
+  const unidad = (formaSel?.nombre || 'contenedor').toLowerCase();
+  const nPreview = parseInt(cantidad, 10);
+  const kgPreview =
+    formaSel && Number.isInteger(nPreview) && nPreview > 0 ? nPreview * formaSel.peso_kg : null;
 
   const registrar = async () => {
+    if (!formaSel) return alert('Elige la forma de cosecha');
     const n = parseInt(cantidad, 10);
     if (!Number.isInteger(n) || n <= 0) return alert(`Indica cuántos ${unidad}s entran`);
     setBusy(true);
@@ -62,6 +73,7 @@ export default function CatalogoRecepcionForm({ token, codigo, onDone }: Props) 
         cantidad: n,
         lote: lote.trim() || 'General',
         fecha: fecha || null,
+        codigo_cosecha: formaSel.codigo,
       });
       alert('Recepción registrada. Ya se puede empacar desde ese lote.');
       setCantidad('');
@@ -77,9 +89,17 @@ export default function CatalogoRecepcionForm({ token, codigo, onDone }: Props) 
   return (
     <div>
       <p style={{ fontSize: 13, color: '#64748b' }}>
-        {producto.nombre}: cosecha en <strong>{producto.tipo_cosecha_nombre}</strong>
-        {producto.peso_contenedor_kg != null ? ` · ${producto.peso_contenedor_kg} kg c/u` : ''}.
+        {producto.nombre}. Los kilos de campo son la cantidad por el peso de la forma elegida.
       </p>
+      <label style={{ fontSize: 13, fontWeight: 600 }}>Forma de cosecha</label>
+      <select value={formaSel?.codigo || ''} onChange={(e) => setForma(e.target.value)} style={input}>
+        {formas.length !== 1 && <option value="">Elegir forma</option>}
+        {formas.map((f) => (
+          <option key={f.codigo} value={f.codigo}>
+            {f.nombre} · {f.peso_kg} kg
+          </option>
+        ))}
+      </select>
       <label style={{ fontSize: 13, fontWeight: 600 }}>Lote</label>
       <input
         value={lote}
@@ -95,6 +115,11 @@ export default function CatalogoRecepcionForm({ token, codigo, onDone }: Props) 
         placeholder={`Cantidad de ${unidad}s`}
         style={input}
       />
+      {kgPreview != null && (
+        <p style={{ fontSize: 13, color: '#166534', marginTop: 0 }}>
+          {nPreview} × {formaSel?.peso_kg} kg = <strong>{kgPreview.toLocaleString('en-US')} kg</strong> de campo
+        </p>
+      )}
       <label style={{ fontSize: 13, fontWeight: 600 }}>Fecha</label>
       <input type="date" value={fecha} onChange={(e) => setFecha(e.target.value)} style={input} />
       <button type="button" onClick={registrar} disabled={busy} style={{ padding: '12px 24px' }}>

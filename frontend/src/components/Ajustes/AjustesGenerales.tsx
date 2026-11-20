@@ -151,7 +151,7 @@ export default function AjustesGenerales({ token }: Props) {
 
       {actual && (
         <ProductoConfigForm
-          key={`${actual.id}-${actual.peso_contenedor_kg ?? ''}-${actual.parametros.map((p) => `${p.id}:${p.kg}:${p.cajas_por_parrilla}`).join('|')}-${actual.activo}`}
+          key={`${actual.id}-${(actual.formas || []).map((f) => `${f.codigo}:${f.peso_kg}`).join('|')}-${actual.parametros.map((p) => `${p.id}:${p.kg}:${p.cajas_por_parrilla}`).join('|')}-${actual.activo}`}
           token={token}
           producto={actual}
           tiposCaja={tiposCaja}

@@ -25,6 +25,12 @@ export interface ParametroCatalogo {
   cajas_por_parrilla: number;
 }
 
+export interface FormaCosecha {
+  codigo: string;
+  nombre: string;
+  peso_kg: number;
+}
+
 export interface ProductoCatalogo {
   id: number;
   codigo: string;
@@ -32,6 +38,7 @@ export interface ProductoCatalogo {
   tipo_cosecha: string;
   tipo_cosecha_nombre: string;
   peso_contenedor_kg: number | null;
+  formas: FormaCosecha[];
   hectareas: number | null;
   activo: boolean;
   configurado: boolean;
@@ -41,6 +48,9 @@ export interface ProductoCatalogo {
 export interface CampoCatalogo {
   producto_id: number;
   lote: string;
+  codigo: string;
+  nombre: string;
+  peso_kg: number;
   cantidad_disponible: number;
 }
 
@@ -82,9 +92,17 @@ export interface ReporteCatalogo extends ProductoCatalogo {
   ton_por_ha: number | null;
   parrillas_primera: number;
   contenedores_por_parrilla: number | null;
+  por_forma: Array<{
+    codigo: string;
+    nombre: string;
+    peso_kg: number;
+    contenedores: number;
+    kg: number;
+    contenedores_por_parrilla: number | null;
+  }>;
   por_presentacion_primera: PresentacionReporte[];
   por_presentacion_segunda: PresentacionReporte[];
-  campo: Array<{ lote: string; cantidad_disponible: number }>;
+  campo: Array<{ lote: string; forma?: string; codigo?: string; cantidad_disponible: number }>;
   inventario_final: InventarioCatalogo[];
   empaques: Array<{
     id: number;
@@ -166,8 +184,9 @@ export async function configurarProducto(
   token: string,
   id: number,
   body: {
-    tipo_cosecha: string;
-    peso_contenedor_kg: number;
+    tipo_cosecha?: string;
+    peso_contenedor_kg?: number;
+    formas?: Array<{ codigo: string; peso_kg: number }>;
     hectareas: number | null;
     parametros: Array<{
       calidad: CalidadCatalogo;
@@ -196,7 +215,13 @@ export async function eliminarProductoCatalogo(token: string, id: number): Promi
 
 export async function crearRecepcionCatalogo(
   token: string,
-  body: { producto_id: number; cantidad: number; lote?: string; fecha?: string | null }
+  body: {
+    producto_id: number;
+    cantidad: number;
+    lote?: string;
+    fecha?: string | null;
+    codigo_cosecha?: string;
+  }
 ) {
   const res = await client(token).post('/api/catalogo/recepciones', body);
   return res.data;
@@ -214,7 +239,8 @@ export async function crearEmpaqueCatalogo(
   body: {
     producto_id: number;
     lote: string;
-    cantidad_campo: number;
+    cantidad_campo?: number;
+    consumos?: Array<{ codigo: string; cantidad: number }>;
     fecha?: string | null;
     lineas: Array<{ parametro_id: number; cantidad: number }>;
   }

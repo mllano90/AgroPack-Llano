@@ -78,8 +78,7 @@ export default function CatalogoReportes({ token, productoId, seccion, reload }:
 }
 
 function Produccion({ data }: { data: ReporteCatalogo }) {
-  const unidad =
-    data.tipo_cosecha === 'bins' ? 'Bins' : data.tipo_cosecha === 'cajas_campo' ? 'Cajas campo' : data.tipo_cosecha_nombre;
+  const formas = (data.por_forma || []).filter((f) => f.contenedores > 0);
   const partes = [
     ...data.por_presentacion_primera
       .filter((p) => p.kg > 0)
@@ -91,13 +90,13 @@ function Produccion({ data }: { data: ReporteCatalogo }) {
   return (
     <div style={{ marginTop: 12 }}>
       <p style={{ fontSize: 13, color: '#64748b' }}>
-        {unidad} = {fmtNum(data.peso_contenedor_kg, 1)} kg
+        {(data.formas || [])
+          .map((f) => `${f.nombre} = ${fmtNum(f.peso_kg, 1)} kg`)
+          .join(' · ') || 'Sin formas de cosecha'}
         {data.hectareas ? ` · ${fmtNum(data.hectareas, 2)} ha` : ' · sin hectáreas (ton/ha en blanco)'}
-        {' · '}
-        <strong>
-          {unidad} / parrilla = {unidad.toLowerCase()} recibidos ÷ parrillas de 1ra
-        </strong>
-        . El % de 1ra y de 2da es sobre los kilos de campo.
+        . Los kilos de campo suman cantidad × peso de cada forma. El % de 1ra y de 2da es sobre esos
+        kilos. <strong>Contenedores / parrilla</strong> se muestra por forma (contenedores recibidos de
+        esa forma ÷ parrillas de 1ra): bins y cajas de campo no se suman entre sí.
       </p>
       <h3 style={{ marginBottom: 8 }}>Acumulado — indicadores principales</h3>
       <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
@@ -122,10 +121,20 @@ function Produccion({ data }: { data: ReporteCatalogo }) {
           ['1ra', `${fmtNum(data.pct_primera, 1)}%`],
           ['2da', `${fmtNum(data.pct_segunda, 1)}%`],
         ]} />
-        <Kpi bg="#e0f2fe" labelColor="#075985" valueColor="#0c4a6e" titulo={`${unidad} / parrilla`} valor={data.contenedores_por_parrilla != null ? fmtNum(data.contenedores_por_parrilla, 2) : '—'} chips={[
-          [unidad, String(data.contenedores)],
-          ['Parr. 1ra', fmtNum(data.parrillas_primera, 2)],
-        ]} />
+        {(formas.length ? formas : [{ nombre: 'Contenedores', contenedores: data.contenedores, contenedores_por_parrilla: data.contenedores_por_parrilla, kg: data.kg_campo }]).map((f) => (
+          <Kpi
+            key={f.nombre}
+            bg="#e0f2fe"
+            labelColor="#075985"
+            valueColor="#0c4a6e"
+            titulo={`${f.nombre} / parrilla`}
+            valor={f.contenedores_por_parrilla != null ? fmtNum(f.contenedores_por_parrilla, 2) : '—'}
+            chips={[
+              ['Recibidos', String(f.contenedores)],
+              ['Parr. 1ra', fmtNum(data.parrillas_primera, 2)],
+            ]}
+          />
+        ))}
         {data.por_presentacion_primera.map((p, i) => {
           const c = FONDOS[i % FONDOS.length];
           return (
@@ -218,10 +227,9 @@ function Kpi({
 }
 
 function Inventario({ data }: { data: ReporteCatalogo }) {
-  const unidad = data.tipo_cosecha_nombre;
   return (
     <div style={{ marginTop: 12 }}>
-      <h3>Campo — {unidad}</h3>
+      <h3>Campo</h3>
       {data.campo.length === 0 ? (
         <p style={{ color: '#64748b' }}>Sin recepciones.</p>
       ) : (
@@ -229,13 +237,15 @@ function Inventario({ data }: { data: ReporteCatalogo }) {
           <thead>
             <tr style={{ textAlign: 'left', color: '#64748b' }}>
               <th style={{ padding: 8 }}>Lote</th>
+              <th style={{ padding: 8 }}>Forma</th>
               <th style={{ padding: 8 }}>Disponibles</th>
             </tr>
           </thead>
           <tbody>
             {data.campo.map((c) => (
-              <tr key={c.lote}>
+              <tr key={`${c.lote}-${c.codigo || c.forma || ''}`}>
                 <td style={{ padding: 8, borderTop: '1px solid #e2e8f0' }}>{c.lote}</td>
+                <td style={{ padding: 8, borderTop: '1px solid #e2e8f0' }}>{c.forma || '—'}</td>
                 <td style={{ padding: 8, borderTop: '1px solid #e2e8f0' }}>{c.cantidad_disponible}</td>
               </tr>
             ))}

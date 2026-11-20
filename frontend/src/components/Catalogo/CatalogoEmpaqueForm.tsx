@@ -32,7 +32,7 @@ export default function CatalogoEmpaqueForm({ token, codigo, onDone }: Props) {
   const [producto, setProducto] = useState<ProductoCatalogo | null>(null);
   const [campo, setCampo] = useState<CampoCatalogo[]>([]);
   const [lote, setLote] = useState('');
-  const [usar, setUsar] = useState('');
+  const [usarForma, setUsarForma] = useState<Record<string, string>>({});
   const [fecha, setFecha] = useState('');
   const [lineas, setLineas] = useState<Linea[]>([{ key: '1', parametroId: '', cantidad: '' }]);
   const [busy, setBusy] = useState(false);
@@ -54,13 +54,23 @@ export default function CatalogoEmpaqueForm({ token, codigo, onDone }: Props) {
     return <p style={{ color: '#92400e' }}>Configura el producto en Ajustes generales antes de empacar.</p>;
   }
 
-  const loteRow = campo.find((c) => c.lote === lote);
-  const unidad = producto.tipo_cosecha_nombre.toLowerCase();
+  const delLote = campo.filter((c) => c.lote === lote);
+  const lotes = [...new Map(campo.map((c) => [c.lote, c])).values()];
 
   const registrar = async () => {
     if (!lote) return alert('Elige el lote del que vas a empacar');
-    const n = parseInt(usar, 10);
-    if (!Number.isInteger(n) || n <= 0) return alert(`Indica cuántos ${unidad}s se usan`);
+    const consumos: Array<{ codigo: string; cantidad: number }> = [];
+    for (const fila of delLote) {
+      const raw = usarForma[fila.codigo] || '';
+      if (!raw.trim()) continue;
+      const n = parseInt(raw, 10);
+      if (!Number.isInteger(n) || n <= 0) return alert(`Cantidad inválida de ${fila.nombre}`);
+      if (n > fila.cantidad_disponible) {
+        return alert(`Solo hay ${fila.cantidad_disponible} de ${fila.nombre}`);
+      }
+      consumos.push({ codigo: fila.codigo, cantidad: n });
+    }
+    if (consumos.length === 0) return alert('Indica cuántos contenedores usar de al menos una forma');
     const payload = [];
     for (const lin of lineas) {
       const cant = parseInt(lin.cantidad, 10);
@@ -76,12 +86,12 @@ export default function CatalogoEmpaqueForm({ token, codigo, onDone }: Props) {
       await crearEmpaqueCatalogo(token, {
         producto_id: producto.id,
         lote,
-        cantidad_campo: n,
+        consumos,
         fecha: fecha || null,
         lineas: payload,
       });
       alert('Empaque registrado. El inventario final ya tiene esas cajas.');
-      setUsar('');
+      setUsarForma({});
       setLineas([{ key: String(Date.now()), parametroId: '', cantidad: '' }]);
       await cargar();
       onDone();
@@ -95,36 +105,44 @@ export default function CatalogoEmpaqueForm({ token, codigo, onDone }: Props) {
   return (
     <div style={{ marginTop: 8 }}>
       <p style={{ fontSize: 13, color: '#64748b' }}>
-        Empaque de <strong>{producto.nombre}</strong> a partir de {unidad}s ya recibidos.
+        Empaque de <strong>{producto.nombre}</strong> a partir de lo ya recibido. Si el lote
+        mezcla formas, indica cuántos de cada una: cada forma pesa distinto.
       </p>
       {campo.length === 0 ? (
-        <p style={{ color: '#92400e' }}>No hay {unidad}s disponibles. Regístralos primero en Recepción.</p>
+        <p style={{ color: '#92400e' }}>No hay contenedores disponibles. Regístralos primero en Recepción.</p>
       ) : (
         <>
           <label style={{ fontSize: 13, fontWeight: 700 }}>Lote con existencia</label>
-          <select value={lote} onChange={(e) => setLote(e.target.value)} style={{ ...input, margin: '6px 0 10px' }}>
+          <select
+            value={lote}
+            onChange={(e) => {
+              setLote(e.target.value);
+              setUsarForma({});
+            }}
+            style={{ ...input, margin: '6px 0 10px' }}
+          >
             <option value="">Elegir lote</option>
-            {campo.map((c) => (
+            {lotes.map((c) => (
               <option key={c.lote} value={c.lote}>
-                {c.lote} · {c.cantidad_disponible} disponibles
+                {c.lote}
               </option>
             ))}
           </select>
-          {loteRow && (
-            <p style={{ fontSize: 13, marginTop: 0 }}>
-              Disponibles en este lote: <strong>{loteRow.cantidad_disponible}</strong>
-            </p>
-          )}
-          <label style={{ fontSize: 13, fontWeight: 700 }}>
-            {producto.tipo_cosecha_nombre}s a usar
-          </label>
-          <input
-            type="number"
-            min={1}
-            value={usar}
-            onChange={(e) => setUsar(e.target.value)}
-            style={{ ...input, maxWidth: 220, margin: '6px 0 12px' }}
-          />
+          {delLote.map((fila) => (
+            <div key={fila.codigo} style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 13, fontWeight: 700 }}>
+                {fila.nombre} a usar ({fila.peso_kg} kg c/u · {fila.cantidad_disponible} disponibles)
+              </label>
+              <input
+                type="number"
+                min={0}
+                value={usarForma[fila.codigo] || ''}
+                onChange={(e) => setUsarForma({ ...usarForma, [fila.codigo]: e.target.value })}
+                placeholder="0 si no se usa"
+                style={{ ...input, maxWidth: 220, marginTop: 6 }}
+              />
+            </div>
+          ))}
           <label style={{ fontSize: 13, fontWeight: 700 }}>Fecha de empaque</label>
           <input
             type="date"

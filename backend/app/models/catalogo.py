@@ -54,6 +54,26 @@ class ProductoCatalogo(Base):
     )
 
 
+class ProductoFormaCosecha(Base):
+    """Forma de cosecha del producto, cada una con su peso. Tabla nueva: no altera productos_catalogo."""
+
+    __tablename__ = "producto_formas_cosecha"
+    __table_args__ = (
+        UniqueConstraint("producto_id", "codigo", name="uq_forma_cosecha_producto_codigo"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    producto_id = Column(
+        Integer,
+        ForeignKey("productos_catalogo.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    codigo = Column(String, nullable=False)
+    peso_kg = Column(Float, nullable=False)
+    orden = Column(Integer, nullable=False, default=0)
+
+
 class ProductoParametro(Base):
     """Presentación de empaque: tipo de caja + kg + cajas por parrilla, por calidad."""
 
@@ -105,6 +125,42 @@ class CatalogoRecepcion(Base):
     notas = Column(String, nullable=True)
 
 
+class CatalogoRecepcionForma(Base):
+    """Qué forma se recibió. Si no hay fila, la recepción vieja usa productos_catalogo.tipo_cosecha."""
+
+    __tablename__ = "catalogo_recepcion_forma"
+
+    id = Column(Integer, primary_key=True, index=True)
+    recepcion_id = Column(
+        Integer,
+        ForeignKey("catalogo_recepciones.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    codigo = Column(String, nullable=False)
+
+
+class CatalogoCampoForma(Base):
+    """Existencia de campo por lote y forma. El total sigue en catalogo_inventario_campo."""
+
+    __tablename__ = "catalogo_campo_forma"
+    __table_args__ = (
+        UniqueConstraint("producto_id", "lote", "codigo", name="uq_campo_forma_lote"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    producto_id = Column(
+        Integer,
+        ForeignKey("productos_catalogo.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    lote = Column(String, nullable=False)
+    codigo = Column(String, nullable=False)
+    cantidad_disponible = Column(Integer, nullable=False, default=0)
+
+
 class CatalogoInventarioCampo(Base):
     __tablename__ = "catalogo_inventario_campo"
     __table_args__ = (
@@ -138,6 +194,22 @@ class CatalogoEmpaque(Base):
     # [{parametro_id, tipo_caja_id, calidad, cantidad}]
     lineas = Column(JSON, nullable=False)
     usuario_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+
+
+class CatalogoEmpaqueConsumo(Base):
+    """Contenedores usados en el empaque, por forma. Tabla nueva."""
+
+    __tablename__ = "catalogo_empaque_consumos"
+
+    id = Column(Integer, primary_key=True, index=True)
+    empaque_id = Column(
+        Integer,
+        ForeignKey("catalogo_empaques.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    codigo = Column(String, nullable=False)
+    cantidad = Column(Integer, nullable=False)
 
 
 class CatalogoInventarioFinal(Base):

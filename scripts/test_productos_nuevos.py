@@ -47,6 +47,10 @@ NEW_TABLES = [
     "catalogo_inventario_final",
     "catalogo_embarques",
     "catalogo_embarque_lineas",
+    "producto_formas_cosecha",
+    "catalogo_recepcion_forma",
+    "catalogo_campo_forma",
+    "catalogo_empaque_consumos",
 ]
 # El seed de hectáreas melón reescribe esta tabla al arrancar (comportamiento previo).
 ROW_EXACT = [
@@ -369,6 +373,145 @@ def register(base: str, token: str | None, username: str, rol: str, password: st
     return code
 
 
+def probar_dos_formas(base: str, admin: str, tag: str, caja_a: int, caja_b: int) -> None:
+    code, prod = req(base, "POST", "/api/catalogo/productos", token=admin, body={"nombre": f"Papaya {tag}"})
+    check(code == 200 and prod.get("id"), f"{tag} alta papaya {code}")
+    if not prod.get("id"):
+        return
+    code, conf = req(base, "PUT", f"/api/catalogo/productos/{prod['id']}", token=admin, body={
+        "hectareas": 10,
+        "formas": [
+            {"codigo": "cajas_campo", "peso_kg": 15},
+            {"codigo": "bins", "peso_kg": 300},
+        ],
+        "parametros": [
+            {"calidad": "primera", "tipo_caja_id": caja_a, "kg": 10, "cajas_por_parrilla": 40},
+            {"calidad": "segunda", "tipo_caja_id": caja_b, "kg": 15, "cajas_por_parrilla": 30},
+        ],
+    })
+    formas = {f["codigo"]: f for f in (conf.get("formas") or [])}
+    check(
+        code == 200 and set(formas) == {"cajas_campo", "bins"} and formas["cajas_campo"]["peso_kg"] == 15 and formas["bins"]["peso_kg"] == 300,
+        f"{tag} dos formas con su peso {code} {conf.get('formas')}",
+    )
+    params = {p["calidad"]: p for p in conf.get("parametros") or []}
+    code, r1 = req(base, "POST", "/api/catalogo/recepciones", token=admin, body={
+        "producto_id": prod["id"], "cantidad": 10, "lote": "Mixto", "codigo_cosecha": "cajas_campo",
+    })
+    check(code == 200 and r1.get("kg") == 150, f"{tag} recepción cajas 10×15 kg {code} {r1}")
+    code, r2 = req(base, "POST", "/api/catalogo/recepciones", token=admin, body={
+        "producto_id": prod["id"], "cantidad": 4, "lote": "Mixto", "codigo_cosecha": "bins",
+    })
+    check(code == 200 and r2.get("kg") == 1200, f"{tag} recepción bins 4×300 kg {code} {r2}")
+    code, emp = req(base, "POST", "/api/catalogo/empaques", token=admin, body={
+        "producto_id": prod["id"],
+        "lote": "Mixto",
+        "consumos": [
+            {"codigo": "cajas_campo", "cantidad": 6},
+            {"codigo": "bins", "cantidad": 2},
+        ],
+        "lineas": [
+            {"parametro_id": params["primera"]["id"], "cantidad": 20},
+            {"parametro_id": params["segunda"]["id"], "cantidad": 10},
+        ],
+    })
+    check(code == 200 and emp.get("campo_restante") == 6, f"{tag} empaque mezcla formas {code} {emp}")
+    code, campo = req(base, "GET", f"/api/catalogo/campo?producto_id={prod['id']}", token=admin)
+    stock = {c["codigo"]: c["cantidad_disponible"] for c in campo} if isinstance(campo, list) else {}
+    check(stock.get("cajas_campo") == 4 and stock.get("bins") == 2, f"{tag} stock por forma {campo}")
+    code, rep = req(base, "GET", f"/api/catalogo/reportes/{prod['id']}", token=admin)
+    kg_campo = 10 * 15 + 4 * 300
+    kg1 = 20 * 10
+    kg2 = 10 * 15
+    check(code == 200 and abs(rep.get("kg_campo", 0) - kg_campo) < 1e-6, f"{tag} kg campo mixto {rep.get('kg_campo')}")
+    check(abs(rep.get("pct_primera", 0) - round(kg1 / kg_campo * 100, 2)) < 1e-6, f"{tag} % 1ra mixto {rep.get('pct_primera')}")
+    check(abs(rep.get("pct_segunda", 0) - round(kg2 / kg_campo * 100, 2)) < 1e-6, f"{tag} % 2da mixto {rep.get('pct_segunda')}")
+    check(rep.get("contenedores_por_parrilla") is None, f"{tag} no suma bins con cajas en un solo ratio")
+    por = {f["codigo"]: f for f in rep.get("por_forma") or []}
+    check(por.get("cajas_campo", {}).get("contenedores") == 10, f"{tag} cajas recibidas {por.get('cajas_campo')}")
+    check(por.get("bins", {}).get("contenedores") == 4, f"{tag} bins recibidos {por.get('bins')}")
+    check(
+        abs(((por.get("cajas_campo") or {}).get("contenedores_por_parrilla") or 0) - 20) < 1e-6,
+        f"{tag} cajas/parrilla {por.get('cajas_campo')}",
+    )
+    check(
+        abs(((por.get("bins") or {}).get("contenedores_por_parrilla") or 0) - 8) < 1e-6,
+        f"{tag} bins/parrilla {por.get('bins')}",
+    )
+
+
+def probar_forma_vieja(base: str, admin: str, db_path: str) -> None:
+    """Producto guardado solo con tipo_cosecha + peso, sin filas en producto_formas_cosecha."""
+    con = sqlite3.connect(db_path)
+    con.execute(
+        "INSERT INTO catalogo_tipos_caja (codigo, nombre) VALUES (?, ?)",
+        ("caja_tomatillo", "Caja tomatillo"),
+    )
+    caja_id = con.execute("SELECT id FROM catalogo_tipos_caja WHERE codigo = 'caja_tomatillo'").fetchone()[0]
+    con.execute(
+        """INSERT INTO productos_catalogo
+           (codigo, nombre, tipo_cosecha, peso_contenedor_kg, activo)
+           VALUES ('tomatillo', 'Tomatillo', 'cajas_campo', 15, 1)"""
+    )
+    pid = con.execute("SELECT id FROM productos_catalogo WHERE codigo = 'tomatillo'").fetchone()[0]
+    con.execute(
+        """INSERT INTO producto_parametros
+           (producto_id, calidad, tipo_caja_id, kg, cajas_por_parrilla)
+           VALUES (?, 'primera', ?, 10, 20)""",
+        (pid, caja_id),
+    )
+    param_id = con.execute("SELECT id FROM producto_parametros WHERE producto_id = ?", (pid,)).fetchone()[0]
+    con.execute(
+        """INSERT INTO catalogo_recepciones (producto_id, fecha, lote, cantidad)
+           VALUES (?, '2026-04-01', 'Lote T', 8)""",
+        (pid,),
+    )
+    con.execute(
+        """INSERT INTO catalogo_inventario_campo (producto_id, lote, cantidad_disponible)
+           VALUES (?, 'Lote T', 8)""",
+        (pid,),
+    )
+    con.commit()
+    formas_rows = con.execute(
+        "SELECT COUNT(*) FROM producto_formas_cosecha WHERE producto_id = ?", (pid,)
+    ).fetchone()[0]
+    con.close()
+    check(formas_rows == 0, "tomatillo no tiene filas en la tabla nueva de formas")
+
+    code, listed = req(base, "GET", "/api/catalogo/productos", token=admin)
+    t = next((p for p in listed if p.get("codigo") == "tomatillo"), None) if isinstance(listed, list) else None
+    check(t is not None and t.get("configurado") is True, f"tomatillo viejo sigue usable {t}")
+    formas = t.get("formas") if t else []
+    check(
+        len(formas) == 1 and formas[0]["codigo"] == "cajas_campo" and formas[0]["peso_kg"] == 15,
+        f"la forma única vieja se muestra {formas}",
+    )
+    code, rep = req(base, "GET", f"/api/catalogo/reportes/{t['id']}", token=admin)
+    check(code == 200 and rep.get("kg_campo") == 120 and rep.get("contenedores") == 8, f"kg 8×15 {rep.get('kg_campo')}")
+    code, rec = req(base, "POST", "/api/catalogo/recepciones", token=admin, body={
+        "producto_id": t["id"], "cantidad": 2, "lote": "Lote T",
+    })
+    check(code == 200 and rec.get("kg") == 30, f"recepción sin código usa la única forma {code} {rec}")
+    code, rep2 = req(base, "GET", f"/api/catalogo/reportes/{t['id']}", token=admin)
+    check(rep2.get("kg_campo") == 150, f"kg tras otra recepción {rep2.get('kg_campo')}")
+    code, emp = req(base, "POST", "/api/catalogo/empaques", token=admin, body={
+        "producto_id": t["id"],
+        "lote": "Lote T",
+        "cantidad_campo": 3,
+        "lineas": [{"parametro_id": param_id, "cantidad": 4}],
+    })
+    check(code == 200 and emp.get("campo_restante") == 7, f"empaque de la forma vieja {code} {emp}")
+    code, rep3 = req(base, "GET", f"/api/catalogo/reportes/{t['id']}", token=admin)
+    check(
+        abs(rep3.get("pct_primera", 0) - round(40 / 150 * 100, 2)) < 1e-6,
+        f"% 1ra de tomatillo {rep3.get('pct_primera')}",
+    )
+    check(
+        abs((((rep3.get("por_forma") or [{}])[0].get("contenedores_por_parrilla")) or 0) - 50) < 1e-6,
+        f"cajas/parrilla tomatillo {rep3.get('por_forma')}",
+    )
+
+
 def ejercitar(base: str, admin: str, tag: str, tocar_legacy: bool) -> None:
     code, _ = req(base, "POST", "/api/auth/register", token=admin, body={
         "username": f"recep_{tag}",
@@ -525,6 +668,8 @@ def ejercitar(base: str, admin: str, tag: str, tocar_legacy: bool) -> None:
         marcas = " ".join(json.dumps(i, default=str) for i in finales)
         check("Caja export" not in marcas and f"Mango {tag}" not in marcas, f"{tag} el dashboard no mezcla el catálogo")
 
+    probar_dos_formas(base, admin, tag, caja1["id"], caja2["id"])
+
     if not tocar_legacy:
         code, _ = req(base, "DELETE", f"/api/catalogo/productos/{prod['id']}", token=admin)
         check(code == 409, f"{tag} no se borra un producto con movimientos ({code})")
@@ -629,6 +774,7 @@ def main() -> int:
         assert_rows(existing, rows_exact, "arranque")
         admin = login(base, "admin", "admin123")
         ejercitar(base, admin, "existente", tocar_legacy=False)
+        probar_forma_vieja(base, admin, existing)
         assert_schema(existing, schema_before, "después del flujo")
         assert_rows(existing, rows_exact, "después del flujo")
         assert_kept_ids(existing, rows_ids, "después del flujo")

@@ -21,6 +21,14 @@ interface Row {
   nuevoNombre: string;
 }
 
+interface FormaRow {
+  key: string;
+  codigo: string;
+  peso: string;
+  nuevo: boolean;
+  nuevoNombre: string;
+}
+
 interface Props {
   token: string;
   producto: ProductoCatalogo;
@@ -80,30 +88,41 @@ export default function ProductoConfigForm({
 }: Props) {
   const seq = useRef(1);
   const keyOf = () => `r${seq.current++}`;
-  const [tipo, setTipo] = useState(producto.tipo_cosecha || 'bins');
-  const [nuevaCosecha, setNuevaCosecha] = useState(false);
-  const [nombreCosecha, setNombreCosecha] = useState('');
-  const [peso, setPeso] = useState(
-    producto.peso_contenedor_kg != null ? String(producto.peso_contenedor_kg) : ''
-  );
+  const [formas, setFormas] = useState<FormaRow[]>(() => {
+    const src = producto.formas?.length
+      ? producto.formas
+      : producto.peso_contenedor_kg
+        ? [{ codigo: producto.tipo_cosecha, peso_kg: producto.peso_contenedor_kg }]
+        : [];
+    if (src.length === 0) {
+      return [{ key: keyOf(), codigo: 'bins', peso: '', nuevo: false, nuevoNombre: '' }];
+    }
+    return src.map((f) => ({
+      key: keyOf(),
+      codigo: f.codigo,
+      peso: String(f.peso_kg),
+      nuevo: false,
+      nuevoNombre: '',
+    }));
+  });
   const [ha, setHa] = useState(producto.hectareas != null ? String(producto.hectareas) : '');
   const [rows1, setRows1] = useState<Row[]>(() => rowsIniciales(producto, 'primera', keyOf));
   const [rows2, setRows2] = useState<Row[]>(() => rowsIniciales(producto, 'segunda', keyOf));
   const [busy, setBusy] = useState(false);
 
-  const cosechaNombre =
-    tiposCosecha.find((t) => t.codigo === tipo)?.nombre || producto.tipo_cosecha_nombre || 'contenedor';
+  const patchForma = (key: string, partial: Partial<FormaRow>) => {
+    setFormas((prev) => prev.map((f) => (f.key === key ? { ...f, ...partial } : f)));
+  };
 
-  const registrarCosecha = async () => {
-    const nombre = nombreCosecha.trim();
+  const registrarCosecha = async (key: string) => {
+    const row = formas.find((f) => f.key === key);
+    const nombre = row?.nuevoNombre.trim() || '';
     if (!nombre) return alert('Escribe el nombre del contenedor de cosecha');
     setBusy(true);
     try {
       const creado = await crearTipoCosecha(token, nombre);
       onTiposCosecha([...tiposCosecha.filter((t) => t.codigo !== creado.codigo), creado]);
-      setTipo(creado.codigo);
-      setNuevaCosecha(false);
-      setNombreCosecha('');
+      patchForma(key, { codigo: creado.codigo, nuevo: false, nuevoNombre: '' });
     } catch (err) {
       alert(mensajeError(err));
     } finally {
@@ -172,19 +191,30 @@ export default function ProductoConfigForm({
     if (parametros.length === 0) {
       return alert('Agrega al menos un tipo de caja en 1ra o en 2da');
     }
-    const pesoN = Number(peso);
-    if (!(pesoN > 0)) return alert('Indica el peso estimado del contenedor de cosecha');
+    const formasOut: Array<{ codigo: string; peso_kg: number }> = [];
+    for (const row of formas) {
+      const vacia = !row.codigo && !row.peso.trim() && !row.nuevo;
+      if (vacia) continue;
+      if (row.nuevo || !row.codigo) {
+        return alert('Elige cada forma de cosecha o regístrala antes de guardar');
+      }
+      const pesoN = Number(row.peso);
+      if (!(pesoN > 0)) return alert('Cada forma de cosecha necesita su peso en kilos');
+      formasOut.push({ codigo: row.codigo, peso_kg: pesoN });
+    }
+    if (formasOut.length === 0) return alert('Agrega al menos una forma de cosecha con su peso');
+    if (new Set(formasOut.map((f) => f.codigo)).size !== formasOut.length) {
+      return alert('No repitas la misma forma de cosecha');
+    }
     let hectareas: number | null = null;
     if (ha.trim()) {
       hectareas = Number(ha);
       if (!(hectareas > 0)) return alert('Las hectáreas deben ser mayores a 0, o déjalas vacías');
     }
-    if (nuevaCosecha) return alert('Termina de registrar el contenedor de cosecha, o cancela');
     setBusy(true);
     try {
       const saved = await configurarProducto(token, producto.id, {
-        tipo_cosecha: tipo,
-        peso_contenedor_kg: pesoN,
+        formas: formasOut,
         hectareas,
         parametros,
       });
@@ -231,68 +261,99 @@ export default function ProductoConfigForm({
       )}
       {!producto.configurado && (
         <p style={{ background: '#eff6ff', color: '#1e3a8a', padding: 10, borderRadius: 8 }}>
-          Falta guardar el peso y al menos un tipo de caja para usarlo en Recepción y Empaque.
+          Falta guardar al menos una forma de cosecha con su peso y un tipo de caja.
         </p>
       )}
 
       <section style={bloque}>
         <h3 style={h3}>Cosecha</h3>
-        <label style={label}>Se cosecha en</label>
-        <select
-          value={nuevaCosecha ? '__nuevo__' : tipo}
-          onChange={(e) => {
-            if (e.target.value === '__nuevo__') setNuevaCosecha(true);
-            else {
-              setNuevaCosecha(false);
-              setTipo(e.target.value);
-            }
-          }}
-          style={input}
+        <p style={{ ...ayuda, marginTop: 0 }}>
+          Puede haber más de una forma (caja de campo y bin, u otras). Cada una lleva su propio peso.
+          Bin y caja de campo ya vienen en la lista.
+        </p>
+        {formas.map((row) => {
+          const nombre =
+            tiposCosecha.find((t) => t.codigo === row.codigo)?.nombre || row.codigo || 'contenedor';
+          return (
+            <div key={row.key} style={{ marginBottom: 12 }}>
+              <div
+                style={{
+                  display: 'grid',
+                  gridTemplateColumns: 'minmax(180px, 1.4fr) 180px auto',
+                  gap: 8,
+                  alignItems: 'end',
+                }}
+              >
+                <div>
+                  <label style={label}>Se cosecha en</label>
+                  <select
+                    value={row.nuevo ? '__nuevo__' : row.codigo}
+                    onChange={(e) => {
+                      if (e.target.value === '__nuevo__') patchForma(row.key, { nuevo: true, codigo: '' });
+                      else patchForma(row.key, { nuevo: false, codigo: e.target.value });
+                    }}
+                    style={input}
+                  >
+                    <option value="">Elegir…</option>
+                    {tiposCosecha.map((t) => (
+                      <option key={t.codigo} value={t.codigo}>
+                        {t.nombre}
+                      </option>
+                    ))}
+                    <option value="__nuevo__">Registrar nuevo…</option>
+                  </select>
+                </div>
+                <div>
+                  <label style={label}>Kilos por {nombre.toLowerCase()}</label>
+                  <input
+                    type="number"
+                    min={0.1}
+                    step={0.1}
+                    value={row.peso}
+                    onChange={(e) => patchForma(row.key, { peso: e.target.value })}
+                    placeholder="Ej. 15"
+                    style={input}
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setFormas(formas.filter((f) => f.key !== row.key))}
+                  style={btnGhost}
+                >
+                  Quitar
+                </button>
+              </div>
+              {row.nuevo && (
+                <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                  <input
+                    value={row.nuevoNombre}
+                    onChange={(e) => patchForma(row.key, { nuevoNombre: e.target.value })}
+                    placeholder="Nombre del contenedor"
+                    style={{ ...input, flex: 1, minWidth: 180 }}
+                  />
+                  <button type="button" onClick={() => registrarCosecha(row.key)} disabled={busy} style={btnSec}>
+                    Registrar
+                  </button>
+                  <button type="button" onClick={() => patchForma(row.key, { nuevo: false })} style={btnGhost}>
+                    Cancelar
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <button
+          type="button"
+          onClick={() =>
+            setFormas([
+              ...formas,
+              { key: keyOf(), codigo: '', peso: '', nuevo: false, nuevoNombre: '' },
+            ])
+          }
+          style={btnGhost}
         >
-          {tiposCosecha.map((t) => (
-            <option key={t.codigo} value={t.codigo}>
-              {t.nombre}
-            </option>
-          ))}
-          <option value="__nuevo__">Registrar nuevo…</option>
-        </select>
-        {nuevaCosecha && (
-          <div style={{ display: 'flex', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
-            <input
-              value={nombreCosecha}
-              onChange={(e) => setNombreCosecha(e.target.value)}
-              placeholder="Nombre del contenedor"
-              style={{ ...input, flex: 1, minWidth: 180 }}
-            />
-            <button type="button" onClick={registrarCosecha} disabled={busy} style={btnSec}>
-              Registrar
-            </button>
-            <button type="button" onClick={() => setNuevaCosecha(false)} style={btnGhost}>
-              Cancelar
-            </button>
-          </div>
-        )}
-        <p style={ayuda}>
-          Bin y caja de campo ya vienen en la lista. Si registras otro, queda disponible para el resto
-          de productos.
-        </p>
-      </section>
-
-      <section style={bloque}>
-        <h3 style={h3}>Peso estimado del {cosechaNombre.toLowerCase()}</h3>
-        <label style={label}>Kilos por {cosechaNombre.toLowerCase()}</label>
-        <input
-          type="number"
-          min={0.1}
-          step={0.1}
-          value={peso}
-          onChange={(e) => setPeso(e.target.value)}
-          placeholder="Ej. 260"
-          style={{ ...input, maxWidth: 220 }}
-        />
-        <p style={ayuda}>
-          Con este peso se calculan los kilos de campo, el % de 1ra y 2da, y las toneladas por hectárea.
-        </p>
+          Agregar forma de cosecha
+        </button>
       </section>
 
       <BloqueCajas
