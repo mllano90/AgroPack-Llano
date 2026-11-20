@@ -1,0 +1,26 @@
+/* Seis indicadores de limón: 2 filas de 3. En pantallas angostas bajan a 2 y luego a 1. */
+.limon-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: stretch;
+  width: 100%;
+}
+
+@media (max-width: 960px) {
+  .limon-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .limon-kpi-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* El número completo se queda en una línea (no partir 263,196 en 263,19 / 6). */
+.limon-kpi-num {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
