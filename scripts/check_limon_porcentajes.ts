@@ -4,6 +4,7 @@
  */
 import {
   kgRealPorBin,
+  pctPrimeraCalidad,
   porcentajesQueSuman100,
   porcentajesRpcCartonJugo,
 } from '../frontend/src/components/Reportes/limonKpi.ts';
@@ -48,12 +49,15 @@ const trios: Array<[number, number, number]> = [
 
 const partes = trios.map(([rpc, carton, jugo]) => {
   const pct = porcentajesRpcCartonJugo(rpc, carton, jugo);
+  const primeraCalidad = pctPrimeraCalidad(pct);
   return {
     rpc,
     carton,
     jugo,
     pct,
+    primeraCalidad,
     suma: Math.round((pct.rpc + pct.carton + pct.jugo) * 10) / 10,
+    primeraMasJugo: Math.round((primeraCalidad + pct.jugo) * 10) / 10,
   };
 });
 

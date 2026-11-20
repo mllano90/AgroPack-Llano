@@ -108,8 +108,18 @@ def main():
         )
         if r["rpc"] + r["carton"] + r["jugo"] > 0:
             check(r["suma"] == 100, f"tres suman 100 {etiqueta} {r['suma']}")
+            # 1ra calidad = % RPC + % cartón, y con el jugo cierra en 100.
+            check(
+                r["primeraCalidad"] == round(r["pct"]["rpc"] + r["pct"]["carton"], 1),
+                f"1ra = rpc+cartón {etiqueta} {r['primeraCalidad']}",
+            )
+            check(
+                r["primeraMasJugo"] == 100,
+                f"1ra + jugo = 100 {etiqueta} {r['primeraMasJugo']}",
+            )
         else:
             check(r["suma"] == 0, f"sin kilos en tres {r['pct']}")
+            check(r["primeraCalidad"] == 0, f"1ra sin kilos {etiqueta}")
 
     # 1+1+1 redondeado por separado da 99.9. El resto tiene que cerrar en 100.
     uno = porcentajes_rpc_carton_jugo(1, 1, 1)

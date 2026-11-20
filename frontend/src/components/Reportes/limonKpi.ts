@@ -53,3 +53,14 @@ export function porcentajesRpcCartonJugo(
   const jugo = unDecimal(resto - carton);
   return { rpc, carton, jugo };
 }
+
+/**
+ * % de 1ra calidad sobre el mismo kilo producido que RPC / cartón / jugo.
+ * Es % RPC + % cartón (ya redondeados). Con el % de jugo suma 100.
+ */
+export function pctPrimeraCalidad(partes: { rpc: number; carton: number }): number {
+  const rpc = Number(partes.rpc);
+  const carton = Number(partes.carton);
+  if (!Number.isFinite(rpc) || !Number.isFinite(carton)) return 0;
+  return unDecimal(rpc + carton);
+}
