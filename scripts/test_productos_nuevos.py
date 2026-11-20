@@ -49,6 +49,7 @@ NEW_TABLES = [
     "catalogo_embarque_lineas",
     "producto_formas_cosecha",
     "catalogo_recepcion_forma",
+    "catalogo_recepcion_lineas",
     "catalogo_campo_forma",
     "catalogo_empaque_consumos",
 ]
@@ -438,6 +439,34 @@ def probar_dos_formas(base: str, admin: str, tag: str, caja_a: int, caja_b: int)
         abs(((por.get("bins") or {}).get("contenedores_por_parrilla") or 0) - 8) < 1e-6,
         f"{tag} bins/parrilla {por.get('bins')}",
     )
+    # Una sola recepción con cajas y bins a la vez. Borrarla devuelve las dos existencias.
+    code, multi = req(base, "POST", "/api/catalogo/recepciones", token=admin, body={
+        "producto_id": prod["id"],
+        "lote": "Mixto",
+        "lineas": [
+            {"codigo": "cajas_campo", "cantidad": 5},
+            {"codigo": "bins", "cantidad": 1},
+        ],
+    })
+    check(code == 200 and multi.get("kg") == 5 * 15 + 300, f"{tag} recepción con dos líneas {code} {multi}")
+    check(len(multi.get("lineas") or []) == 2, f"{tag} la respuesta trae las dos líneas")
+    code, campo2 = req(base, "GET", f"/api/catalogo/campo?producto_id={prod['id']}", token=admin)
+    stock2 = {c["codigo"]: c["cantidad_disponible"] for c in campo2} if isinstance(campo2, list) else {}
+    check(stock2.get("cajas_campo") == 9 and stock2.get("bins") == 3, f"{tag} stock suma las dos líneas {campo2}")
+    code, rep2 = req(base, "GET", f"/api/catalogo/reportes/{prod['id']}", token=admin)
+    check(rep2.get("kg_campo") == kg_campo + 5 * 15 + 300, f"{tag} el reporte suma la recepción doble {rep2.get('kg_campo')}")
+    code, borrado = req(base, "DELETE", f"/api/catalogo/recepciones/{multi['id']}", token=admin)
+    check(code == 200 and borrado.get("ok") is True, f"{tag} borrar la recepción {code} {borrado}")
+    code, campo3 = req(base, "GET", f"/api/catalogo/campo?producto_id={prod['id']}", token=admin)
+    stock3 = {c["codigo"]: c["cantidad_disponible"] for c in campo3} if isinstance(campo3, list) else {}
+    check(stock3.get("cajas_campo") == 4 and stock3.get("bins") == 2, f"{tag} borrar devuelve las dos formas {campo3}")
+    code, rep3 = req(base, "GET", f"/api/catalogo/reportes/{prod['id']}", token=admin)
+    check(rep3.get("kg_campo") == kg_campo, f"{tag} el reporte olvida la recepción borrada {rep3.get('kg_campo')}")
+    code, _bloqueado = req(base, "DELETE", f"/api/catalogo/recepciones/{r1['id']}", token=admin)
+    check(code == 409, f"{tag} no borra una recepción ya empacada ({code})")
+    code, campo4 = req(base, "GET", f"/api/catalogo/campo?producto_id={prod['id']}", token=admin)
+    stock4 = {c["codigo"]: c["cantidad_disponible"] for c in campo4} if isinstance(campo4, list) else {}
+    check(stock4.get("cajas_campo") == 4 and stock4.get("bins") == 2, f"{tag} el rechazo no movió el stock {campo4}")
 
 
 def probar_forma_vieja(base: str, admin: str, db_path: str) -> None:

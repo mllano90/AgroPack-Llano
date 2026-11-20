@@ -68,13 +68,48 @@ class ActivoIn(BaseModel):
     activo: bool
 
 
-class RecepcionIn(BaseModel):
-    producto_id: int
+class LineaRecepcionIn(BaseModel):
+    codigo: str | None = None
     cantidad: int = Field(gt=0, le=1_000_000)
+
+    @model_validator(mode="after")
+    def _strip(self):
+        if self.codigo:
+            self.codigo = self.codigo.strip()
+        return self
+
+
+class RecepcionIn(BaseModel):
+    """Una recepción puede traer varias formas. cantidad + codigo_cosecha sigue valiendo para una sola."""
+
+    producto_id: int
+    cantidad: int | None = Field(default=None, gt=0, le=1_000_000)
     lote: str | None = None
     fecha: date | None = None
     notas: str | None = None
     codigo_cosecha: str | None = None
+    lineas: list[LineaRecepcionIn] | None = None
+
+    @model_validator(mode="after")
+    def _lineas(self):
+        if self.codigo_cosecha:
+            self.codigo_cosecha = self.codigo_cosecha.strip()
+        if self.lineas:
+            lineas = list(self.lineas)
+        elif self.cantidad:
+            lineas = [LineaRecepcionIn(codigo=self.codigo_cosecha, cantidad=self.cantidad)]
+        else:
+            raise ValueError("Indica al menos una forma de cosecha y su cantidad")
+        if len(lineas) > 1:
+            codes: list[str] = []
+            for lin in lineas:
+                if not lin.codigo:
+                    raise ValueError("Cada línea necesita su forma de cosecha")
+                codes.append(lin.codigo)
+            if len(codes) != len(set(codes)):
+                raise ValueError("No repitas la misma forma en la recepción")
+        self.lineas = lineas
+        return self
 
 
 class LineaEmpaqueIn(BaseModel):

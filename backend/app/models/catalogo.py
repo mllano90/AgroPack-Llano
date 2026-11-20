@@ -125,6 +125,23 @@ class CatalogoRecepcion(Base):
     notas = Column(String, nullable=True)
 
 
+class CatalogoRecepcionLinea(Base):
+    """Una forma dentro de una recepción. Varias filas = cajas y bins en el mismo registro."""
+
+    __tablename__ = "catalogo_recepcion_lineas"
+
+    id = Column(Integer, primary_key=True, index=True)
+    recepcion_id = Column(
+        Integer,
+        ForeignKey("catalogo_recepciones.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    codigo = Column(String, nullable=False)
+    cantidad = Column(Integer, nullable=False)
+    peso_kg = Column(Float, nullable=False)
+
+
 class CatalogoRecepcionForma(Base):
     """Qué forma se recibió. Si no hay fila, la recepción vieja usa productos_catalogo.tipo_cosecha."""
 

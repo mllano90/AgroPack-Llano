@@ -26,6 +26,7 @@ from app.models.catalogo import (
     CatalogoInventarioCampo,
     CatalogoInventarioFinal,
     CatalogoRecepcion,
+    CatalogoRecepcionLinea,
     CatalogoRecepcionForma,
     ProductoCatalogo,
     ProductoFormaCosecha,
@@ -221,6 +222,24 @@ def _exigir_operable(prod: ProductoCatalogo, params: list[ProductoParametro], fo
         )
 
 
+def _ids_con_detalle(db: Session, rec_ids: list[int]) -> set[int]:
+    if not rec_ids:
+        return set()
+    formas = {
+        row.recepcion_id
+        for row in db.query(CatalogoRecepcionForma)
+        .filter(CatalogoRecepcionForma.recepcion_id.in_(rec_ids))
+        .all()
+    }
+    lineas = {
+        row.recepcion_id
+        for row in db.query(CatalogoRecepcionLinea)
+        .filter(CatalogoRecepcionLinea.recepcion_id.in_(rec_ids))
+        .all()
+    }
+    return formas | lineas
+
+
 def _forma_en_uso(db: Session, prod: ProductoCatalogo, codigo: str) -> bool:
     recepciones = db.query(CatalogoRecepcion).filter_by(producto_id=prod.id).all()
     if recepciones:
@@ -235,14 +254,18 @@ def _forma_en_uso(db: Session, prod: ProductoCatalogo, codigo: str) -> bool:
         )
         if ligada:
             return True
+        en_linea = (
+            db.query(CatalogoRecepcionLinea)
+            .filter(
+                CatalogoRecepcionLinea.recepcion_id.in_(ids),
+                CatalogoRecepcionLinea.codigo == codigo,
+            )
+            .first()
+        )
+        if en_linea:
+            return True
         if codigo == prod.tipo_cosecha:
-            ligados = {
-                row.recepcion_id
-                for row in db.query(CatalogoRecepcionForma)
-                .filter(CatalogoRecepcionForma.recepcion_id.in_(ids))
-                .all()
-            }
-            if any(r.id not in ligados for r in recepciones):
+            if any(r.id not in _ids_con_detalle(db, ids) for r in recepciones):
                 return True
     if (
         db.query(CatalogoCampoForma)
@@ -553,12 +576,7 @@ def configurar_producto(
     sin_liga = False
     recs = db.query(CatalogoRecepcion).filter_by(producto_id=prod.id).all()
     if recs:
-        ligados = {
-            row.recepcion_id
-            for row in db.query(CatalogoRecepcionForma)
-            .filter(CatalogoRecepcionForma.recepcion_id.in_([r.id for r in recs]))
-            .all()
-        }
+        ligados = _ids_con_detalle(db, [r.id for r in recs])
         sin_liga = any(r.id not in ligados for r in recs)
     if not sin_liga:
         prod.tipo_cosecha = formas_in[0].codigo
@@ -622,70 +640,167 @@ def crear_recepcion(
     formas = _formas_efectivas(db, prod)
     _exigir_operable(prod, params, formas)
     por_codigo = {f.codigo: f for f in formas}
-    if body.codigo_cosecha:
-        codigo = body.codigo_cosecha.strip()
-    elif len(formas) == 1:
-        codigo = formas[0].codigo
-    else:
-        raise HTTPException(status_code=400, detail="Elige la forma de cosecha de esta recepción")
-    if codigo not in por_codigo:
-        raise HTTPException(status_code=400, detail="Esa forma de cosecha no está en el producto")
+    normalizadas: list[tuple[str, int, float]] = []
+    for lin in body.lineas or []:
+        if lin.codigo:
+            codigo = lin.codigo
+        elif len(body.lineas or []) == 1 and len(formas) == 1:
+            codigo = formas[0].codigo
+        else:
+            raise HTTPException(status_code=400, detail="Elige la forma de cosecha de cada línea")
+        if codigo not in por_codigo:
+            raise HTTPException(status_code=400, detail="Esa forma de cosecha no está en el producto")
+        normalizadas.append((codigo, int(lin.cantidad), float(por_codigo[codigo].peso_kg)))
+    if len({c for c, _n, _p in normalizadas}) != len(normalizadas):
+        raise HTTPException(status_code=400, detail="No repitas la misma forma en la recepción")
     lote = (body.lote or "").strip() or "General"
     _asegurar_desglose(db, prod, lote)
+    total_cant = sum(n for _c, n, _p in normalizadas)
+    total_kg = sum(n * p for _c, n, p in normalizadas)
     rec = CatalogoRecepcion(
         producto_id=prod.id,
         fecha=body.fecha or date.today(),
         lote=lote,
-        cantidad=int(body.cantidad),
+        cantidad=total_cant,
         usuario_id=getattr(current_user, "id", None),
         notas=(body.notas or None),
     )
     db.add(rec)
     db.flush()
-    db.add(CatalogoRecepcionForma(recepcion_id=rec.id, codigo=codigo))
+    disponibles: dict[str, int] = {}
+    lineas_out = []
+    for codigo, cant, peso in normalizadas:
+        db.add(
+            CatalogoRecepcionLinea(
+                recepcion_id=rec.id,
+                codigo=codigo,
+                cantidad=cant,
+                peso_kg=peso,
+            )
+        )
+        parte = (
+            db.query(CatalogoCampoForma)
+            .filter_by(producto_id=prod.id, lote=lote, codigo=codigo)
+            .first()
+        )
+        if parte:
+            parte.cantidad_disponible = int(parte.cantidad_disponible or 0) + cant
+        else:
+            parte = CatalogoCampoForma(
+                producto_id=prod.id,
+                lote=lote,
+                codigo=codigo,
+                cantidad_disponible=cant,
+            )
+            db.add(parte)
+        db.flush()
+        disponibles[codigo] = int(parte.cantidad_disponible)
+        lineas_out.append(
+            {
+                "codigo": codigo,
+                "nombre": por_codigo[codigo].nombre,
+                "cantidad": cant,
+                "peso_kg": peso,
+                "kg": _r2(cant * peso),
+                "cantidad_disponible": int(parte.cantidad_disponible),
+            }
+        )
+    if len(normalizadas) == 1:
+        db.add(CatalogoRecepcionForma(recepcion_id=rec.id, codigo=normalizadas[0][0]))
     inv = (
         db.query(CatalogoInventarioCampo)
         .filter_by(producto_id=prod.id, lote=lote)
         .first()
     )
     if inv:
-        inv.cantidad_disponible = int(inv.cantidad_disponible or 0) + int(body.cantidad)
+        inv.cantidad_disponible = int(inv.cantidad_disponible or 0) + total_cant
     else:
         inv = CatalogoInventarioCampo(
             producto_id=prod.id,
             lote=lote,
-            cantidad_disponible=int(body.cantidad),
+            cantidad_disponible=total_cant,
         )
         db.add(inv)
-    parte = (
-        db.query(CatalogoCampoForma)
-        .filter_by(producto_id=prod.id, lote=lote, codigo=codigo)
-        .first()
-    )
-    if parte:
-        parte.cantidad_disponible = int(parte.cantidad_disponible or 0) + int(body.cantidad)
-    else:
-        parte = CatalogoCampoForma(
-            producto_id=prod.id,
-            lote=lote,
-            codigo=codigo,
-            cantidad_disponible=int(body.cantidad),
-        )
-        db.add(parte)
     db.commit()
     db.refresh(rec)
-    db.refresh(inv)
-    db.refresh(parte)
     return {
         "id": rec.id,
         "producto_id": prod.id,
         "lote": lote,
-        "codigo_cosecha": codigo,
-        "cantidad": rec.cantidad,
-        "kg": _r2(int(rec.cantidad) * por_codigo[codigo].peso_kg),
+        "codigo_cosecha": normalizadas[0][0] if len(normalizadas) == 1 else None,
+        "cantidad": total_cant,
+        "kg": _r2(total_kg),
         "fecha": rec.fecha.isoformat(),
-        "cantidad_disponible": int(parte.cantidad_disponible),
+        "cantidad_disponible": disponibles[normalizadas[0][0]] if len(normalizadas) == 1 else int(inv.cantidad_disponible),
+        "lineas": lineas_out,
     }
+
+
+def _detalle_recepcion(db: Session, rec: CatalogoRecepcion, prod: ProductoCatalogo, formas: list[_Forma]):
+    """Líneas nuevas, o la forma única vieja (catalogo_recepcion_forma / tipo del producto)."""
+    rows = (
+        db.query(CatalogoRecepcionLinea)
+        .filter_by(recepcion_id=rec.id)
+        .order_by(CatalogoRecepcionLinea.id)
+        .all()
+    )
+    if rows:
+        return [(r.codigo, int(r.cantidad), float(r.peso_kg)) for r in rows]
+    forma = db.query(CatalogoRecepcionForma).filter_by(recepcion_id=rec.id).first()
+    codigo = forma.codigo if forma else prod.tipo_cosecha
+    return [(codigo, int(rec.cantidad or 0), _peso_de(prod, formas, codigo))]
+
+
+@router.delete("/recepciones/{recepcion_id}")
+def eliminar_recepcion(
+    recepcion_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles(ROLES_RECEPCION)),
+):
+    rec = db.query(CatalogoRecepcion).filter(CatalogoRecepcion.id == recepcion_id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recepción no encontrada")
+    prod = _producto(db, rec.producto_id)
+    formas = _formas_efectivas(db, prod)
+    detalle = _detalle_recepcion(db, rec, prod, formas)
+    if not detalle or sum(n for _c, n, _p in detalle) <= 0:
+        raise HTTPException(status_code=400, detail="La recepción no tiene cantidades")
+    for codigo, cant, _peso in detalle:
+        parte = (
+            db.query(CatalogoCampoForma)
+            .filter_by(producto_id=prod.id, lote=rec.lote, codigo=codigo)
+            .first()
+        )
+        tengo = int(parte.cantidad_disponible) if parte else 0
+        if tengo < cant:
+            raise HTTPException(
+                status_code=409,
+                detail="Ya se empacó parte de esta recepción. No se cambió el inventario.",
+            )
+    total = (
+        db.query(CatalogoInventarioCampo)
+        .filter_by(producto_id=prod.id, lote=rec.lote)
+        .first()
+    )
+    suma = sum(n for _c, n, _p in detalle)
+    if not total or int(total.cantidad_disponible or 0) < suma:
+        raise HTTPException(
+            status_code=409,
+            detail="Ya se empacó parte de esta recepción. No se cambió el inventario.",
+        )
+    for codigo, cant, _peso in detalle:
+        parte = (
+            db.query(CatalogoCampoForma)
+            .filter_by(producto_id=prod.id, lote=rec.lote, codigo=codigo)
+            .first()
+        )
+        parte.cantidad_disponible = int(parte.cantidad_disponible) - cant
+    total.cantidad_disponible = int(total.cantidad_disponible) - suma
+    db.query(CatalogoRecepcionLinea).filter_by(recepcion_id=rec.id).delete(synchronize_session=False)
+    db.query(CatalogoRecepcionForma).filter_by(recepcion_id=rec.id).delete(synchronize_session=False)
+    db.delete(rec)
+    db.commit()
+    return {"ok": True, "id": recepcion_id}
 
 
 @router.get("/campo")
@@ -1058,23 +1173,13 @@ def reporte_producto(
     tipos = _tipos_por_id(db, [p.tipo_caja_id for p in params.values()])
 
     recepciones = db.query(CatalogoRecepcion).filter_by(producto_id=prod.id).all()
-    rec_ids = [r.id for r in recepciones]
-    ligas = {}
-    if rec_ids:
-        ligas = {
-            row.recepcion_id: row.codigo
-            for row in db.query(CatalogoRecepcionForma)
-            .filter(CatalogoRecepcionForma.recepcion_id.in_(rec_ids))
-            .all()
-        }
     formas_rep = _formas_efectivas(db, prod)
     cant_forma: dict[str, int] = defaultdict(int)
     kg_campo = 0.0
     for rec in recepciones:
-        codigo = ligas.get(rec.id) or prod.tipo_cosecha
-        n = int(rec.cantidad or 0)
-        cant_forma[codigo] += n
-        kg_campo += n * _peso_de(prod, formas_rep, codigo)
+        for codigo, n, peso in _detalle_recepcion(db, rec, prod, formas_rep):
+            cant_forma[codigo] += n
+            kg_campo += n * peso
     contenedores = sum(cant_forma.values())
 
     kg1 = 0.0

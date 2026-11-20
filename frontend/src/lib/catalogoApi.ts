@@ -217,13 +217,19 @@ export async function crearRecepcionCatalogo(
   token: string,
   body: {
     producto_id: number;
-    cantidad: number;
     lote?: string;
     fecha?: string | null;
+    cantidad?: number;
     codigo_cosecha?: string;
+    lineas?: Array<{ codigo: string; cantidad: number }>;
   }
 ) {
   const res = await client(token).post('/api/catalogo/recepciones', body);
+  return res.data;
+}
+
+export async function eliminarRecepcionCatalogo(token: string, id: number) {
+  const res = await client(token).delete(`/api/catalogo/recepciones/${id}`);
   return res.data;
 }
 

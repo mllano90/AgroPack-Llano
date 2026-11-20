@@ -20,6 +20,7 @@ from .catalogo import (  # noqa: F401
     ProductoParametro,
     ProductoFormaCosecha,
     CatalogoRecepcion,
+    CatalogoRecepcionLinea,
     CatalogoRecepcionForma,
     CatalogoCampoForma,
     CatalogoInventarioCampo,
