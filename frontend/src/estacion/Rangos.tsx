@@ -15,22 +15,27 @@ export function errorRango(min: string, max: string): string | null {
   return null;
 }
 
-/** Ajustes de rangos (máx/mín): visible para cualquier usuario autenticado. */
-export default function Configuracion({ alGuardar, alSalir }: { alGuardar: () => void; alSalir: () => void }) {
+/** Ajustes de rangos (máx/mín) para el administrador. Cerrar sesión, para todos. */
+export default function Configuracion({ esAdmin, alGuardar, alSalir }: {
+  esAdmin: boolean; alGuardar: () => void; alSalir: () => void;
+}) {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [msg, setMsg] = useState('');
   const [txt, setTxt] = useState<Record<string, { min: string; max: string; activo: boolean }>>({});
   const cargarTxt = (u: Record<string, Umbral>) =>
     setTxt(Object.fromEntries(Object.entries(u).map(([k, x]) => [k, { min: aTexto(x.min), max: aTexto(x.max), activo: x.activo }])));
-  useEffect(() => { api.config().then(c => { setCfg(c); cargarTxt(c.umbrales); }).catch(e => setMsg(e.message)); }, []);
-  if (!cfg) return <section className="vista"><div className="vidrio bloque">{msg || 'Cargando…'}</div></section>;
+  useEffect(() => {
+    if (!esAdmin) return;
+    api.config().then(c => { setCfg(c); cargarTxt(c.umbrales); }).catch(e => setMsg(e.message));
+  }, [esAdmin]);
+  if (esAdmin && !cfg) return <section className="vista"><div className="vidrio bloque">{msg || 'Cargando…'}</div></section>;
   const fila = (k: string, campo: 'min' | 'max' | 'activo', val: string | boolean) => setTxt({ ...txt, [k]: { ...txt[k], [campo]: val } });
   const errores = Object.fromEntries(Object.entries(txt).map(([k, x]) => [k, errorRango(x.min, x.max)]));
   const hayError = Object.values(errores).some(Boolean);
   const claves = [...ORDEN.filter(k => k in txt), ...Object.keys(txt).filter(k => !ORDEN.includes(k))];
   const guardar = async (e: FormEvent) => {
     e.preventDefault();
-    if (hayError) { setMsg('✖ Revisa los rangos marcados'); return; }
+    if (!cfg || hayError) { if (hayError) setMsg('✖ Revisa los rangos marcados'); return; }
     const umbrales = Object.fromEntries(Object.entries(txt).map(([k, x]) => {
       const min = aNum(x.min), max = aNum(x.max);
       return [k, { min, max, activo: x.activo && (min != null || max != null) }];
@@ -47,6 +52,7 @@ export default function Configuracion({ alGuardar, alSalir }: { alGuardar: () =>
   };
   return (
     <section id="v-rangos" className="vista">
+      {esAdmin && cfg && (
       <form className="vidrio bloque" onSubmit={guardar}>
         <h2>Ajustes de rangos</h2>
         <p className="tenue chico">Se dibuja como líneas discontinuas Mín/Máx en todas las gráficas (ventana emergente, Historial y
@@ -71,7 +77,37 @@ export default function Configuracion({ alGuardar, alSalir }: { alGuardar: () =>
         </div>
         <div className="acciones"><button className="btn primario" type="submit" disabled={hayError}>Guardar</button><span className="tenue">{msg}</span></div>
       </form>
-      <div className="salir"><button className="btn" type="button" onClick={alSalir}><Icono id="salir" />Cerrar sesión</button></div>
+      )}
+      {!esAdmin && (
+        <div className="vidrio bloque">
+          <h2>Sesión</h2>
+          <p className="tenue chico">Cierra la sesión de la estación en este dispositivo.</p>
+        </div>
+      )}
+      <CerrarSesion alSalir={alSalir} />
     </section>
+  );
+}
+
+function CerrarSesion({ alSalir }: { alSalir: () => void }) {
+  const [pedir, setPedir] = useState(false);
+  return (
+    <div className="salir">
+      <button className="btn salir-btn" type="button" onClick={() => setPedir(true)}>
+        <Icono id="salir" />Cerrar sesión
+      </button>
+      {pedir && (
+        <div className="modal" role="dialog" aria-modal="true" aria-labelledby="salir-titulo" onMouseDown={e => { if (e.target === e.currentTarget) setPedir(false); }}>
+          <div className="vidrio modal-caja">
+            <h3 id="salir-titulo">Cerrar sesión</h3>
+            <p>¿Salir de la estación en este dispositivo?</p>
+            <div className="acciones">
+              <button className="btn" type="button" onClick={() => setPedir(false)}>Cancelar</button>
+              <button className="btn primario" type="button" onClick={alSalir}>Salir</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

@@ -1,51 +1,26 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
-import BarrasEnlace from './Enlace';
 import type { Alerta, ExtremoDia, ResumenDia, Sensor, Ultimo, Umbral } from './tipos';
 import { Icono } from './Icono';
-import { durTxt, edadTxt, fHora, fHoraS, num } from './formato';
+import { durTxt, edadTxt, fHora, num } from './formato';
 import { IND, type DefIndicador } from './indicadores';
 import ModalHistorial from './ModalHistorial';
-import fondo from './assets/fondo_continuo.jpg';
 import { fueraDeRango } from './rango';
-import { prefAmbiente, UMBRAL_AMB } from './prefs';
-
-/** Lienzo de fondo_continuo.jpg. La foto original (1280×720) está en FOTO; la planta, en PLANTA.
- *  La escala mete la planta entera en el hueco, sin recortarla ni estirarla, y la centra ahí. */
-const LIENZO = { w: 2800, h: 3560 }, FOTO = { x: 760, y: 1040 }, FOTO_TAM = { w: 1280, h: 720 };
-const PLANTA = { x0: 232, x1: 942, y0: 99, y1: 719 };
-
-export function geometriaFondo(hueco: { left: number; top: number; width: number; height: number }) {
-  const pw = PLANTA.x1 - PLANTA.x0, ph = PLANTA.y1 - PLANTA.y0;
-  const s = Math.min(hueco.width / pw, hueco.height / ph);
-  const cx = FOTO.x + (PLANTA.x0 + PLANTA.x1) / 2, cy = FOTO.y + (PLANTA.y0 + PLANTA.y1) / 2;
-  const x = hueco.left + hueco.width / 2 - cx * s, y = hueco.top + hueco.height / 2 - cy * s;
-  const planta = { left: x + (FOTO.x + PLANTA.x0) * s, top: y + (FOTO.y + PLANTA.y0) * s, width: pw * s, height: ph * s };
-  const foto = { left: x + FOTO.x * s, top: y + FOTO.y * s, width: FOTO_TAM.w * s, height: FOTO_TAM.h * s };
-  return { s, x, y, w: LIENZO.w * s, h: LIENZO.h * s, planta, foto };
-}
-
-function alinearFondo(fig: HTMLElement, capa: HTMLElement) {
-  const r = fig.getBoundingClientRect();
-  if (!r.height || !r.width) return;
-  const g = geometriaFondo(r);
-  capa.style.backgroundImage = `url(${fondo})`;
-  capa.style.backgroundRepeat = 'no-repeat';
-  capa.style.backgroundSize = `${g.w}px ${g.h}px`;
-  capa.style.backgroundPosition = `${g.x}px ${g.y}px`;
-  const redondear = (o: { left: number; top: number; width: number; height: number }) =>
-    [o.left, o.top, o.width, o.height].map(v => Math.round(v)).join(',');
-  capa.dataset.planta = redondear(g.planta);
-  capa.dataset.foto = redondear(g.foto);
-}
 
 /** Indicador tocable: abre la ventana emergente con su historial. */
 /** Máximo y mínimo de hoy con cuánto duró cada nivel, p. ej. "máx 39.0 °C (2 h)" / "mín 18.0 °C (3 h)".
  * Móvil (≤480 px): sin unidad (ya está en el valor grande) y, en las tarjetas angostas del suelo (≈65 px útiles),
  * ▲/▼ en lugar de "máx"/"mín"; el título (toque largo / hover) conserva el texto completo con la hora del extremo. */
 function Extremos({ def, e }: { def: DefIndicador; e?: ExtremoDia | null }) {
-  if (!e) return null;
   const u = def.unidad ? ' ' + def.unidad : '';
+  if (!e) {
+    return (
+      <span className="ind-ext" title="Aún sin máximo ni mínimo de hoy">
+        <span className="ext-max"><span className="ext-q">máx </span><span className="ext-f" aria-hidden="true">▲</span>—</span>
+        <span className="ext-min"><span className="ext-q">mín </span><span className="ext-f" aria-hidden="true">▼</span>—</span>
+      </span>
+    );
+  }
   const t = (v: number, ts: number, s: number, q: string) =>
     `${q} de hoy ${num(v, def.dec)}${u} a las ${fHora.format(ts * 1000)}; ${durTxt(s)} cerca de ese nivel (±${num(e.banda, def.dec)}${u})`;
   return (
@@ -81,58 +56,6 @@ function Indicador({ def, valor, err, umb, lo, hi, sub, ext, tam = 'normal', alA
 }
 
 
-/** Tarjeta compacta de conexión LoRa: click despliega lectura, receptora, cola y barras RSSI/SNR. */
-function TarjetaConexion({ d }: { d: Ultimo }) {
-  const [abierta, setAbierta] = useState(false);
-  const A = d.ahora;
-  const fw = (d.receptora?.firmware || '').replace(/^receptora-/, 'v');
-  const resumen = [
-    d.rssi != null ? `RSSI ${d.rssi}` : null,
-    d.snr != null ? `SNR ${Number(d.snr).toFixed(1)}` : null,
-  ].filter(Boolean).join(' · ');
-  return (
-    <button type="button" className={'tarjeta-conexion meta-lectura' + (abierta ? ' abierta' : '')}
-      aria-expanded={abierta} onClick={() => setAbierta(v => !v)}
-      aria-label={abierta ? 'Ocultar detalle de conexión' : 'Ver detalle de conexión'}>
-      <span className="tc-cab">
-        <Icono id="wifi" className="ico" />
-        <span className="tc-tit">Conexión</span>
-        {!abierta && <span className="tc-resumen">{resumen}</span>}
-        <span className="tc-chev" aria-hidden="true">{abierta ? '▾' : '▸'}</span>
-      </span>
-      <BarrasEnlace rssi={d.rssi} snr={d.snr} />
-      {abierta && (
-        <span className="tc-det">
-          <span>Última lectura: <b>{d.ts ? fHoraS.format(d.ts * 1000) : '--'}</b>
-            {d.ts != null && <> (hace {Math.max(0, Math.round((A - d.ts) / 60))} min)</>}
-            {d.tipo != null && <> · paquete {d.tipo} #{d.seq}</>}
-          </span>
-          {d.sin_hora_emisora && <span className="tc-aviso">Emisora sin hora (se usó la de recepción)</span>}
-          {d.receptora && <span>Receptora {fw || '?'}, cola {d.receptora.cola_pendiente ?? '?'}</span>}
-        </span>
-      )}
-    </button>
-  );
-}
-
-
-/** Capa CSS ligera: tinte cálido/frío y haz de sol según aire y piranómetro. No captura clics. */
-function ambienteQuieto(): boolean {
-  if (typeof window === 'undefined' || !window.matchMedia) return false;
-  return window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    || window.matchMedia('(max-width: 699px), (pointer: coarse)').matches;
-}
-
-function CapaAmbiente({ tAire, pir }: { tAire: number | null | undefined; pir: number | null | undefined }) {
-  if (!prefAmbiente.activo() || ambienteQuieto()) return null;
-  const clases = ['capa-ambiente'];
-  if (tAire != null && tAire > UMBRAL_AMB.calor) clases.push('amb-calido');
-  else if (tAire != null && tAire < UMBRAL_AMB.frio) clases.push('amb-frio');
-  if (pir != null && pir >= UMBRAL_AMB.sol) clases.push('amb-sol');
-  if (clases.length === 1) return null; // sin efecto activo
-  return <div className={clases.join(' ')} aria-hidden="true" />;
-}
-
 const sAire = (s: Sensor, c: 't' | 'h', d: number) => (s.ok ? num(s[c], d) : 'err');
 
 /** Avisos de enlace y de bus, los mismos que la lista de Alertas. */
@@ -160,7 +83,6 @@ function AvisosEnlace() {
 export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: boolean }) {
   const [abierto, setAbierto] = useState<DefIndicador | null>(null);
   const cerrar = useCallback(() => setAbierto(null), []);
-  const fig = useRef<HTMLElement>(null), capa = useRef<HTMLDivElement>(null);
   const hay = !!(d?.hay_datos && d.aire && d.pir && d.suelo);
   // extremos del día: se piden al llegar una lectura nueva (cada ~2 min), no en cada refresco de 30 s
   const [dia, setDia] = useState<ResumenDia | null>(null);
@@ -172,23 +94,6 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     return () => { vivo = false; };
   }, [hay, tsUlt]);
   const X = dia?.vars ?? {};
-  useLayoutEffect(() => {
-    if (!hay || !fig.current || !capa.current) return;
-    const f = fig.current, c = capa.current, ajustar = () => alinearFondo(f, c);
-    ajustar();
-    const ro = new ResizeObserver(ajustar);
-    ro.observe(f);
-    const sc = f.closest('.estacion-root');
-    sc?.addEventListener('scroll', ajustar, { passive: true });
-    window.addEventListener('resize', ajustar);
-    window.addEventListener('orientationchange', ajustar);
-    return () => {
-      ro.disconnect();
-      sc?.removeEventListener('scroll', ajustar);
-      window.removeEventListener('resize', ajustar);
-      window.removeEventListener('orientationchange', ajustar);
-    };
-  }, [hay]);
   if (!d) return <section className="vista"><div className="vidrio pie-info">{errorRed ? 'Sin conexión con el servidor' : 'Cargando…'}</div></section>;
   if (!d.hay_datos || !d.aire || !d.pir || !d.suelo) return <section className="vista"><div className="vidrio pie-info">Aún no hay lecturas de este nodo.</div></section>;
   const A = d.ahora, ar = d.aire, U = d.umbrales, su = d.suelo, npk = d.npk;
@@ -201,8 +106,6 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
     <>
     <AvisosEnlace />
     <section id="v-inicio" className="vista">
-      <div ref={capa} className="escena-fondo" aria-hidden="true" />
-      <CapaAmbiente tAire={ar.t} pir={d.pir.v} />
       {/* ---------- AIRE: arriba de la planta */}
       <div className="vidrio zona zona-aire" aria-label="Aire">
         <h2 className="zona-tit"><Icono id="sol" className="ico" />Aire</h2>
@@ -214,11 +117,10 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
           <Indicador def={IND.pir} valor={d.pir.v} err={d.pir.error} umb={U.pir} lo={0} hi={1000} ext={X.pir} tam="grande" alAbrir={abrir}
             sub={d.pir.ok ? ((d.pir.v ?? 0) > 5 ? 'Piranómetro' : 'Sin sol') : d.pir.error} />
         </div>
-        <TarjetaConexion d={d} />
       </div>
 
       {/* ---------- PLANTA: zona reservada, ninguna tarjeta la cubre */}
-      <figure ref={fig} className="figura-planta" aria-hidden="true" />
+      <figure className="figura-planta" aria-hidden="true" />
 
       {/* ---------- SUELO: en la parte de la tierra, debajo de la planta */}
       <div className="zona zona-suelo" aria-label="Suelo">
@@ -235,21 +137,22 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
           <div className="sub-grupo">
             <h3>Salinidad y acidez <span>{npk ? edadTxt(npk.ts, A) : 'NPK aún no medido'}</span></h3>
             <div className="ind-grid c2">
-              <Indicador def={IND.ec} valor={nq('ec')} err={null} umb={U.ec} lo={0} hi={4} alAbrir={abrir} />
-              <Indicador def={IND.ph} valor={nq('ph')} err={null} umb={U.ph} lo={3} hi={10} alAbrir={abrir} />
+              <Indicador def={IND.ec} valor={nq('ec')} err={null} umb={U.ec} lo={0} hi={4} ext={X.ec} alAbrir={abrir} />
+              <Indicador def={IND.ph} valor={nq('ph')} err={null} umb={U.ph} lo={3} hi={10} ext={X.ph} alAbrir={abrir} />
             </div>
           </div>
           <div className="sub-grupo">
             <h3>Nutrientes NPK <span>{npk ? 'mg/kg' : ''}{d.npk_ultimo_fallo && <em className="aviso"> · último muestreo FALLÓ</em>}</span></h3>
             <div className="ind-grid c3">
-              {(['n', 'p', 'k'] as const).map(k => <Indicador key={k} def={IND[k]} valor={nq(k)} err={null} umb={U[k]} tam="mini" alAbrir={abrir} />)}
+              {(['n', 'p', 'k'] as const).map(k => <Indicador key={k} def={IND[k]} valor={nq(k)} err={null} umb={U[k]} ext={X[k]} tam="mini" alAbrir={abrir} />)}
             </div>
           </div>
         </div>
         <p className="pista">Toca un indicador para ver su historial (8 h · 24 h · 7 días · 1 mes)</p>
       </div>
 
-      {abierto && <ModalHistorial def={abierto} umbral={U[abierto.v]} rangoBanda alCerrar={cerrar} />}
+      {abierto && <ModalHistorial def={abierto} umbral={U[abierto.v]} rangoBanda alCerrar={cerrar}
+        luz={abierto.v === 'pir' ? { par: d.par_actual ?? null, dli: d.dli_hoy ?? null, factor: d.factor_par ?? 2.02 } : undefined} />}
     </section>
     </>
   );

@@ -9,10 +9,11 @@ import Historial from './Historial';
 import Rangos from './Rangos';
 import ConfigNodo from './ConfigNodo';
 import Alertas from './Alertas';
-import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, NODO_POR_DEFECTO } from './marca';
+import { MARCA, MARCA_FIRMA, MARCA_NOMBRE, MARCA_TITULO, NODO_POR_DEFECTO } from './marca';
 import { leyendaLectura } from './formato';
 import Instalar from './Instalar';
 import { ensancharLienzo, montarMetaPWA, registrarWorkerEstacion } from './pwa';
+import EscenaFondo from './EscenaFondo';
 
 type Vista = 'inicio' | 'historial' | 'rangos' | 'nodo' | 'alertas';
 type Rol = 'admin' | 'normal';
@@ -77,21 +78,22 @@ export default function EstacionApp() {
       : 'Hora de la última lectura. En línea solo indica si esa lectura es reciente.';
   const ir = (v: Vista) => { location.hash = v; setVista(v); window.scrollTo(0, 0); };
   const salir = () => { sesion.borrar(); setToken(null); setRol(null); };
-  const vistaOk: Vista = !admin && (vista === 'nodo' || vista === 'rangos') ? 'inicio' : vista;
+  const vistaOk: Vista = !admin && vista === 'nodo' ? 'inicio' : vista;
   const nav: [Vista, string, string][] = [
     ['inicio', 'casa', 'Inicio'],
     ['historial', 'grafica', 'Historial'],
-    ...(admin ? [['rangos', 'rangos', 'Rangos'] as [Vista, string, string], ['nodo', 'engrane', 'Config'] as [Vista, string, string]] : []),
+    ['rangos', 'rangos', 'Rangos'],
+    ...(admin ? [['nodo', 'engrane', 'Config'] as [Vista, string, string]] : []),
     ['alertas', 'campana', 'Alertas'],
   ];
   return (
     <div className={'estacion-root' + (vistaOk === 'inicio' ? ' en-inicio' : '')}>
       <SpriteIconos />
-      <div className="fondo" />
+      <EscenaFondo enInicio={vistaOk === 'inicio'} />
       <header className="vidrio cabecera">
         <Icono id="hoja" className="ico hoja" />
         <div className="marca">
-          <h1>{MARCA}<span className="marca-nombre">{MARCA_NOMBRE}</span><span className="marca-firma">{MARCA_FIRMA}</span></h1>
+          <h1>{MARCA_TITULO}</h1>
           <div className="marca-nodo">{ultimo?.nombre_nodo ?? NODO_POR_DEFECTO}</div>
         </div>
         <div className="cab-acciones">
@@ -104,13 +106,12 @@ export default function EstacionApp() {
             <span className="ultima-lectura" title={tituloLectura}>{leyenda}</span>
           </div>
           <Instalar />
-          <button className="btn" type="button" onClick={salir}>Salir</button>
         </div>
       </header>
       <main>
         {vistaOk === 'inicio' && <Inicio d={ultimo} errorRed={errorRed} />}
         {vistaOk === 'historial' && <Historial />}
-        {vistaOk === 'rangos' && admin && <Rangos alGuardar={cargar} alSalir={salir} />}
+        {vistaOk === 'rangos' && <Rangos esAdmin={admin} alGuardar={cargar} alSalir={salir} />}
         {vistaOk === 'nodo' && admin && <ConfigNodo ultimo={ultimo} alGuardar={cargar} alSalir={salir} />}
         {vistaOk === 'alertas' && <Alertas alCambiar={cargar} puedeResolver={admin} />}
         <footer className="pie-marca">{MARCA} · {MARCA_NOMBRE} · <span>{MARCA_FIRMA}</span></footer>

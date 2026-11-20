@@ -70,6 +70,54 @@ def test_resumen_del_dia(cliente):
     assert ven.status_code == 200 and ven.json()["rango"] == "ventana" and ven.json()["paso_s"] == 120
 
 
+def test_resumen_dia_incluye_ce_ph_npk(cliente):
+    """CE, pH y NPK usan el mismo resumen del día que el aire y el suelo."""
+    t = int(time.time())
+    ingesta(cliente, [
+        {"csv": csv(1, t - 800, ec=500, ph=55, n=40, p=15, k=70)},
+        {"csv": csv(2, t - 60, ec=1800, ph=72, n=90, p=55, k=130)},
+    ])
+    procesar(cliente, t)
+    login(cliente)
+    vars_ = cliente.get(f"{API}/resumen-dia").json()["vars"]
+    assert vars_["ec"]["min"] == 0.5 and vars_["ec"]["max"] == 1.8
+    assert vars_["ph"]["min"] == 5.5 and vars_["ph"]["max"] == 7.2
+    assert vars_["n"]["min"] == 40 and vars_["n"]["max"] == 90
+    assert vars_["p"]["min"] == 15 and vars_["p"]["max"] == 55
+    assert vars_["k"]["min"] == 70 and vars_["k"]["max"] == 130
+    vacio = cliente.get(f"{API}/resumen-dia?nodo=sin-lecturas").json()["vars"]
+    assert vacio["ec"] is None and vacio["n"] is None
+
+
+def test_duracion_en_el_extremo_del_periodo(cliente):
+    """El tiempo en el máx/mín usa la precisión de la tarjeta y no cuenta un hueco largo."""
+    from estacion.servicio import segundos_en_extremo
+    puntos = [(0, 20.0), (120, 32.4), (240, 32.36), (240 + 7200, 18.1), (240 + 7200 + 120, 18.14)]
+    r = segundos_en_extremo(puntos, 1, 600, 300)
+    assert r["max"] == 32.4 and r["min"] == 18.1
+    # 32.4 se sostiene 2 min hasta la siguiente; el 32.4 del hueco largo cuenta 5 min de muestra
+    assert r["max_s"] == 120 + 300 and r["max_min"] == 7
+    assert r["min_s"] == 120 + 300 and r["min_min"] == 7
+    medio = segundos_en_extremo([(0, 32.44), (60, 32.45), (120, 10.0)], 1, 600, 300)
+    assert medio["max"] == 32.5 and medio["max_s"] == 60
+    assert segundos_en_extremo([], 1, 600, 300) is None
+    solo = segundos_en_extremo([(0, 5.0)], 0, 600, 300)
+    assert solo["max"] == solo["min"] == 5 and solo["max_s"] == solo["min_s"] == 300
+    assert solo["max_min"] == 5
+    t = int(time.time())
+    ingesta(cliente, [
+        {"csv": csv(1, t - 360, t1=200, t2=200)},
+        {"csv": csv(2, t - 240, t1=324, t2=324)},
+        {"csv": csv(3, t - 120, t1=324, t2=324)},
+    ])
+    login(cliente)
+    ext = cliente.get(f"{API}/historial?var=t_aire&rango=8h").json()["extremo"]
+    assert ext["max"] == 32.4 and ext["min"] == 20.0
+    # dos minutos hasta la siguiente lectura en 32.4, más 5 min de la última muestra
+    assert ext["max_s"] == 120 + 300 and ext["max_min"] == 7
+    assert ext["min_s"] == 120 and ext["min_min"] == 2
+
+
 def test_admin_crea_cuenta_normal_y_el_normal_no_administra(cliente):
     login(cliente)
     malo = [

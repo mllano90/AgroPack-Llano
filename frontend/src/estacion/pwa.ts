@@ -1,5 +1,6 @@
 /** Registra la PWA solo dentro de /estacion/. No toca el <head> de AgroPack al salir. */
 
+import { MARCA_TITULO } from './marca';
 const VISTA_BASE = 'width=device-width, initial-scale=1.0';
 const MANIFEST = '/estacion/manifest.json';
 const APPLE = '/estacion/icons/apple-touch-icon.png';
@@ -63,7 +64,7 @@ export function montarMetaPWA(): () => void {
     meta('theme-color', '#0b1f14'),
     meta('apple-mobile-web-app-capable', 'yes'),
     meta('mobile-web-app-capable', 'yes'),
-    meta('apple-mobile-web-app-title', 'EM SIF'),
+    meta('apple-mobile-web-app-title', MARCA_TITULO),
     meta('apple-mobile-web-app-status-bar-style', 'black-translucent'),
     link('manifest', MANIFEST),
     link('apple-touch-icon', APPLE),

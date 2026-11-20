@@ -3,10 +3,12 @@ import GraficaHist from './GraficaHist';
 import { api } from './api';
 import type { Historial as H, Umbral } from './tipos';
 import { Icono } from './Icono';
+import { num } from './formato';
 import { RANGOS_REPORTE, descargar, generarReporte } from './reporte';
 
 const VARS: [string, string, string, number][] = [
   ['t_aire', 'Temp. aire', '°C', 1], ['h_aire', 'Hum. aire', '%', 0], ['pir', 'Radiación', 'W/m²', 0],
+  ['par', 'Luz PAR', 'µmol/m²/s', 0],
   ['t_caja', 'Temp. caja', '°C', 1], ['h_caja', 'Hum. caja', '%', 0],
   ['t_suelo', 'Temp. suelo', '°C', 1], ['h_suelo', 'Hum. suelo', '%', 0], ['ph', 'pH', '', 1],
   ['ec', 'CE', 'dS/m', 2], ['n', 'N', 'mg/kg', 0], ['p', 'P', 'mg/kg', 0], ['k', 'K', 'mg/kg', 0],
@@ -54,6 +56,14 @@ export default function Historial() {
           <div className="seg">{RANGOS.map(([r, t]) => <button key={r} className={r === rango ? 'on' : ''} onClick={() => setRango(r)}>{t}</button>)}</div>
           {n > 0 && datos && <span className="tenue chico">{n} lecturas</span>}
         </div>
+        {def[0] === 'par' && datos && (
+          <p className="dli-nota" aria-label="DLI del periodo">
+            DLI de hoy <b>{datos.dli_hoy == null ? '—' : num(datos.dli_hoy, 2)} mol/m²/día</b>
+            <span> · promedio diario del periodo </span>
+            <b>{datos.dli_promedio == null ? '—' : num(datos.dli_promedio, 2)} mol/m²/día</b>
+            {datos.factor_par != null && <span> · factor × {num(datos.factor_par, 2)}</span>}
+          </p>
+        )}
         {error && <p className="error-login">{error}</p>}
         {datos && n > 0 ? (
           <GraficaHist datos={datos} unidad={def[2]} dec={dec} banda={rango !== '24h'} umbral={umbral}

@@ -1721,8 +1721,23 @@ def crear_empaque(
 
 
 @router.get("/", response_model=list[EmpaqueResponse])
-def listar_empaques(db: Session = Depends(get_db)):
-    return db.query(Empaque).order_by(Empaque.id.desc()).limit(100).all()
+def listar_empaques(
+    producto: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Sin filtro: últimos 100, como siempre (limón y uva no cambian).
+    producto=melon: todas las corridas. El reporte usa esos bins;
+    el corte de 100 dejaba fuera las corridas viejas de melón.
+    """
+    q = db.query(Empaque)
+    if producto and producto.strip().lower() in ("melon", "melón"):
+        return (
+            q.filter(Empaque.producto == Producto.MELON)
+            .order_by(Empaque.id.desc())
+            .all()
+        )
+    return q.order_by(Empaque.id.desc()).limit(100).all()
 
 
 @router.get("/admin/recientes", response_model=list[EmpaqueResponse])

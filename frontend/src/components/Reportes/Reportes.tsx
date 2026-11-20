@@ -28,6 +28,7 @@ import MapaCuadrosLimon from './MapaCuadrosLimon';
 import MelonReportes from './MelonReportes';
 import CatalogoReportes from './CatalogoReportes';
 import { listarProductosCatalogo, type ProductoCatalogo } from '../../lib/catalogoApi';
+import { kgRealPorBin, porcentajesQueSuman100, porcentajesRpcCartonJugo } from './limonKpi';
 
 type Corrida = CorridaRendimientoApi;
 type Lote = LoteRendimientoApi;
@@ -60,7 +61,7 @@ const cardStyle: CSSProperties = {
   minWidth: 140,
 };
 
-/** Tarjeta compacta uniforme (6 indicadores, misma altura) */
+/** Tarjeta compacta: mismo tamaño en todos los indicadores */
 const cardPrimary: CSSProperties = {
   ...cardStyle,
   minWidth: 0,
@@ -120,11 +121,11 @@ const cardStatChipValue: CSSProperties = {
 
 const indicadoresGrid: CSSProperties = {
   display: 'grid',
-  gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
-  gridAutoRows: '1fr',
+  gridTemplateColumns: 'repeat(6, minmax(0, 1fr))',
   gap: 10,
-  marginBottom: 12,
   alignItems: 'stretch',
+  width: '100%',
+  minWidth: 1080,
 };
 
 function fmtKg(n: number) {
@@ -134,6 +135,11 @@ function fmtKg(n: number) {
 function fmtNum(n: number | null | undefined, digits = 2) {
   if (n == null || Number.isNaN(n)) return '—';
   return n.toLocaleString(undefined, { maximumFractionDigits: digits });
+}
+
+function fmtKgBin(n: number | null | undefined): string {
+  if (n == null || !Number.isFinite(Number(n))) return '—';
+  return fmtNum(n, 1);
 }
 
 /** Gráfica de pastel SVG: tallas 1ra + 2da (kg y %). Etiquetas dentro de cada gajo. */
@@ -421,6 +427,20 @@ function TallaPieChart({
   );
 }
 
+type VistaKgLote = 'mixtas' | 'primera' | 'segunda';
+
+const VISTA_KG_LOTE: Array<{ id: VistaKgLote; label: string }> = [
+  { id: 'primera', label: 'Solo primera' },
+  { id: 'segunda', label: 'Solo segunda' },
+  { id: 'mixtas', label: 'Mixtas' },
+];
+
+function kgDeVista(l: Lote, vista: VistaKgLote): number {
+  if (vista === 'primera') return Number(l.kg_primera) || 0;
+  if (vista === 'segunda') return Number(l.kg_segunda) || 0;
+  return Number(l.kg_salida) || 0;
+}
+
 /**
  * Barras de producción por lote (máx. 8), orden mayor→menor.
  * Cada barra es apilada según el mix de variedades de la sección (S1C1…).
@@ -432,6 +452,7 @@ function LoteBarrasChart({
   lotes: Lote[];
   fmtKg: (n: number) => string;
 }) {
+  const [vista, setVista] = useState<VistaKgLote>('mixtas');
   const [hover, setHover] = useState<{
     lote: string;
     x: number;
@@ -440,11 +461,15 @@ function LoteBarrasChart({
 
   const bars = useMemo(() => {
     return [...lotes]
-      .filter((l) => (Number(l.kg_salida) || 0) > 0 || (Number(l.bins_campo) || 0) > 0)
-      .sort((a, b) => (Number(b.kg_salida) || 0) - (Number(a.kg_salida) || 0))
+      .filter((l) => {
+        const kg = kgDeVista(l, vista);
+        if (vista === 'mixtas') return kg > 0 || (Number(l.bins_campo) || 0) > 0;
+        return kg > 0;
+      })
+      .sort((a, b) => kgDeVista(b, vista) - kgDeVista(a, vista))
       .slice(0, 8)
       .map((l) => {
-        const kg = Number(l.kg_salida) || 0;
+        const kg = kgDeVista(l, vista);
         const mix = mixVariedadParaLote(l.lote);
         const seccion = seccionDesdeLote(l.lote);
         const segments =
@@ -465,19 +490,44 @@ function LoteBarrasChart({
                   label: 'Sin mix definido',
                 },
               ];
-        return { lote: l.lote, seccion, kg, bins: l.bins_campo, segments };
+        return {
+          lote: l.lote,
+          seccion,
+          kg,
+          kgPrimera: Number(l.kg_primera) || 0,
+          kgSegunda: Number(l.kg_segunda) || 0,
+          bins: l.bins_campo,
+          segments,
+        };
       });
-  }, [lotes]);
+  }, [lotes, vista]);
 
   const maxKg = Math.max(...bars.map((b) => b.kg), 1);
-  const chartH = 220;
-  const chartPadTop = 16;
+  const chartH = 228;
+  const chartPadTop = 18;
   const chartPadBottom = 36;
   const innerH = chartH - chartPadTop - chartPadBottom;
   const barGap = 12;
   const n = Math.max(bars.length, 1);
-  const chartW = Math.max(520, n * 72);
-  const barW = Math.min(48, (chartW - barGap * (n + 1)) / n);
+  const etiquetaEje = (v: number) => (v <= 0 ? '0' : formatKg(v));
+  const yAxisW = Math.max(72, etiquetaEje(maxKg).length * 6.8 + 12);
+  const plotLeft = yAxisW;
+  const plotRight = 8;
+  const innerPlotW = Math.max(440, n * (48 + barGap));
+  const chartW = plotLeft + innerPlotW + plotRight;
+  const barW = Math.min(48, (innerPlotW - barGap * (n + 1)) / n);
+  const tituloVista =
+    vista === 'primera'
+      ? 'Producción por lote (kg 1ra)'
+      : vista === 'segunda'
+        ? 'Producción por lote (kg 2da)'
+        : 'Producción por lote (kg total)';
+  const detalleVista =
+    vista === 'primera'
+      ? 'Solo primera (RPC + cartón).'
+      : vista === 'segunda'
+        ? 'Solo segunda (jugo a 900 kg).'
+        : 'Mixtas: primera + segunda.';
 
   const variedadesUsadas = useMemo(() => {
     const set = new Set<VariedadLimonCampo>();
@@ -489,25 +539,69 @@ function LoteBarrasChart({
     return Array.from(set);
   }, [bars]);
 
-  if (bars.length === 0) {
-    return (
-      <p style={{ color: '#64748b', fontSize: 13 }}>
-        No hay producción por lote para graficar.
-      </p>
-    );
-  }
-
-  const hovered = hover ? bars.find((b) => b.lote === hover.lote) : null;
+  const hovered = hover && bars.length > 0 ? bars.find((b) => b.lote === hover.lote) : null;
 
   return (
     <div style={{ marginTop: 8, marginBottom: 20 }}>
-      <h4 style={{ margin: '0 0 6px' }}>Producción por lote (kg total)</h4>
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: 10,
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: 6,
+        }}
+      >
+        <h4 style={{ margin: 0 }}>{tituloVista}</h4>
+        <div
+          style={{
+            display: 'inline-flex',
+            border: '1px solid #cbd5e1',
+            borderRadius: 8,
+            overflow: 'hidden',
+            background: '#fff',
+          }}
+        >
+          {VISTA_KG_LOTE.map((op) => {
+            const activo = vista === op.id;
+            return (
+              <button
+                key={op.id}
+                type="button"
+                onClick={() => {
+                  setVista(op.id);
+                  setHover(null);
+                }}
+                style={{
+                  border: 'none',
+                  borderRight: op.id === 'mixtas' ? 'none' : '1px solid #e2e8f0',
+                  background: activo ? '#14532d' : '#fff',
+                  color: activo ? '#fff' : '#334155',
+                  fontWeight: 700,
+                  fontSize: 12,
+                  padding: '6px 12px',
+                  cursor: 'pointer',
+                }}
+              >
+                {op.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
       <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-        {bars.length} barra(s), mayor → menor. Colores = mix de variedades por sección. Pasa el
-        cursor para ver el detalle.
+        {detalleVista} {bars.length} barra(s), mayor → menor. Colores = mix de variedades por
+        sección. Pasa el cursor para ver el detalle.
       </p>
 
       <div style={{ position: 'relative', overflowX: 'auto' }}>
+        {bars.length === 0 ? (
+          <p style={{ color: '#64748b', fontSize: 13 }}>
+            No hay kilos de esta vista para graficar.
+          </p>
+        ) : (
+        <>
         <svg
           width={chartW}
           height={chartH}
@@ -521,22 +615,27 @@ function LoteBarrasChart({
             return (
               <g key={t}>
                 <line
-                  x1={40}
-                  x2={chartW - 8}
+                  x1={plotLeft}
+                  x2={chartW - plotRight}
                   y1={y}
                   y2={y}
                   stroke="#e2e8f0"
                   strokeWidth={1}
                 />
-                <text x={36} y={y + 3} textAnchor="end" style={{ fontSize: 9, fill: '#94a3b8' }}>
-                  {t === 0 ? '0' : formatKg(maxKg * t)}
+                <text
+                  x={plotLeft - 8}
+                  y={y + 3}
+                  textAnchor="end"
+                  style={{ fontSize: 10, fill: '#64748b' }}
+                >
+                  {etiquetaEje(maxKg * t)}
                 </text>
               </g>
             );
           })}
 
           {bars.map((b, i) => {
-            const x = 48 + i * (barW + barGap);
+            const x = plotLeft + barGap + i * (barW + barGap);
             let yCursor = chartPadTop + innerH;
             return (
               <g
@@ -619,8 +718,17 @@ function LoteBarrasChart({
               {hovered.lote}
               {hovered.seccion ? ` · ${hovered.seccion}` : ''}
             </div>
-            <div style={{ color: '#cbd5e1', marginBottom: 6 }}>
-              {formatKg(hovered.kg)} kg · {hovered.bins} bins
+            <div style={{ color: '#cbd5e1', marginBottom: 4 }}>
+              {vista === 'primera'
+                ? `${formatKg(hovered.kg)} kg de 1ra`
+                : vista === 'segunda'
+                  ? `${formatKg(hovered.kg)} kg de 2da (jugo)`
+                  : `${formatKg(hovered.kg)} kg total`}
+              {' · '}
+              {hovered.bins} bins
+            </div>
+            <div style={{ color: '#94a3b8', marginBottom: 6 }}>
+              1ra {formatKg(hovered.kgPrimera)} kg · 2da {formatKg(hovered.kgSegunda)} kg
             </div>
             {hovered.segments.map((s) => (
               <div
@@ -647,6 +755,8 @@ function LoteBarrasChart({
               </div>
             ))}
           </div>
+        )}
+        </>
         )}
       </div>
 
@@ -706,9 +816,14 @@ function enrichCorrida(c: Corrida, ha: number): Corrida {
       : esConversion
         ? null
         : c.bins_por_parrilla ?? null;
+  const pct = porcentajesQueSuman100(c.kg_primera || 0, c.kg_segunda || 0);
+  const kgSalida = c.kg_salida ?? (c.kg_primera || 0) + (c.kg_segunda || 0);
   return {
     ...c,
     tipo_corrida: c.tipo_corrida || 'campo',
+    pct_primera: pct.primera,
+    pct_segunda: pct.segunda,
+    kg_real_por_bin: kgRealPorBin(kgSalida, c.bins_campo || 0),
     parrillas_primera: parrPrimera,
     bins_por_parrilla: binsPorParrilla,
     kg_por_ha: esConversion ? null : c.kg_por_ha ?? kgHa(c.kg_salida, ha),
@@ -752,6 +867,10 @@ function acumularCorridasSeleccionadas(selected: Corrida[], ha: number): Corrida
     pPrimeraFinal > 0 && bins > 0
       ? Math.round((bins / pPrimeraFinal) * 100) / 100
       : null;
+  const kg1r = Math.round(kg1 * 100) / 100;
+  const kg2r = Math.round(kg2 * 100) / 100;
+  const kgSr = Math.round(kgS * 100) / 100;
+  const pct = porcentajesQueSuman100(kg1r, kg2r);
 
   return {
     id: 0,
@@ -760,11 +879,12 @@ function acumularCorridasSeleccionadas(selected: Corrida[], ha: number): Corrida
     tipo_corrida: 'campo',
     bins_campo: bins,
     kg_entrada: Math.round(kgE * 100) / 100,
-    kg_primera: Math.round(kg1 * 100) / 100,
-    kg_segunda: Math.round(kg2 * 100) / 100,
-    kg_salida: Math.round(kgS * 100) / 100,
-    pct_primera: kgE ? Math.round((kg1 / kgE) * 10000) / 100 : 0,
-    pct_segunda: kgE ? Math.round((kg2 / kgE) * 10000) / 100 : 0,
+    kg_primera: kg1r,
+    kg_segunda: kg2r,
+    kg_salida: kgSr,
+    pct_primera: pct.primera,
+    pct_segunda: pct.segunda,
+    kg_real_por_bin: kgRealPorBin(kgSr, bins),
     pct_recuperacion: kgE ? Math.round((kgS / kgE) * 10000) / 100 : 0,
     kg_rpc: Math.round(kgRpc * 100) / 100,
     kg_carton: Math.round(kgCarton * 100) / 100,
@@ -829,8 +949,12 @@ function enrichLote(l: Lote, haPorLote: number = HECTAREAS_POR_LOTE): Lote {
           return Math.round((pRpc + pCarton) * 100) / 100;
         })();
   // kg/ha por lote siempre sobre 8 ha (no el rancho completo)
+  const pct = porcentajesQueSuman100(l.kg_primera || 0, l.kg_segunda || 0);
   return {
     ...l,
+    pct_primera: pct.primera,
+    pct_segunda: pct.segunda,
+    kg_real_por_bin: kgRealPorBin(l.kg_salida || 0, l.bins_campo || 0),
     parrillas_primera: parrPrimera,
     bins_por_parrilla:
       parrPrimera > 0
@@ -974,8 +1098,8 @@ function computeFromEmpaques(
           kg_primera: Math.round(kg1 * 100) / 100,
           kg_segunda: Math.round(kg2 * 100) / 100,
           kg_salida: Math.round(kgSalida * 100) / 100,
-          pct_primera: kgEntrada ? Math.round((kg1 / kgEntrada) * 10000) / 100 : 0,
-          pct_segunda: kgEntrada ? Math.round((kg2 / kgEntrada) * 10000) / 100 : 0,
+          pct_primera: porcentajesQueSuman100(kg1, kg2).primera,
+          pct_segunda: porcentajesQueSuman100(kg1, kg2).segunda,
           pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
           kg_rpc: Math.round(kgRpc * 100) / 100,
           kg_carton: Math.round(kgCarton * 100) / 100,
@@ -1055,8 +1179,8 @@ function computeFromEmpaques(
           kg_primera: Math.round(row.kg1 * 100) / 100,
           kg_segunda: Math.round(row.kg2 * 100) / 100,
           kg_salida: Math.round(kgSalida * 100) / 100,
-          pct_primera: kgEntrada ? Math.round((row.kg1 / kgEntrada) * 10000) / 100 : 0,
-          pct_segunda: kgEntrada ? Math.round((row.kg2 / kgEntrada) * 10000) / 100 : 0,
+          pct_primera: porcentajesQueSuman100(row.kg1, row.kg2).primera,
+          pct_segunda: porcentajesQueSuman100(row.kg1, row.kg2).segunda,
           pct_recuperacion: kgEntrada ? Math.round((kgSalida / kgEntrada) * 10000) / 100 : 0,
           cajas_rpc: cRpc,
           cajas_carton: cCarton,
@@ -1101,8 +1225,8 @@ function computeFromEmpaques(
       kg_primera: Math.round(kg1 * 100) / 100,
       kg_segunda: Math.round(kg2 * 100) / 100,
       kg_salida: Math.round(kgS * 100) / 100,
-      pct_primera: kgE ? Math.round((kg1 / kgE) * 10000) / 100 : 0,
-      pct_segunda: kgE ? Math.round((kg2 / kgE) * 10000) / 100 : 0,
+      pct_primera: porcentajesQueSuman100(kg1, kg2).primera,
+      pct_segunda: porcentajesQueSuman100(kg1, kg2).segunda,
       pct_recuperacion: kgE ? Math.round((kgS / kgE) * 10000) / 100 : 0,
       kg_rpc: Math.round(kgRpcT * 100) / 100,
       kg_carton: Math.round(kgCartonT * 100) / 100,
@@ -1483,6 +1607,10 @@ export default function Reportes({ token }: ReportesProps) {
 
   /** Indicadores visibles: total o selección */
   const a = resumenVista;
+  const partesCalidad = a
+    ? porcentajesRpcCartonJugo(a.kg_rpc ?? 0, a.kg_carton ?? 0, a.kg_segunda || 0)
+    : { rpc: 0, carton: 0, jugo: 0 };
+  const pctPrimeraTotal = Math.round((partesCalidad.rpc + partesCalidad.carton) * 10) / 10;
   const modoSeleccion = graficaModo === 'seleccion';
   const sinSeleccion = modoSeleccion && corridasSeleccionadas.length === 0;
 
@@ -1637,10 +1765,12 @@ export default function Reportes({ token }: ReportesProps) {
       {seccion === 'produccion' && esLimon && (
       <>
       <p style={{ fontSize: 13, color: '#64748b', marginTop: 8 }}>
-        Rancho = <strong>{hectareas} ha</strong> · Por lote = <strong>{hectareasPorLote} ha</strong> (kg/ha
-        por lote) · Bin campo = {PESO_BIN_CAMPO_KG} kg · RPC 12 = 12 kg · RPC 18 / cartón = 18 kg · Bin
-        jugo = 900 kg · Parrilla RPC = 45 · Cartón = 63 ·{' '}
-        <strong>Bins/parrilla = bins campo ÷ parrillas de 1ra</strong> (sin jugo)
+        Rancho = <strong>{hectareas} ha</strong> · Por lote = <strong>{hectareasPorLote} ha</strong>.
+        El <strong>% 1ra</strong> y el <strong>% 2da (jugo)</strong> son del kilo producido
+        (1ra + jugo a 900 kg) y suman 100. <strong>Kg real por bin</strong> = kilos producidos ÷
+        bins de campo. La entrada de referencia sigue en {PESO_BIN_CAMPO_KG} kg y no entra en esos
+        %. RPC 12 = 12 kg · RPC 18 / cartón = 18 kg · Bin jugo = 900 kg · Parrilla RPC = 45 ·
+        Cartón = 63 · <strong>Bins/parrilla = bins campo ÷ parrillas de 1ra</strong> (sin jugo)
       </p>
 
       {aviso && (
@@ -1871,33 +2001,61 @@ export default function Reportes({ token }: ReportesProps) {
             </p>
           ) : a ? (
             <>
-              {/* 3×2 compacto: los 6 del mismo tamaño */}
+              {/* Seis tarjetas en una fila. RPC + cartón + jugo = 100. */}
+              <div style={{ overflowX: 'auto', width: '100%', marginBottom: 12 }}>
               <div style={indicadoresGrid}>
-                <div style={{ ...cardPrimary, background: '#dcfce7' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#166534' }}>1ra calidad</div>
-                  <div style={{ ...cardPrimaryValue, color: '#14532d' }}>
-                    {a.pct_primera}
+                <div style={{ ...cardPrimary, background: '#dbeafe' }}>
+                  <div style={{ ...cardPrimaryLabel, color: '#1e40af' }}>% 1ra RPC</div>
+                  <div style={{ ...cardPrimaryValue, color: '#1e3a8a' }}>
+                    {partesCalidad.rpc}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
                     <div style={cardStatChip}>
                       <div style={cardStatChipLabel}>Kg</div>
-                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
-                        {fmtKg(a.kg_primera)}
+                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
+                        {fmtKg(a.kg_rpc ?? 0)}
                       </div>
                     </div>
                     <div style={cardStatChip}>
                       <div style={cardStatChipLabel}>Kg/ha</div>
-                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
-                        {fmtNum(a.kg_primera_por_ha)}
+                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
+                        {fmtNum(kgHa(a.kg_rpc ?? 0, hectareas))}
                       </div>
                     </div>
                   </div>
+                  <div style={{ fontSize: 11, color: '#1e40af', marginTop: 6 }}>
+                    {a.cajas_rpc} cajas
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#ffedd5' }}>
+                  <div style={{ ...cardPrimaryLabel, color: '#9a3412' }}>% 1ra cartón</div>
+                  <div style={{ ...cardPrimaryValue, color: '#7c2d12' }}>
+                    {partesCalidad.carton}
+                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg</div>
+                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>
+                        {fmtKg(a.kg_carton ?? 0)}
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Kg/ha</div>
+                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>
+                        {fmtNum(kgHa(a.kg_carton ?? 0, hectareas))}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ fontSize: 11, color: '#9a3412', marginTop: 6 }}>
+                    {a.cajas_carton} cajas
+                  </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#fef9c3' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#854d0e' }}>2da · jugo</div>
+                  <div style={{ ...cardPrimaryLabel, color: '#854d0e' }}>Segunda (jugo)</div>
                   <div style={{ ...cardPrimaryValue, color: '#713f12' }}>
-                    {a.pct_segunda}
+                    {partesCalidad.jugo}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
@@ -1911,6 +2069,29 @@ export default function Reportes({ token }: ReportesProps) {
                       <div style={cardStatChipLabel}>Kg/ha</div>
                       <div style={{ ...cardStatChipValue, color: '#713f12' }}>
                         {fmtNum(a.kg_segunda_por_ha)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div style={{ ...cardPrimary, background: '#fff7ed' }}>
+                  <div style={{ ...cardPrimaryLabel, color: '#9a3412' }}>Kg real / bin</div>
+                  <div style={{ ...cardPrimaryValue, color: '#7c2d12' }}>
+                    {fmtKgBin(a.kg_real_por_bin)}
+                    {a.kg_real_por_bin != null && (
+                      <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}> kg</span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>1ra</div>
+                      <div style={{ ...cardStatChipValue, color: '#9a3412' }}>
+                        {fmtKgBin(kgRealPorBin(a.kg_primera, a.bins_campo))}
+                      </div>
+                    </div>
+                    <div style={cardStatChip}>
+                      <div style={cardStatChipLabel}>Jugo</div>
+                      <div style={{ ...cardStatChipValue, color: '#9a3412' }}>
+                        {fmtKgBin(kgRealPorBin(a.kg_segunda, a.bins_campo))}
                       </div>
                     </div>
                   </div>
@@ -1929,27 +2110,8 @@ export default function Reportes({ token }: ReportesProps) {
                       return Number.isFinite(tonHa) ? tonHa.toFixed(1) : '—';
                     })()}
                   </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>1ra</div>
-                      <div style={{ ...cardStatChipValue, color: '#14532d' }}>
-                        {fmtNum(a.pct_primera, 1)}%
-                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b' }}>
-                          {' '}
-                          ({fmtKg(a.kg_primera)})
-                        </span>
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Jugo</div>
-                      <div style={{ ...cardStatChipValue, color: '#854d0e' }}>
-                        {fmtNum(a.pct_segunda, 1)}%
-                        <span style={{ fontSize: 10, fontWeight: 600, color: '#64748b' }}>
-                          {' '}
-                          ({fmtKg(a.kg_segunda)})
-                        </span>
-                      </div>
-                    </div>
+                  <div style={{ fontSize: 11, color: '#166534', marginTop: 6, lineHeight: 1.35 }}>
+                    1ra {fmtNum(pctPrimeraTotal, 1)}% ({fmtKg(a.kg_primera)} kg)
                   </div>
                 </div>
                 <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
@@ -1970,44 +2132,7 @@ export default function Reportes({ token }: ReportesProps) {
                     </div>
                   </div>
                 </div>
-                <div style={{ ...cardPrimary, background: '#dbeafe' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#1e40af' }}>% 1ra en RPC</div>
-                  <div style={{ ...cardPrimaryValue, color: '#1e3a8a' }}>
-                    {fmtNum(a.pct_rpc_de_primera, 1)}
-                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Kg</div>
-                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
-                        {fmtKg(a.kg_rpc ?? 0)}
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Cajas</div>
-                      <div style={{ ...cardStatChipValue, color: '#1e3a8a' }}>{a.cajas_rpc}</div>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#ffedd5' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#9a3412' }}>% 1ra en cartón</div>
-                  <div style={{ ...cardPrimaryValue, color: '#7c2d12' }}>
-                    {fmtNum(a.pct_carton_de_primera, 1)}
-                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Kg</div>
-                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>
-                        {fmtKg(a.kg_carton ?? 0)}
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Cajas</div>
-                      <div style={{ ...cardStatChipValue, color: '#7c2d12' }}>{a.cajas_carton}</div>
-                    </div>
-                  </div>
-                </div>
+              </div>
               </div>
 
               {/* Gráfica de pastel alineada al mismo alcance */}
@@ -2059,7 +2184,7 @@ export default function Reportes({ token }: ReportesProps) {
                   <div style={{ fontSize: 16, fontWeight: 700 }}>
                     {fmtKg(a.kg_primera)} · {fmtKg(a.kg_segunda)} · {fmtKg(a.kg_salida)}
                   </div>
-                  <div style={{ fontSize: 12 }}>{a.pct_recuperacion}% recuperación</div>
+                  <div style={{ fontSize: 12 }}>{a.pct_recuperacion}% recuperación vs entrada estimada</div>
                 </div>
                 <div style={cardStyle}>
                   <div style={{ fontSize: 12, color: '#64748b' }}>Parrillas 1ra / jugo / total</div>
@@ -2096,9 +2221,10 @@ export default function Reportes({ token }: ReportesProps) {
         <>
           <h3 style={{ marginTop: 8 }}>Rendimiento por lote</h3>
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0 }}>
-            Principales: % 1ra, % 2da, bins/parrilla (solo 1ra). Kg/ha por lote = kg ÷{' '}
-            <strong>{hectareasPorLote} ha</strong> (cada lote = {hectareasPorLote} ha). Multi-lote:
-            producción prorrateada por bins. Lotes iguales se agrupan ignorando fecha de corte.
+            Principales: % 1ra, % 2da (sobre el kilo producido; suman 100) y kg real por bin
+            (kilos ÷ bins de campo). Kg/ha por lote = kg ÷ <strong>{hectareasPorLote} ha</strong>{' '}
+            (cada lote = {hectareasPorLote} ha). Multi-lote: producción prorrateada por bins. Lotes
+            iguales se agrupan ignorando fecha de corte.
           </p>
           {porLote.length > 0 && <LoteBarrasChart lotes={porLote} fmtKg={fmtKg} />}
           <MapaCuadrosLimon lotes={porLote} />
@@ -2123,6 +2249,7 @@ export default function Reportes({ token }: ReportesProps) {
                     <th style={th}>Lote</th>
                     <th style={thPrimary}>% 1ra</th>
                     <th style={thPrimary}>% 2da</th>
+                    <th style={thPrimary}>Kg/bin</th>
                     <th style={thPrimary}>Bins/parr. 1ra</th>
                     <th style={th}>kg/ha ({hectareasPorLote} ha)</th>
                     <th style={th}>kg 1ra</th>
@@ -2146,6 +2273,9 @@ export default function Reportes({ token }: ReportesProps) {
                       </td>
                       <td style={{ ...td, background: '#fefce8', fontWeight: 700, fontSize: 15 }}>
                         {l.pct_segunda}%
+                      </td>
+                      <td style={{ ...td, background: '#fff7ed', fontWeight: 700, fontSize: 15 }}>
+                        {fmtKgBin(l.kg_real_por_bin)}
                       </td>
                       <td style={{ ...td, background: '#e0f2fe', fontWeight: 700, fontSize: 15 }}>
                         {l.bins_por_parrilla != null ? l.bins_por_parrilla : '—'}
@@ -2180,8 +2310,10 @@ export default function Reportes({ token }: ReportesProps) {
           <p style={{ fontSize: 13, color: '#64748b', marginTop: 0, maxWidth: 920 }}>
             Cada fila es un <strong>proceso completo</strong>: día de campo + conversiones del
             granel residual. El <strong>kg 1ra</strong> solo cuenta producto final (RPC/cartón), no
-            el WIP a granel. Haz <strong>clic en la fila</strong> para ver el desglose (cuánto salió
-            de bins, cuánto granel quedó y cómo se convirtió después).
+            el WIP a granel. El <strong>% 1ra</strong> y el <strong>% 2da</strong> son del kilo
+            producido (el jugo entra a 900 kg) y suman 100. <strong>Kg/bin</strong> es ese total
+            dividido entre los bins de campo. Haz <strong>clic en la fila</strong> para ver el
+            desglose (cuánto salió de bins, cuánto granel quedó y cómo se convirtió después).
           </p>
           {corridas.length === 0 ? (
             <p style={{ color: '#64748b' }}>No hay corridas con detalle.</p>
@@ -2204,6 +2336,7 @@ export default function Reportes({ token }: ReportesProps) {
                     <th style={th}>Origen / lotes</th>
                     <th style={thPrimary}>% 1ra</th>
                     <th style={thPrimary}>% 2da</th>
+                    <th style={thPrimary}>Kg/bin</th>
                     <th style={thPrimary}>Bins/parr.</th>
                     <th style={th}>kg 1ra final</th>
                     <th style={th}>kg 2da</th>
@@ -2265,6 +2398,9 @@ export default function Reportes({ token }: ReportesProps) {
                           <td style={{ ...td, background: '#fefce8', fontWeight: 700, fontSize: 15 }}>
                             {c.pct_segunda}%
                           </td>
+                          <td style={{ ...td, background: '#fff7ed', fontWeight: 700, fontSize: 15 }}>
+                            {fmtKgBin(c.kg_real_por_bin)}
+                          </td>
                           <td style={{ ...td, background: '#e0f2fe', fontWeight: 700, fontSize: 15 }}>
                             {c.bins_por_parrilla != null ? c.bins_por_parrilla : '—'}
                           </td>
@@ -2316,7 +2452,7 @@ export default function Reportes({ token }: ReportesProps) {
                         {open && pasos.length > 0 && (
                           <tr>
                             <td
-                              colSpan={13}
+                              colSpan={14}
                               style={{
                                 padding: '0 12px 14px 36px',
                                 background: '#f8fafc',
@@ -2475,6 +2611,9 @@ export default function Reportes({ token }: ReportesProps) {
                                     : ''}{' '}
                                   · entrada {c.bins_campo} bins ({fmtKg(c.kg_entrada)} kg) ·{' '}
                                   <strong>{c.pct_primera}% 1ra</strong>
+                                  {c.kg_real_por_bin != null
+                                    ? ` · ${fmtKgBin(c.kg_real_por_bin)} kg/bin`
+                                    : ''}
                                 </div>
                               </div>
                             </td>

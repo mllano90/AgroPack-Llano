@@ -15,7 +15,7 @@
 .estacion-root main{max-width:1180px;margin:0 auto}
 .estacion-root .cabecera{max-width:1180px;margin:0 auto 10px;display:flex;align-items:center;gap:10px;padding:10px 14px;position:sticky;top:6px;z-index:5;flex-wrap:wrap}
 .estacion-root .cabecera .marca{flex:1;min-width:0;line-height:1.15}
-.estacion-root .cabecera h1{font-size:1.2rem;margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em}
+.estacion-root .cabecera h1{font-size:clamp(.72rem,2.8vw,1.15rem);margin:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;letter-spacing:.02em;color:#fff;font-weight:650}
 .estacion-root .marca-nombre{font-size:.78rem;font-weight:400;color:var(--tenue);margin-left:10px;letter-spacing:0}
 .estacion-root .marca-nodo{font-size:.8rem;color:var(--texto);opacity:.85;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .estacion-root .pie-marca{text-align:center;font-size:.7rem;color:var(--tenue);opacity:.75;margin:14px 0 4px}
@@ -100,9 +100,24 @@
 .estacion-root .barra i{display:block;height:100%;width:0;border-radius:5px;transition:width .6s}
 .estacion-root .barra i.fuera{background:linear-gradient(90deg,#ff7a1f,#ff4040)!important}
 .estacion-root .figura-planta{margin:0;min-height:0;display:flex;justify-content:center;align-items:stretch;pointer-events:none;user-select:none;-webkit-user-select:none}
-.estacion-root .escena-fondo{position:fixed;inset:0;z-index:-1;background-color:#0d120b;background-repeat:no-repeat;pointer-events:none}
-.estacion-root .escena-fondo::after{content:"";position:absolute;inset:0;background:linear-gradient(180deg,rgba(3,15,8,.22),rgba(3,15,8,0) 22%,rgba(3,15,8,0) 75%,rgba(3,10,5,.3))}
-.estacion-root.en-inicio .fondo{background-image:none}
+.estacion-root .escena{position:fixed;inset:0;z-index:-1;overflow:hidden;pointer-events:none;background:#06140c}
+.estacion-root .escena-relleno{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity 1.5s ease}
+.estacion-root .escena-relleno.activa{opacity:1}
+.estacion-root .escena-lienzo{position:absolute;z-index:1;overflow:hidden}
+.estacion-root .fase-capa{position:absolute;inset:0;opacity:0;transition:opacity 1.5s ease}
+.estacion-root .fase-capa.activa{opacity:1}
+.estacion-root .fase-capa picture,.estacion-root .fase-capa img,.estacion-root .fase-capa canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:fill;pointer-events:none}
+.estacion-root .haz{position:absolute;left:calc(var(--hx) * 100%);top:calc(var(--hy) * 100%);width:88%;height:92%;transform-origin:0 0;transform:rotate(var(--rumbo));
+  background:linear-gradient(102deg,rgba(var(--hc),.5),transparent 64%),radial-gradient(ellipse 46% 34% at 0 0,rgba(var(--hc),.82),transparent 70%);
+  mix-blend-mode:screen;pointer-events:none;animation-name:haz-pulso;animation-duration:10s;animation-timing-function:ease-in-out;animation-iteration-count:infinite;will-change:opacity}
+.estacion-root .fase-capa.es-noche .haz{animation-name:haz-luna}
+.estacion-root .escena.sin-anim .haz,.estacion-root .escena.sin-anim canvas{display:none}
+.estacion-root .escena.en-pausa .haz{animation-play-state:paused}
+.estacion-root .escena-lienzo.cubre .fase-capa img{object-fit:cover;object-position:center 42%}
+.estacion-root .escena-velo{position:absolute;inset:0;z-index:2;pointer-events:none;background:linear-gradient(180deg,rgba(3,12,8,.62),rgba(3,12,8,.5) 42%,rgba(3,8,6,.68));opacity:1;transition:opacity .45s ease}
+.estacion-root.en-inicio .escena-velo{opacity:0}
+.estacion-root:has(.escena) .fondo{background-image:none}
+.estacion-root:has(.escena) .fondo::after{display:none}
 .estacion-root .zona-suelo{border:1px solid rgba(214,160,98,.26);box-shadow:0 8px 30px rgba(0,0,0,.35);background:rgba(22,13,7,.42);
   backdrop-filter:blur(10px) saturate(120%);-webkit-backdrop-filter:blur(10px) saturate(120%)}
 .estacion-root .zona-suelo .ind{background:rgba(10,6,3,.5);border-color:rgba(214,160,98,.22)}
@@ -131,7 +146,19 @@
 .estacion-root .graf-ayuda{min-width:0}
 .estacion-root .btn.mini{padding:5px 10px;font-size:.78rem;border-radius:10px;flex:none}
 .estacion-root .grafica-lienzo{position:relative;height:52vh;min-height:240px;max-height:460px}
-.estacion-root .grafica-lienzo canvas{touch-action:none;cursor:grab}
+.estacion-root .grafica-lienzo canvas{cursor:default}
+.estacion-root .graf-toque{position:absolute;z-index:2;touch-action:pan-y;cursor:grab}
+.estacion-root .graf-controles{display:flex;gap:4px;flex:none}
+.estacion-root .graf-controles .btn.mini{min-width:2rem;padding:4px 8px}
+.estacion-root .graf-mira{position:absolute;top:0;left:0;width:0;z-index:3;pointer-events:none}
+.estacion-root .graf-mira .linea{position:absolute;left:-1px;top:8px;bottom:8px;width:2px;background:#fff;box-shadow:0 0 0 1px rgba(0,0,0,.45)}
+.estacion-root .graf-mira .punta{position:absolute;left:-6px;width:0;height:0;border-left:6px solid transparent;border-right:6px solid transparent}
+.estacion-root .graf-mira .punta.sup{top:0;border-top:8px solid #fff}
+.estacion-root .graf-mira .punta.inf{bottom:0;border-bottom:8px solid #fff}
+.estacion-root .graf-lectura{position:absolute;top:12px;left:12px;max-width:11.5rem;padding:5px 8px;border-radius:8px;background:rgba(6,16,10,.9);color:#fff;font-size:.75rem;line-height:1.35;box-shadow:0 2px 10px rgba(0,0,0,.4)}
+.estacion-root .graf-lectura.izq{left:auto;right:12px}
+.estacion-root .graf-lectura b{font-weight:650}
+.estacion-root .graf-lectura .cuando{color:var(--tenue);white-space:nowrap}
 .estacion-root .graf-zoom.mh-grafica .grafica-lienzo{height:min(42vh,340px);min-height:200px}
 .estacion-root /* ---------- ventana emergente del historial de un indicador */
 .modal-hist .hist-caja{max-width:760px;max-height:calc(100vh - 32px);overflow:auto;padding:14px 16px}
@@ -149,13 +176,24 @@
 .estacion-root .mh-stats b{font-size:1.3rem;white-space:nowrap}
 .estacion-root .mh-stats b small{font-size:.75rem;color:var(--tenue);font-weight:400}
 .estacion-root .mh-stats .st-min b{color:#69c8ff}.estacion-root .mh-stats .st-prom b{color:var(--verde)}.estacion-root .mh-stats .st-max b{color:var(--ambar)}
+.estacion-root .mh-par{display:grid;gap:4px;margin:10px 0 0;padding:8px 10px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid rgba(140,255,190,.16)}
+.estacion-root .mh-par p{display:flex;justify-content:space-between;gap:8px;margin:0;font-size:.9rem;color:var(--tenue)}
+.estacion-root .mh-par b{color:var(--texto);font-weight:650;text-align:right}
+.estacion-root .dli-nota{margin:8px 0 0;font-size:.92rem;line-height:1.4;color:var(--texto)}
+.estacion-root .dli-nota b{font-weight:650}
+@media (max-width:520px){.estacion-root .cal-par .dos{grid-template-columns:1fr}}
+.estacion-root .mh-permanencia{margin:8px 0 0;text-align:center;font-size:.92rem;line-height:1.4;color:var(--texto)}
+.estacion-root .mh-permanencia b{font-weight:650}
 .estacion-root .grafica.mh-grafica{height:min(42vh,340px);min-height:200px;margin-top:34px}
 .estacion-root .mh-vacio{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;color:var(--tenue);
   border:1px dashed var(--borde);border-radius:12px;padding:12px}
 .estacion-root .mh-pie{margin:8px 0 0;text-align:center;font-size:.72rem;color:var(--tenue)}
 .estacion-root /* ---------- bloques genéricos */
 .bloque{padding:14px;margin-bottom:12px}
-.estacion-root .bloque h2{margin:0 0 10px;font-size:1.15rem}.estacion-root .bloque h3{font-size:1rem;margin:16px 0 8px}
+.estacion-root .bloque h2{margin:0 0 10px;font-size:1.15rem;color:var(--texto);font-weight:600}
+.estacion-root .bloque h2 .ico{color:var(--verde)}
+.estacion-root .bloque h3,.estacion-root .mh-cab h3{color:var(--texto)}
+.estacion-root .bloque h3{font-size:1rem;margin:16px 0 8px}
 .estacion-root label{display:flex;flex-direction:column;gap:4px;font-size:.88rem;margin-bottom:10px;color:var(--tenue)}
 .estacion-root label.inline{flex-direction:row;align-items:center;gap:8px;margin:0}
 .estacion-root input,.estacion-root select{background:rgba(0,0,0,.35);color:var(--texto);border:1px solid var(--borde);border-radius:10px;padding:9px 10px;font-size:1rem;min-width:0}
@@ -200,6 +238,7 @@
 .estacion-root .pasos{display:flex;gap:4px;margin:8px 0}.estacion-root .pasos i{flex:1;height:6px;border-radius:3px;background:rgba(255,255,255,.12)}.estacion-root .pasos i.on{background:var(--verde)}
 .estacion-root .instr{font-size:.88rem;line-height:1.5;padding-left:20px;color:var(--texto)}
 .estacion-root .salir{text-align:center;margin:8px 0 20px}
+.estacion-root .salir-btn{display:inline-flex;align-items:center;gap:8px;color:var(--texto);border-color:rgba(238,247,240,.45);background:rgba(8,18,12,.55);min-width:12rem;justify-content:center}
 .estacion-root .lista-alertas{list-style:none;padding:0;margin:10px 0 0;display:grid;gap:8px}
 .estacion-root .lista-alertas li{display:grid;grid-template-columns:10px 1fr auto;gap:10px;align-items:start;padding:10px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid rgba(255,255,255,.08)}
 .estacion-root .lista-alertas li .marca{width:10px;height:10px;border-radius:50%;margin-top:5px;background:var(--rojo);box-shadow:0 0 6px var(--rojo)}
@@ -289,7 +328,7 @@
   .estacion-root.en-inicio{overflow:hidden}
   .estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;display:flex;flex-direction:column}
   .estacion-root.en-inicio #v-inicio{flex:1;min-height:0;height:auto;display:grid;
-    grid-template-columns:minmax(260px,1fr) minmax(0,1.7fr) minmax(260px,1fr);
+    grid-template-columns:minmax(230px,.95fr) minmax(0,1.7fr) minmax(320px,1.3fr);
     grid-template-rows:minmax(0,1fr);grid-template-areas:"aire planta suelo";column-gap:clamp(12px,1.6vw,24px)}
   .estacion-root.en-inicio .zona-aire{grid-area:aire;align-self:stretch;min-height:0;max-height:100%;overflow:auto}
   .estacion-root.en-inicio .figura-planta{grid-area:planta;aspect-ratio:auto;width:100%;height:100%;min-height:0;align-self:stretch}
@@ -349,6 +388,9 @@
 /* ---------- interior caja (Config admin) */
 .estacion-root .bloque-caja .caja-vals{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
 .estacion-root .caja-val{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid rgba(140,255,190,.16)}
+.estacion-root button.caja-val{appearance:none;-webkit-appearance:none;font:inherit;color:inherit;text-align:left;cursor:pointer;width:100%;-webkit-tap-highlight-color:transparent}
+.estacion-root button.caja-val:hover{border-color:rgba(140,255,190,.5)}
+.estacion-root button.caja-val:focus-visible{outline:2px solid var(--verde);outline-offset:2px}
 .estacion-root .caja-val span{font-size:.75rem;color:var(--tenue)}
 .estacion-root .caja-val b{font-size:1.45rem;line-height:1.1}
 .estacion-root .caja-val b small{font-size:.8rem;color:var(--tenue);font-weight:400}
@@ -356,50 +398,72 @@
 .estacion-root label.check{display:flex;flex-direction:row;align-items:center;gap:8px;margin:6px 0 8px;color:var(--texto);font-size:.9rem}
 .estacion-root label.check input{width:18px;height:18px;margin:0;flex:none;accent-color:var(--verde2)}
 
-/* ---------- capa de ambiente (Inicio): CSS ligero, bajo las tarjetas */
-.estacion-root .capa-ambiente{position:fixed;inset:0;z-index:-1;pointer-events:none;overflow:hidden;contain:strict}
-.estacion-root .capa-ambiente::before,.estacion-root .capa-ambiente::after{content:"";position:absolute;inset:0;opacity:0;transition:opacity 1.1s ease;will-change:opacity,transform}
-.estacion-root .capa-ambiente.amb-calido::before{
-  opacity:1;
-  background:
-    radial-gradient(ellipse 90% 55% at 50% -5%,rgba(255,110,40,.38),transparent 62%),
-    linear-gradient(180deg,rgba(255,70,20,.16),transparent 48%);
-  animation:amb-pulso-calido 4.5s ease-in-out infinite;
-}
-.estacion-root .capa-ambiente.amb-frio::before{
-  opacity:1;
-  background:
-    radial-gradient(ellipse 85% 50% at 50% 0%,rgba(80,170,255,.32),transparent 60%),
-    linear-gradient(180deg,rgba(40,120,220,.14),transparent 50%);
-  animation:amb-pulso-frio 5s ease-in-out infinite;
-}
-.estacion-root .capa-ambiente.amb-sol::after{
-  opacity:1;
-  background:
-    radial-gradient(ellipse 70% 45% at 72% 0%,rgba(255,245,190,.5),transparent 58%),
-    linear-gradient(155deg,rgba(255,236,160,.22) 0%,transparent 42%);
-  transform-origin:72% 0%;
-  animation:amb-haz 5.5s ease-in-out infinite;
-}
-@keyframes amb-pulso-calido{
-  0%,100%{opacity:.72;filter:saturate(1)}
-  50%{opacity:1;filter:saturate(1.15)}
-}
-@keyframes amb-pulso-frio{
-  0%,100%{opacity:.65;filter:saturate(1)}
-  50%{opacity:.95;filter:saturate(1.1)}
-}
-@keyframes amb-haz{
-  0%,100%{opacity:.7;transform:scale(1) rotate(0deg)}
-  50%{opacity:1;transform:scale(1.04) rotate(.4deg)}
-}
+@keyframes haz-pulso{0%,100%{opacity:.38}50%{opacity:.8}}
+@keyframes haz-luna{0%,100%{opacity:.2}50%{opacity:.46}}
 @media (prefers-reduced-motion:reduce){
-  .estacion-root .capa-ambiente::before,.estacion-root .capa-ambiente::after{animation:none!important;opacity:.85}
-}
-@media (max-width:699px),(pointer:coarse){
-  .estacion-root .capa-ambiente::before,.estacion-root .capa-ambiente::after{animation:none!important;filter:none!important}
+  .estacion-root .fase-capa,.estacion-root .escena-relleno{transition:none}
+  .estacion-root .haz{animation:none;opacity:.45}
+  .estacion-root .fase-capa canvas{display:none}
 }
 .estacion-root .lista-cuentas{list-style:none;padding:0;margin:8px 0 0}
 .estacion-root .lista-cuentas li{display:flex;justify-content:space-between;gap:8px;padding:8px 0;border-bottom:1px solid var(--borde)}
 .estacion-root .cabecera .btn{padding:6px 10px;font-size:.8rem}
+.estacion-root .bloque-enlace .enlaces{display:flex;gap:10px 18px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.estacion-root.en-inicio .ind-cuerpo{flex-wrap:nowrap;align-items:center}
+.estacion-root.en-inicio .ind-ext{flex:1 1 4.2rem;min-width:0;max-width:none}
+
+/* Teléfono en vertical: Inicio cabe en 100dvh. Aire arriba, planta centrada, suelo abajo.
+   El paisaje y el escritorio siguen con sus reglas anteriores. */
+@media (max-width:520px) and (orientation:portrait){
+  .estacion-root.en-inicio{box-sizing:border-box;height:100dvh;max-height:100dvh;min-height:0;overflow:hidden;
+    padding:calc(env(safe-area-inset-top) + 4px) 8px calc(var(--nav) + env(safe-area-inset-bottom) + 10px);
+    display:flex;flex-direction:column}
+  .estacion-root.en-inicio>main{flex:1 1 auto;min-height:0;width:100%;max-width:none;margin:0;display:flex;flex-direction:column;overflow:hidden;gap:4px}
+  .estacion-root.en-inicio .cabecera{flex:none;position:static;margin:0;padding:4px 8px;gap:6px;background:rgba(8,18,12,.45)}
+  .estacion-root.en-inicio .cabecera h1{font-size:clamp(.68rem,3.5vw,.9rem);color:#fff}
+  .estacion-root.en-inicio .marca{flex:1 1 auto;min-width:0}
+  .estacion-root.en-inicio .marca-nodo{font-size:.68rem}
+  .estacion-root.en-inicio .cab-acciones{flex:0 1 auto;flex-basis:auto;min-width:0;justify-content:flex-end;margin-left:auto}
+  .estacion-root.en-inicio .estado-senal{flex-wrap:nowrap;justify-content:flex-end;gap:1px 8px}
+  .estacion-root.en-inicio .ultima-lectura{flex:0 1 auto;font-size:.68rem;text-align:right;white-space:nowrap}
+  .estacion-root.en-inicio .cabecera .btn{padding:4px 8px;font-size:.72rem}
+  .estacion-root.en-inicio .aviso-diag{flex:none;margin:0;padding:3px 8px;font-size:.68rem;max-height:2.4em;overflow:hidden}
+  .estacion-root.en-inicio .aviso-diag strong{display:inline;margin:0 .3em 0 0}
+  .estacion-root.en-inicio #v-inicio{flex:1 1 auto;min-height:0;height:auto;display:grid;overflow:hidden;
+    grid-template-columns:minmax(0,1fr);grid-template-rows:auto minmax(0,1fr) auto;
+    grid-template-areas:"aire" "planta" "suelo";gap:4px}
+  .estacion-root.en-inicio .zona-aire{grid-area:aire;align-self:start;min-width:0;min-height:0;overflow:hidden;padding:3px 4px}
+  .estacion-root.en-inicio .figura-planta{grid-area:planta;order:0;aspect-ratio:auto;width:100%;height:100%;min-height:0;max-height:none;align-self:stretch}
+  .estacion-root.en-inicio .zona-suelo{grid-area:suelo;align-self:end;min-width:0;min-height:0;overflow:hidden;padding:3px 4px;
+    background:rgba(22,13,7,.38);box-shadow:none}
+  .estacion-root.en-inicio .ind,.estacion-root.en-inicio .zona-tit,.estacion-root.en-inicio .ind-cab{line-height:1.15}
+  .estacion-root.en-inicio .zona-tit{font-size:.72rem;margin:0 2px 3px;gap:4px}
+  .estacion-root.en-inicio .zona-tit .ico{width:14px;height:14px}
+  .estacion-root.en-inicio .zona-suelo .zona-tit{color:var(--texto);font-weight:600}
+  .estacion-root.en-inicio .zona-suelo .zona-tit .ico.hoja{color:var(--verde)}
+  .estacion-root.en-inicio .zona-hora{font-size:.62rem}
+  .estacion-root.en-inicio .ind-aire{grid-template-columns:repeat(3,minmax(0,1fr));gap:4px}
+  .estacion-root.en-inicio .ind-aire .ind:not(#ind-t_aire) .etq-mini{display:inline}
+  .estacion-root.en-inicio .ind-aire .ind:not(#ind-t_aire) .etq-larga{display:none}
+  .estacion-root.en-inicio .ind-aire .ind{padding:3px 4px;gap:1px}
+  .estacion-root.en-inicio .ind-grande .ind-cab{font-size:.66rem;gap:2px}
+  .estacion-root.en-inicio .ind-grande .ind-cab .ico{width:16px;height:16px}
+  .estacion-root.en-inicio .ind-grande .ind-valor b{font-size:clamp(.95rem,4.6vw,1.25rem);line-height:1.05}
+  .estacion-root.en-inicio .ind-grande .ind-valor small{font-size:.62rem}
+  .estacion-root.en-inicio .zona-suelo .ind{padding:2px 3px;gap:0}
+  .estacion-root.en-inicio .zona-suelo .ind-cab{font-size:.64rem}
+  .estacion-root.en-inicio .zona-suelo .ind-valor b{font-size:clamp(.85rem,3.8vw,1.1rem);line-height:1.05}
+  .estacion-root.en-inicio .ind-cuerpo{flex-wrap:nowrap;align-items:center;gap:2px 4px}
+  .estacion-root.en-inicio .ind-valor{flex:1 1 auto;min-width:0}
+  .estacion-root.en-inicio .ind-ext{display:flex;flex:0 0 auto;min-width:0;max-width:none;font-size:.68rem;line-height:1.15;gap:0}
+  .estacion-root.en-inicio .ind-ext>span{white-space:nowrap}
+  .estacion-root.en-inicio .ind-sub,.estacion-root.en-inicio .barra,
+  .estacion-root.en-inicio .sub-grupo h3,.estacion-root.en-inicio .pista,
+  .estacion-root.en-inicio .ind-cab .ico.ind-graf,.estacion-root.en-inicio .tarjeta-conexion{display:none}
+  .estacion-root.en-inicio .sub-grupos{gap:4px}
+  .estacion-root.en-inicio .ind-grid{gap:4px}
+}
+@media (max-height:640px) and (orientation:landscape){
+  .estacion-root.en-inicio .zona-suelo .ind-grid.c2{grid-template-columns:minmax(0,1fr)}
+}
 

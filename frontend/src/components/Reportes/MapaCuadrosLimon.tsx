@@ -8,6 +8,7 @@ import {
   type MixVariedadPct,
   type VariedadLimonCampo,
 } from '../../lib/constants';
+import { kgRealPorBin, porcentajesQueSuman100 } from './limonKpi';
 
 type Lote = LoteRendimientoApi;
 
@@ -119,6 +120,10 @@ export default function MapaCuadrosLimon({ lotes }: MapaCuadrosLimonProps) {
 
   const geo = active ? CUADROS_GEO.find((c) => c.seccion === active) : null;
   const lote = active ? lotePorSeccion(lotes, active) : undefined;
+  const pctLote = lote
+    ? porcentajesQueSuman100(lote.kg_primera || 0, lote.kg_segunda || 0)
+    : null;
+  const kgBin = lote ? kgRealPorBin(lote.kg_salida || 0, lote.bins_campo || 0) : null;
   const mix = active ? MIX_VARIEDAD_POR_SECCION[active] || [] : [];
   const accent = mix.length ? colorPrincipal(mix) : '#38bdf8';
 
@@ -376,11 +381,17 @@ export default function MapaCuadrosLimon({ lotes }: MapaCuadrosLimonProps) {
                   </div>
                   <div style={rowStyle}>
                     <span style={{ color: '#94a3b8' }}>% kg 1ra</span>
-                    <strong style={{ color: '#86efac' }}>{fmtNum(lote.pct_primera)}%</strong>
+                    <strong style={{ color: '#86efac' }}>{fmtNum(pctLote?.primera)}%</strong>
                   </div>
                   <div style={rowStyle}>
                     <span style={{ color: '#94a3b8' }}>% kg 2da</span>
-                    <strong style={{ color: '#fde68a' }}>{fmtNum(lote.pct_segunda)}%</strong>
+                    <strong style={{ color: '#fde68a' }}>{fmtNum(pctLote?.segunda)}%</strong>
+                  </div>
+                  <div style={rowStyle}>
+                    <span style={{ color: '#94a3b8' }}>Kg real por bin</span>
+                    <strong style={{ color: '#fdba74' }}>
+                      {kgBin != null ? `${fmtNum(kgBin, 1)} kg` : '—'}
+                    </strong>
                   </div>
                   <div style={{ ...rowStyle, marginTop: 8, fontSize: 11, color: '#64748b' }}>
                     <span>Kg 1ra / 2da / tot</span>

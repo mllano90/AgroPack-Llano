@@ -8,8 +8,6 @@ export const prefAmbiente = {
   },
   set: (v: boolean) => {
     try { localStorage.setItem(CLAVE_AMBIENTE, v ? '1' : '0'); } catch { /* privado / sin storage */ }
+    try { window.dispatchEvent(new Event('estacion-ambiente')); } catch { /* sin ventana */ }
   },
 };
-
-/** Umbrales de la capa de ambiente (aire °C, piranómetro W/m²). */
-export const UMBRAL_AMB = { calor: 38, frio: 15, sol: 700 } as const;
