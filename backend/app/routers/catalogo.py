@@ -1700,9 +1700,43 @@ def ajustar_inventario_final(
     return {"ok": True, "id": inv.id, "cantidad_stock": int(inv.cantidad_stock)}
 
 
+def _en_filtro_reporte(fecha, lote_valor: str, desde: date | None, hasta: date | None, lote: str | None) -> bool:
+    if desde and (fecha is None or fecha < desde):
+        return False
+    if hasta and (fecha is None or fecha > hasta):
+        return False
+    if lote and (lote_valor or "").strip() != lote:
+        return False
+    return True
+
+
+def _pendiente_campo(db: Session, prod: ProductoCatalogo, formas: list[_Forma], lote: str | None) -> dict[str, int]:
+    """Inventario de campo que sigue sin empacar. El filtro de fechas no lo mueve: es existencia."""
+    hay = db.query(CatalogoCampoForma.id).filter_by(producto_id=prod.id).first()
+    acc: dict[str, int] = defaultdict(int)
+    if hay:
+        q = db.query(CatalogoCampoForma).filter_by(producto_id=prod.id)
+        if lote:
+            q = q.filter(CatalogoCampoForma.lote == lote)
+        for parte in q.all():
+            acc[parte.codigo] += int(parte.cantidad_disponible or 0)
+        return acc
+    q = db.query(CatalogoInventarioCampo).filter_by(producto_id=prod.id)
+    if lote:
+        q = q.filter(CatalogoInventarioCampo.lote == lote)
+    codigo = formas[0].codigo if formas else prod.tipo_cosecha
+    if not codigo:
+        return {}
+    acc[codigo] = sum(int(r.cantidad_disponible or 0) for r in q.all())
+    return acc
+
+
 @router.get("/reportes/{producto_id}")
 def reporte_producto(
     producto_id: int,
+    desde: date | None = None,
+    hasta: date | None = None,
+    lote: str | None = None,
     db: Session = Depends(get_db),
     current_user=Depends(get_current_user),
 ):
@@ -1711,9 +1745,14 @@ def reporte_producto(
     params = {p.id: p for p in _parametros(db, prod.id)}
     por_sku = {(p.tipo_caja_id, p.calidad): p for p in params.values()}
     tipos = _tipos_por_id(db, [p.tipo_caja_id for p in params.values()])
-
-    recepciones = db.query(CatalogoRecepcion).filter_by(producto_id=prod.id).all()
+    lote_filtro = (lote or "").strip() or None
     formas_rep = _formas_efectivas(db, prod)
+
+    recepciones = [
+        rec
+        for rec in db.query(CatalogoRecepcion).filter_by(producto_id=prod.id).all()
+        if _en_filtro_reporte(rec.fecha, rec.lote, desde, hasta, lote_filtro)
+    ]
     cant_forma: dict[str, int] = defaultdict(int)
     kg_campo = 0.0
     for rec in recepciones:
@@ -1726,14 +1765,35 @@ def reporte_producto(
     kg2 = 0.0
     # (tipo_caja_id, calidad) -> cajas
     cajas: dict[tuple[int, str], int] = defaultdict(int)
-    empaques = (
-        db.query(CatalogoEmpaque)
-        .filter_by(producto_id=prod.id)
-        .order_by(CatalogoEmpaque.fecha, CatalogoEmpaque.id)
-        .all()
-    )
+    empaques = [
+        emp
+        for emp in (
+            db.query(CatalogoEmpaque)
+            .filter_by(producto_id=prod.id)
+            .order_by(CatalogoEmpaque.fecha, CatalogoEmpaque.id)
+            .all()
+        )
+        if _en_filtro_reporte(emp.fecha, emp.lote, desde, hasta, lote_filtro)
+    ]
+    filas_consumo: dict[int, list[tuple[str, int]]] = defaultdict(list)
+    if empaques:
+        for row in (
+            db.query(CatalogoEmpaqueConsumo)
+            .filter(CatalogoEmpaqueConsumo.empaque_id.in_([e.id for e in empaques]))
+            .all()
+        ):
+            filas_consumo[row.empaque_id].append((row.codigo, int(row.cantidad or 0)))
+    consumidos_forma: dict[str, int] = defaultdict(int)
+    kg_consumido = 0.0
     empaques_out = []
     for emp in empaques:
+        if filas_consumo.get(emp.id):
+            consumos = filas_consumo[emp.id]
+        else:
+            consumos = _consumos_empaque(db, emp, prod, formas_rep)
+        for codigo, n in consumos:
+            consumidos_forma[codigo] += n
+            kg_consumido += n * _peso_de(prod, formas_rep, codigo)
         lineas = _as_list(emp.lineas)
         det = []
         for lin in lineas:
@@ -1791,46 +1851,64 @@ def reporte_producto(
     ids_1 = sorted({tid for (tid, cal) in list(por_sku.keys()) + list(cajas.keys()) if cal != "segunda"})
     ids_2 = sorted({tid for (tid, cal) in list(por_sku.keys()) + list(cajas.keys()) if cal == "segunda"})
     # Include configured presentations even with 0 cajas, and any historical tipo still in cajas.
+    # % de 1ra, 2da y de cada presentación: sobre los kilos de campo consumidos, no sobre lo recibido.
     vistos_1 = []
     for p in params.values():
         if p.calidad != "segunda" and p.tipo_caja_id not in {x["tipo_caja_id"] for x in vistos_1}:
-            vistos_1.append(_fila(p.tipo_caja_id, "primera", kg1))
+            vistos_1.append(_fila(p.tipo_caja_id, "primera", kg_consumido))
     for tid in ids_1:
         if tid not in {x["tipo_caja_id"] for x in vistos_1}:
-            vistos_1.append(_fila(tid, "primera", kg1))
+            vistos_1.append(_fila(tid, "primera", kg_consumido))
     vistos_2 = []
     for p in params.values():
         if p.calidad == "segunda" and p.tipo_caja_id not in {x["tipo_caja_id"] for x in vistos_2}:
-            vistos_2.append(_fila(p.tipo_caja_id, "segunda", kg2))
+            vistos_2.append(_fila(p.tipo_caja_id, "segunda", kg_consumido))
     for tid in ids_2:
         if tid not in {x["tipo_caja_id"] for x in vistos_2}:
-            vistos_2.append(_fila(tid, "segunda", kg2))
+            vistos_2.append(_fila(tid, "segunda", kg_consumido))
 
     parrillas_1 = sum(float(f["parrillas"]) for f in vistos_1)
-    # Una tarjeta por forma: contenedores de ESA forma ÷ parrillas de 1ra.
-    # Sumar bins con cajas de campo no dice nada; el mismo denominador permite comparar.
+    # Contenedores / parrilla = contenedores que esos empaques consumieron ÷ parrillas de 1ra.
+    # Lo recibido y lo que sigue en campo van aparte y no entran al rendimiento.
+    pendientes = _pendiente_campo(db, prod, formas_rep, lote_filtro)
     vistos_codigos = []
     for forma in formas_rep:
         vistos_codigos.append(forma.codigo)
-    for codigo in cant_forma:
+    for codigo in list(cant_forma) + list(consumidos_forma) + list(pendientes):
         if codigo not in vistos_codigos:
             vistos_codigos.append(codigo)
+    salida = kg1 + kg2
     por_forma = []
     for codigo in vistos_codigos:
-        n = int(cant_forma.get(codigo, 0))
+        recibidos = int(cant_forma.get(codigo, 0))
+        consumidos = int(consumidos_forma.get(codigo, 0))
+        pendiente = int(pendientes.get(codigo, 0))
         peso_f = _peso_de(prod, formas_rep, codigo)
+        kg_forma = consumidos * peso_f
+        if kg_consumido and consumidos:
+            kg_real = _r2(salida / kg_consumido * peso_f)
+        else:
+            kg_real = None
         por_forma.append(
             {
                 "codigo": codigo,
                 "nombre": _nombre_cosecha(db, codigo),
                 "peso_kg": peso_f,
-                "contenedores": n,
-                "kg": _r2(n * peso_f),
-                "contenedores_por_parrilla": _r4(n / parrillas_1) if parrillas_1 and n else None,
+                "contenedores": recibidos,
+                "recibidos": recibidos,
+                "consumidos": consumidos,
+                "pendientes": pendiente,
+                "kg": _r2(recibidos * peso_f),
+                "kg_recibido": _r2(recibidos * peso_f),
+                "kg_consumido": _r2(kg_forma),
+                "kg_pendiente": _r2(pendiente * peso_f),
+                "contenedores_por_parrilla": _r4(consumidos / parrillas_1) if parrillas_1 and consumidos else None,
+                "kg_real_por_contenedor": kg_real,
             }
         )
-    con_carga = [f for f in por_forma if f["contenedores"] > 0]
+    con_carga = [f for f in por_forma if f["consumidos"] > 0]
     ratio_unico = con_carga[0]["contenedores_por_parrilla"] if len(con_carga) == 1 else None
+    kg_real_unico = con_carga[0]["kg_real_por_contenedor"] if len(con_carga) == 1 else None
     campo_rows = (
         db.query(CatalogoInventarioCampo)
         .filter_by(producto_id=prod.id)
@@ -1844,15 +1922,17 @@ def reporte_producto(
         **data,
         "contenedores": contenedores,
         "kg_campo": _r2(kg_campo),
+        "kg_consumido": _r2(kg_consumido),
         "kg_primera": _r2(kg1),
         "kg_segunda": _r2(kg2),
-        "pct_primera": _r2(kg1 / kg_campo * 100) if kg_campo else 0.0,
-        "pct_segunda": _r2(kg2 / kg_campo * 100) if kg_campo else 0.0,
+        "pct_primera": _r2(kg1 / kg_consumido * 100) if kg_consumido else 0.0,
+        "pct_segunda": _r2(kg2 / kg_consumido * 100) if kg_consumido else 0.0,
         "kg_primera_por_ha": _r2(kg1 / ha) if ha else None,
         "kg_segunda_por_ha": _r2(kg2 / ha) if ha else None,
         "ton_por_ha": _r4((kg1 + kg2) / 1000 / ha) if ha else None,
         "parrillas_primera": _r4(parrillas_1),
         "contenedores_por_parrilla": ratio_unico,
+        "kg_real_por_contenedor": kg_real_unico,
         "por_forma": por_forma,
         "por_presentacion_primera": vistos_1,
         "por_presentacion_segunda": vistos_2,

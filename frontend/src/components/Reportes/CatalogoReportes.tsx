@@ -53,11 +53,17 @@ function fmtTon(n: number | null) {
 export default function CatalogoReportes({ token, productoId, seccion, reload }: Props) {
   const [data, setData] = useState<ReporteCatalogo | null>(null);
   const [error, setError] = useState('');
+  const [desde, setDesde] = useState('');
+  const [hasta, setHasta] = useState('');
+  const [lote, setLote] = useState('');
 
   useEffect(() => {
     let cancel = false;
     setError('');
-    reporteCatalogo(token, productoId)
+    const filtro = seccion === 'produccion'
+      ? { desde: desde || undefined, hasta: hasta || undefined, lote: lote.trim() || undefined }
+      : undefined;
+    reporteCatalogo(token, productoId, filtro)
       .then((d) => {
         if (!cancel) setData(d);
       })
@@ -67,18 +73,46 @@ export default function CatalogoReportes({ token, productoId, seccion, reload }:
     return () => {
       cancel = true;
     };
-  }, [token, productoId, reload]);
+  }, [token, productoId, reload, seccion, desde, hasta, lote]);
 
   if (error) return <p style={{ color: '#b91c1c' }}>{error}</p>;
   if (!data) return <p style={{ color: '#64748b' }}>Cargando reporte…</p>;
 
   if (seccion === 'inventarios') return <Inventario data={data} />;
   if (seccion === 'embarques') return <Embarques data={data} />;
-  return <Produccion data={data} />;
+  return (
+    <Produccion
+      data={data}
+      desde={desde}
+      hasta={hasta}
+      lote={lote}
+      onDesde={setDesde}
+      onHasta={setHasta}
+      onLote={setLote}
+    />
+  );
 }
 
-function Produccion({ data }: { data: ReporteCatalogo }) {
-  const formas = (data.por_forma || []).filter((f) => f.contenedores > 0);
+function Produccion({
+  data,
+  desde,
+  hasta,
+  lote,
+  onDesde,
+  onHasta,
+  onLote,
+}: {
+  data: ReporteCatalogo;
+  desde: string;
+  hasta: string;
+  lote: string;
+  onDesde: (v: string) => void;
+  onHasta: (v: string) => void;
+  onLote: (v: string) => void;
+}) {
+  const formas = data.por_forma || [];
+  const empacadas = formas.filter((f) => f.consumidos > 0);
+  const conMovimiento = formas.filter((f) => f.recibidos > 0 || f.consumidos > 0 || f.pendientes > 0);
   const partes = [
     ...data.por_presentacion_primera
       .filter((p) => p.kg > 0)
@@ -94,13 +128,35 @@ function Produccion({ data }: { data: ReporteCatalogo }) {
           .map((f) => `${f.nombre} = ${fmtNum(f.peso_kg, 1)} kg`)
           .join(' · ') || 'Sin formas de cosecha'}
         {data.hectareas ? ` · ${fmtNum(data.hectareas, 2)} ha` : ' · sin hectáreas (ton/ha en blanco)'}
-        . Los kilos de campo suman cantidad × peso de cada forma. El % de 1ra y de 2da es sobre esos
-        kilos. <strong>Contenedores / parrilla</strong> se muestra por forma (contenedores recibidos de
-        esa forma ÷ parrillas de 1ra): bins y cajas de campo no se suman entre sí.
+        . El % de 1ra, de 2da y de cada presentación es sobre los kilos de campo que los empaques de
+        este filtro sí consumieron (cantidad × peso de cada forma), no sobre lo recibido.{' '}
+        <strong>Contenedores / parrilla</strong> y <strong>kg real por contenedor</strong> usan esos
+        mismos contenedores consumidos. Bins y cajas de campo no se suman entre sí. Recibido y
+        pendiente por empacar se muestran aparte; el pendiente es el inventario de campo de ahora.
       </p>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'end', margin: '8px 0 12px' }}>
+        <label style={{ fontSize: 12, color: '#64748b' }}>
+          Desde
+          <input type="date" value={desde} onChange={(e) => onDesde(e.target.value)} style={{ display: 'block', marginTop: 2, padding: 6 }} />
+        </label>
+        <label style={{ fontSize: 12, color: '#64748b' }}>
+          Hasta
+          <input type="date" value={hasta} onChange={(e) => onHasta(e.target.value)} style={{ display: 'block', marginTop: 2, padding: 6 }} />
+        </label>
+        <label style={{ fontSize: 12, color: '#64748b' }}>
+          Lote
+          <input
+            value={lote}
+            placeholder="Todos"
+            onChange={(e) => onLote(e.target.value)}
+            style={{ display: 'block', marginTop: 2, padding: 6, width: 160 }}
+          />
+        </label>
+      </div>
       <h3 style={{ marginBottom: 8 }}>Acumulado — indicadores principales</h3>
       <p style={{ fontSize: 12, color: '#64748b', marginTop: 0 }}>
-        Resumen del total recibido y empacado de {data.nombre}.
+        Rendimiento de {data.nombre} con los empaques de este filtro. Kilos de campo consumidos:{' '}
+        {fmtKg(data.kg_consumido)}.
       </p>
       <div
         style={{
@@ -121,17 +177,59 @@ function Produccion({ data }: { data: ReporteCatalogo }) {
           ['1ra', `${fmtNum(data.pct_primera, 1)}%`],
           ['2da', `${fmtNum(data.pct_segunda, 1)}%`],
         ]} />
-        {(formas.length ? formas : [{ nombre: 'Contenedores', contenedores: data.contenedores, contenedores_por_parrilla: data.contenedores_por_parrilla, kg: data.kg_campo }]).map((f) => (
+        {empacadas.map((f) => (
           <Kpi
-            key={f.nombre}
+            key={`ratio-${f.codigo}`}
             bg="#e0f2fe"
             labelColor="#075985"
             valueColor="#0c4a6e"
             titulo={`${f.nombre} / parrilla`}
             valor={f.contenedores_por_parrilla != null ? fmtNum(f.contenedores_por_parrilla, 2) : '—'}
             chips={[
-              ['Recibidos', String(f.contenedores)],
+              ['Empacados', String(f.consumidos)],
               ['Parr. 1ra', fmtNum(data.parrillas_primera, 2)],
+            ]}
+          />
+        ))}
+        {empacadas.map((f) => (
+          <Kpi
+            key={`real-${f.codigo}`}
+            bg="#e0f2fe"
+            labelColor="#075985"
+            valueColor="#0c4a6e"
+            titulo={`Kg real por ${f.nombre.toLowerCase()}`}
+            valor={f.kg_real_por_contenedor != null ? fmtNum(f.kg_real_por_contenedor, 2) : '—'}
+            chips={[
+              ['Kg campo', fmtKg(f.kg_consumido)],
+              ['Empacados', String(f.consumidos)],
+            ]}
+          />
+        ))}
+        {conMovimiento.map((f) => (
+          <Kpi
+            key={`rec-${f.codigo}`}
+            bg="#f8fafc"
+            labelColor="#334155"
+            valueColor="#0f172a"
+            titulo={`Recibido · ${f.nombre}`}
+            valor={String(f.recibidos)}
+            chips={[
+              ['Kg', fmtKg(f.kg_recibido)],
+              ['Forma', f.nombre],
+            ]}
+          />
+        ))}
+        {conMovimiento.map((f) => (
+          <Kpi
+            key={`pend-${f.codigo}`}
+            bg="#f8fafc"
+            labelColor="#334155"
+            valueColor="#0f172a"
+            titulo={`Pendiente por empacar · ${f.nombre}`}
+            valor={String(f.pendientes)}
+            chips={[
+              ['Kg', fmtKg(f.kg_pendiente)],
+              ['En campo', String(f.pendientes)],
             ]}
           />
         ))}

@@ -80,9 +80,26 @@ export interface PresentacionReporte {
   pct: number;
 }
 
+export interface FormaReporte {
+  codigo: string;
+  nombre: string;
+  peso_kg: number;
+  contenedores: number;
+  recibidos: number;
+  consumidos: number;
+  pendientes: number;
+  kg: number;
+  kg_recibido: number;
+  kg_consumido: number;
+  kg_pendiente: number;
+  contenedores_por_parrilla: number | null;
+  kg_real_por_contenedor: number | null;
+}
+
 export interface ReporteCatalogo extends ProductoCatalogo {
   contenedores: number;
   kg_campo: number;
+  kg_consumido: number;
   kg_primera: number;
   kg_segunda: number;
   pct_primera: number;
@@ -92,14 +109,8 @@ export interface ReporteCatalogo extends ProductoCatalogo {
   ton_por_ha: number | null;
   parrillas_primera: number;
   contenedores_por_parrilla: number | null;
-  por_forma: Array<{
-    codigo: string;
-    nombre: string;
-    peso_kg: number;
-    contenedores: number;
-    kg: number;
-    contenedores_por_parrilla: number | null;
-  }>;
+  kg_real_por_contenedor: number | null;
+  por_forma: FormaReporte[];
   por_presentacion_primera: PresentacionReporte[];
   por_presentacion_segunda: PresentacionReporte[];
   campo: Array<{ lote: string; forma?: string; codigo?: string; cantidad_disponible: number }>;
@@ -278,8 +289,18 @@ export async function crearEmbarqueCatalogo(
   return res.data;
 }
 
-export async function reporteCatalogo(token: string, productoId: number): Promise<ReporteCatalogo> {
-  const res = await client(token).get<ReporteCatalogo>(`/api/catalogo/reportes/${productoId}`);
+export async function reporteCatalogo(
+  token: string,
+  productoId: number,
+  filtro?: { desde?: string; hasta?: string; lote?: string }
+): Promise<ReporteCatalogo> {
+  const res = await client(token).get<ReporteCatalogo>(`/api/catalogo/reportes/${productoId}`, {
+    params: {
+      desde: filtro?.desde || undefined,
+      hasta: filtro?.hasta || undefined,
+      lote: filtro?.lote || undefined,
+    },
+  });
   return res.data;
 }
 

@@ -422,21 +422,25 @@ def probar_dos_formas(base: str, admin: str, tag: str, caja_a: int, caja_b: int)
     check(stock.get("cajas_campo") == 4 and stock.get("bins") == 2, f"{tag} stock por forma {campo}")
     code, rep = req(base, "GET", f"/api/catalogo/reportes/{prod['id']}", token=admin)
     kg_campo = 10 * 15 + 4 * 300
+    kg_consumido = 6 * 15 + 2 * 300
     kg1 = 20 * 10
     kg2 = 10 * 15
     check(code == 200 and abs(rep.get("kg_campo", 0) - kg_campo) < 1e-6, f"{tag} kg campo mixto {rep.get('kg_campo')}")
-    check(abs(rep.get("pct_primera", 0) - round(kg1 / kg_campo * 100, 2)) < 1e-6, f"{tag} % 1ra mixto {rep.get('pct_primera')}")
-    check(abs(rep.get("pct_segunda", 0) - round(kg2 / kg_campo * 100, 2)) < 1e-6, f"{tag} % 2da mixto {rep.get('pct_segunda')}")
+    check(abs(rep.get("kg_consumido", 0) - kg_consumido) < 1e-6, f"{tag} kg consumido mixto {rep.get('kg_consumido')}")
+    check(abs(rep.get("pct_primera", 0) - round(kg1 / kg_consumido * 100, 2)) < 1e-6, f"{tag} % 1ra mixto {rep.get('pct_primera')}")
+    check(abs(rep.get("pct_segunda", 0) - round(kg2 / kg_consumido * 100, 2)) < 1e-6, f"{tag} % 2da mixto {rep.get('pct_segunda')}")
     check(rep.get("contenedores_por_parrilla") is None, f"{tag} no suma bins con cajas en un solo ratio")
     por = {f["codigo"]: f for f in rep.get("por_forma") or []}
     check(por.get("cajas_campo", {}).get("contenedores") == 10, f"{tag} cajas recibidas {por.get('cajas_campo')}")
     check(por.get("bins", {}).get("contenedores") == 4, f"{tag} bins recibidos {por.get('bins')}")
+    check(por.get("cajas_campo", {}).get("consumidos") == 6, f"{tag} cajas consumidas {por.get('cajas_campo')}")
+    check(por.get("bins", {}).get("consumidos") == 2, f"{tag} bins consumidos {por.get('bins')}")
     check(
-        abs(((por.get("cajas_campo") or {}).get("contenedores_por_parrilla") or 0) - 20) < 1e-6,
+        abs(((por.get("cajas_campo") or {}).get("contenedores_por_parrilla") or 0) - 12) < 1e-6,
         f"{tag} cajas/parrilla {por.get('cajas_campo')}",
     )
     check(
-        abs(((por.get("bins") or {}).get("contenedores_por_parrilla") or 0) - 8) < 1e-6,
+        abs(((por.get("bins") or {}).get("contenedores_por_parrilla") or 0) - 4) < 1e-6,
         f"{tag} bins/parrilla {por.get('bins')}",
     )
     # Una sola recepción con cajas y bins a la vez. Borrarla devuelve las dos existencias.
@@ -455,6 +459,10 @@ def probar_dos_formas(base: str, admin: str, tag: str, caja_a: int, caja_b: int)
     check(stock2.get("cajas_campo") == 9 and stock2.get("bins") == 3, f"{tag} stock suma las dos líneas {campo2}")
     code, rep2 = req(base, "GET", f"/api/catalogo/reportes/{prod['id']}", token=admin)
     check(rep2.get("kg_campo") == kg_campo + 5 * 15 + 300, f"{tag} el reporte suma la recepción doble {rep2.get('kg_campo')}")
+    check(
+        abs(rep2.get("pct_primera", 0) - round(kg1 / kg_consumido * 100, 2)) < 1e-6,
+        f"{tag} la recepción extra no cambia el % {rep2.get('pct_primera')}",
+    )
     code, borrado = req(base, "DELETE", f"/api/catalogo/recepciones/{multi['id']}", token=admin)
     check(code == 200 and borrado.get("ok") is True, f"{tag} borrar la recepción {code} {borrado}")
     code, campo3 = req(base, "GET", f"/api/catalogo/campo?producto_id={prod['id']}", token=admin)
@@ -630,13 +638,156 @@ def probar_forma_vieja(base: str, admin: str, db_path: str) -> None:
     check(code == 200 and emp.get("campo_restante") == 7, f"empaque de la forma vieja {code} {emp}")
     code, rep3 = req(base, "GET", f"/api/catalogo/reportes/{t['id']}", token=admin)
     check(
-        abs(rep3.get("pct_primera", 0) - round(40 / 150 * 100, 2)) < 1e-6,
-        f"% 1ra de tomatillo {rep3.get('pct_primera')}",
+        abs(rep3.get("pct_primera", 0) - round(40 / 45 * 100, 2)) < 1e-6,
+        f"% 1ra de tomatillo sobre lo consumido {rep3.get('pct_primera')}",
     )
+    check(rep3.get("kg_campo") == 150, f"lo recibido de tomatillo sigue aparte {rep3.get('kg_campo')}")
+    check(rep3.get("kg_consumido") == 45, f"kg consumido tomatillo {rep3.get('kg_consumido')}")
     check(
-        abs((((rep3.get("por_forma") or [{}])[0].get("contenedores_por_parrilla")) or 0) - 50) < 1e-6,
+        abs((((rep3.get("por_forma") or [{}])[0].get("contenedores_por_parrilla")) or 0) - 15) < 1e-6,
         f"cajas/parrilla tomatillo {rep3.get('por_forma')}",
     )
+    # Empaque viejo, sin filas en catalogo_empaque_consumos: el rendimiento usa cantidad_campo.
+    con = sqlite3.connect(db_path)
+    con.execute(
+        "INSERT INTO catalogo_tipos_caja (codigo, nombre) VALUES (?, ?)",
+        ("caja_chile", "Caja chile"),
+    )
+    caja_chile = con.execute("SELECT id FROM catalogo_tipos_caja WHERE codigo = 'caja_chile'").fetchone()[0]
+    con.execute(
+        """INSERT INTO productos_catalogo
+           (codigo, nombre, tipo_cosecha, peso_contenedor_kg, activo)
+           VALUES ('chile_legado', 'Chile legado', 'cajas_campo', 15, 1)"""
+    )
+    chile_id = con.execute("SELECT id FROM productos_catalogo WHERE codigo = 'chile_legado'").fetchone()[0]
+    con.execute(
+        """INSERT INTO producto_parametros
+           (producto_id, calidad, tipo_caja_id, kg, cajas_por_parrilla)
+           VALUES (?, 'primera', ?, 10, 20)""",
+        (chile_id, caja_chile),
+    )
+    param_chile = con.execute(
+        "SELECT id FROM producto_parametros WHERE producto_id = ?", (chile_id,)
+    ).fetchone()[0]
+    con.execute(
+        """INSERT INTO catalogo_recepciones (producto_id, fecha, lote, cantidad)
+           VALUES (?, '2026-04-01', 'Lote C', 10)""",
+        (chile_id,),
+    )
+    con.execute(
+        """INSERT INTO catalogo_inventario_campo (producto_id, lote, cantidad_disponible)
+           VALUES (?, 'Lote C', 6)""",
+        (chile_id,),
+    )
+    con.execute(
+        """INSERT INTO catalogo_empaques (producto_id, fecha, lote, cantidad_campo, lineas)
+           VALUES (?, '2026-04-02', 'Lote C', 4, ?)""",
+        (
+            chile_id,
+            json.dumps([{
+                "parametro_id": param_chile,
+                "tipo_caja_id": caja_chile,
+                "calidad": "primera",
+                "cantidad": 2,
+            }]),
+        ),
+    )
+    con.commit()
+    con.close()
+    code, rep_chile = req(base, "GET", f"/api/catalogo/reportes/{chile_id}", token=admin)
+    check(
+        code == 200 and rep_chile.get("kg_campo") == 150 and rep_chile.get("kg_consumido") == 60,
+        f"legado sin consumos usa cantidad_campo {rep_chile.get('kg_campo')} {rep_chile.get('kg_consumido')}",
+    )
+    check(
+        abs(rep_chile.get("pct_primera", 0) - round(20 / 60 * 100, 2)) < 1e-6,
+        f"% legado sobre 4×15 kg, no sobre lo recibido {rep_chile.get('pct_primera')}",
+    )
+
+
+def probar_rendimiento_sobre_consumo(base: str, admin: str, tag: str, caja_a: int) -> None:
+    """Dos recepciones y un empaque parcial: el % sale de lo consumido, no de lo recibido."""
+    code, prod = req(base, "POST", "/api/catalogo/productos", token=admin, body={"nombre": f"Calabaza {tag}"})
+    if not prod.get("id"):
+        check(False, f"{tag} alta calabaza {code}")
+        return
+    code, conf = req(base, "PUT", f"/api/catalogo/productos/{prod['id']}", token=admin, body={
+        "formas": [
+            {"codigo": "cajas_campo", "peso_kg": 15},
+            {"codigo": "bins", "peso_kg": 260},
+        ],
+        "parametros": [
+            {"calidad": "primera", "tipo_caja_id": caja_a, "kg": 18, "cajas_por_parrilla": 50},
+        ],
+    })
+    param = (conf.get("parametros") or [{}])[0]
+    pid = prod["id"]
+    code, _ = req(base, "POST", "/api/catalogo/recepciones", token=admin, body={
+        "producto_id": pid,
+        "fecha": "2026-11-04",
+        "lote": "General",
+        "lineas": [
+            {"codigo": "cajas_campo", "cantidad": 800},
+            {"codigo": "bins", "cantidad": 4},
+        ],
+    })
+    check(code == 200, f"{tag} recepción 4 nov {code}")
+    code, _ = req(base, "POST", "/api/catalogo/recepciones", token=admin, body={
+        "producto_id": pid,
+        "fecha": "2026-11-05",
+        "lote": "General",
+        "lineas": [
+            {"codigo": "cajas_campo", "cantidad": 471},
+            {"codigo": "bins", "cantidad": 2},
+        ],
+    })
+    check(code == 200, f"{tag} recepción 5 nov {code}")
+    code, emp = req(base, "POST", "/api/catalogo/empaques", token=admin, body={
+        "producto_id": pid,
+        "fecha": "2026-11-04",
+        "lote": "General",
+        "consumos": [{"codigo": "cajas_campo", "cantidad": 629}],
+        "lineas": [{"parametro_id": param["id"], "cantidad": 375}],
+    })
+    check(code == 200, f"{tag} empaque parcial {code} {emp}")
+    code, rep = req(base, "GET", f"/api/catalogo/reportes/{pid}", token=admin)
+    kg_recibido = 1271 * 15 + 6 * 260
+    kg_consumido = 629 * 15
+    kg1 = 375 * 18
+    pct = round(kg1 / kg_consumido * 100, 2)
+    check(code == 200 and abs(rep.get("kg_campo", 0) - kg_recibido) < 1e-6, f"{tag} recibido {rep.get('kg_campo')}")
+    check(abs(rep.get("kg_consumido", 0) - kg_consumido) < 1e-6, f"{tag} consumido {rep.get('kg_consumido')}")
+    check(abs(rep.get("pct_primera", 0) - pct) < 1e-6, f"{tag} % 1ra sobre consumido {rep.get('pct_primera')} != {pct}")
+    check(abs(rep.get("pct_primera", 0) - round(kg1 / kg_recibido * 100, 2)) > 1, f"{tag} el % no usa lo recibido")
+    por = {f["codigo"]: f for f in rep.get("por_forma") or []}
+    cajas = por.get("cajas_campo") or {}
+    bins = por.get("bins") or {}
+    check(cajas.get("recibidos") == 1271 and cajas.get("consumidos") == 629, f"{tag} cajas {cajas}")
+    check(cajas.get("pendientes") == 642, f"{tag} pendiente cajas {cajas.get('pendientes')}")
+    check(bins.get("recibidos") == 6 and bins.get("consumidos") == 0 and bins.get("pendientes") == 6, f"{tag} bins {bins}")
+    check(bins.get("contenedores_por_parrilla") is None, f"{tag} bins sin consumo no arman ratio")
+    parrillas = 375 / 50
+    check(
+        abs((cajas.get("contenedores_por_parrilla") or 0) - round(629 / parrillas, 4)) < 1e-6,
+        f"{tag} cajas/parrilla de lo empacado {cajas.get('contenedores_por_parrilla')}",
+    )
+    check(
+        abs((cajas.get("kg_real_por_contenedor") or 0) - round(kg1 / 629, 2)) < 1e-6,
+        f"{tag} kg real por caja {cajas.get('kg_real_por_contenedor')}",
+    )
+    pres = rep.get("por_presentacion_primera") or []
+    check(pres and abs(pres[0]["pct"] - pct) < 1e-6, f"{tag} % de la presentación sobre lo consumido {pres}")
+    code, dia1 = req(base, "GET", f"/api/catalogo/reportes/{pid}?desde=2026-11-04&hasta=2026-11-04", token=admin)
+    kg_dia1 = 800 * 15 + 4 * 260
+    check(abs(dia1.get("kg_campo", 0) - kg_dia1) < 1e-6, f"{tag} el 4 nov solo cuenta esa recepción {dia1.get('kg_campo')}")
+    check(abs(dia1.get("kg_consumido", 0) - kg_consumido) < 1e-6, f"{tag} el 4 nov conserva el empaque {dia1.get('kg_consumido')}")
+    check(abs(dia1.get("pct_primera", 0) - pct) < 1e-6, f"{tag} el 4 nov no usa las 800 cajas como denominador {dia1.get('pct_primera')}")
+    check((dia1.get("por_forma") and {f["codigo"]: f for f in dia1["por_forma"]}.get("cajas_campo", {}).get("pendientes")) == 642, f"{tag} el pendiente es el inventario actual")
+    code, dia2 = req(base, "GET", f"/api/catalogo/reportes/{pid}?desde=2026-11-05&hasta=2026-11-05", token=admin)
+    check(dia2.get("kg_consumido") == 0 and dia2.get("pct_primera") == 0, f"{tag} el 5 nov no tiene empaque {dia2.get('kg_consumido')}")
+    check(abs(dia2.get("kg_campo", 0) - (471 * 15 + 2 * 260)) < 1e-6, f"{tag} el 5 nov solo lo recibido ese día {dia2.get('kg_campo')}")
+    code, otro = req(base, "GET", f"/api/catalogo/reportes/{pid}?lote=Otro", token=admin)
+    check(otro.get("kg_campo") == 0 and otro.get("kg_consumido") == 0 and otro.get("pct_primera") == 0, f"{tag} otro lote vacío {otro}")
 
 
 def ejercitar(base: str, admin: str, tag: str, tocar_legacy: bool) -> None:
@@ -760,25 +911,30 @@ def ejercitar(base: str, admin: str, tag: str, tocar_legacy: bool) -> None:
 
     code, rep = req(base, "GET", f"/api/catalogo/reportes/{prod['id']}", token=recep)
     kg_campo = 20 * 200
+    kg_consumido = 8 * 200
     kg1 = 20 * 10
     kg2 = 10 * 15
     parrillas = 20 / 40
     check(code == 200, f"{tag} reporte {code}")
     if isinstance(rep, dict):
         check(abs(rep["kg_campo"] - kg_campo) < 1e-6, f"{tag} kg campo {rep.get('kg_campo')}")
+        check(abs(rep["kg_consumido"] - kg_consumido) < 1e-6, f"{tag} kg consumido {rep.get('kg_consumido')}")
         check(abs(rep["kg_primera"] - kg1) < 1e-6, f"{tag} kg 1ra {rep.get('kg_primera')}")
         check(abs(rep["kg_segunda"] - kg2) < 1e-6, f"{tag} kg 2da {rep.get('kg_segunda')}")
-        check(abs(rep["pct_primera"] - round(kg1 / kg_campo * 100, 2)) < 1e-6, f"{tag} % 1ra {rep.get('pct_primera')}")
-        check(abs(rep["pct_segunda"] - round(kg2 / kg_campo * 100, 2)) < 1e-6, f"{tag} % 2da {rep.get('pct_segunda')}")
+        check(abs(rep["pct_primera"] - round(kg1 / kg_consumido * 100, 2)) < 1e-6, f"{tag} % 1ra {rep.get('pct_primera')}")
+        check(abs(rep["pct_segunda"] - round(kg2 / kg_consumido * 100, 2)) < 1e-6, f"{tag} % 2da {rep.get('pct_segunda')}")
         check(abs(rep["parrillas_primera"] - round(parrillas, 4)) < 1e-6, f"{tag} parrillas {rep.get('parrillas_primera')}")
         check(
-            abs(rep["contenedores_por_parrilla"] - round(20 / parrillas, 4)) < 1e-6,
+            abs(rep["contenedores_por_parrilla"] - round(8 / parrillas, 4)) < 1e-6,
             f"{tag} bins/parrilla {rep.get('contenedores_por_parrilla')}",
         )
         check(abs((rep.get("ton_por_ha") or 0) - round((kg1 + kg2) / 1000 / 10, 4)) < 1e-6, f"{tag} ton/ha {rep.get('ton_por_ha')}")
         check(abs((rep.get("kg_primera_por_ha") or 0) - round(kg1 / 10, 2)) < 1e-6, f"{tag} kg/ha 1ra")
         pres = rep.get("por_presentacion_primera") or []
-        check(len(pres) == 1 and abs(pres[0]["pct"] - 100) < 1e-6 and pres[0]["cajas"] == 20, f"{tag} % 1ra en la caja {pres}")
+        check(
+            len(pres) == 1 and abs(pres[0]["pct"] - round(kg1 / kg_consumido * 100, 2)) < 1e-6 and pres[0]["cajas"] == 20,
+            f"{tag} % 1ra en la caja {pres}",
+        )
         check(rep.get("contenedores") == 20, f"{tag} contenedores recibidos {rep.get('contenedores')}")
         emb_rep = rep.get("embarques") or []
         check(emb_rep and emb_rep[0]["lineas"][0]["cantidad"] == 5, f"{tag} el reporte lista el embarque")
@@ -796,6 +952,7 @@ def ejercitar(base: str, admin: str, tag: str, tocar_legacy: bool) -> None:
         check("Caja export" not in marcas and f"Mango {tag}" not in marcas, f"{tag} el dashboard no mezcla el catálogo")
 
     probar_dos_formas(base, admin, tag, caja1["id"], caja2["id"])
+    probar_rendimiento_sobre_consumo(base, admin, tag, caja1["id"])
     probar_correcciones(base, admin, recep, tag, caja1["id"], caja2["id"])
 
     if not tocar_legacy:
