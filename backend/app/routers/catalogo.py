@@ -14,6 +14,7 @@ from datetime import date, datetime
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.database import get_db
 from app.core.security import get_current_user, require_roles
@@ -40,8 +41,13 @@ from app.schemas.catalogo import (
     ActivoIn,
     ConfigIn,
     EmbarqueIn,
+    AjusteCampoIn,
+    AjusteFinalIn,
+    EmbarqueEditIn,
+    EmpaqueEditIn,
     EmpaqueIn,
     NombreIn,
+    RecepcionEditIn,
     RecepcionIn,
 )
 
@@ -1158,6 +1164,540 @@ def listar_embarques(
             }
         )
     return list(agrupado.values())
+
+
+def _consumos_empaque(db: Session, emp: CatalogoEmpaque, prod: ProductoCatalogo, formas: list[_Forma]):
+    rows = db.query(CatalogoEmpaqueConsumo).filter_by(empaque_id=emp.id).all()
+    if rows:
+        return [(r.codigo, int(r.cantidad)) for r in rows]
+    codigo = formas[0].codigo if formas else prod.tipo_cosecha
+    return [(codigo, int(emp.cantidad_campo or 0))]
+
+
+def _stock_final(db: Session, producto_id: int, tipo_caja_id: int, calidad: str, lote: str) -> int:
+    inv = (
+        db.query(CatalogoInventarioFinal)
+        .filter_by(producto_id=producto_id, tipo_caja_id=tipo_caja_id, calidad=calidad, lote=lote)
+        .first()
+    )
+    return int(inv.cantidad_stock or 0) if inv else 0
+
+
+def _aplicar_delta_final(db: Session, producto_id: int, deltas: dict[tuple, int]) -> None:
+    for (tipo_caja_id, calidad, lote), delta in deltas.items():
+        if delta == 0:
+            continue
+        tengo = _stock_final(db, producto_id, tipo_caja_id, calidad, lote)
+        if tengo + delta < 0:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Esas cajas ya se embarcaron y no hay stock suficiente para corregir el empaque. "
+                    "No se cambió nada."
+                ),
+            )
+    for (tipo_caja_id, calidad, lote), delta in deltas.items():
+        if delta == 0:
+            continue
+        inv = (
+            db.query(CatalogoInventarioFinal)
+            .filter_by(producto_id=producto_id, tipo_caja_id=tipo_caja_id, calidad=calidad, lote=lote)
+            .first()
+        )
+        if inv:
+            inv.cantidad_stock = int(inv.cantidad_stock or 0) + delta
+        elif delta > 0:
+            db.add(
+                CatalogoInventarioFinal(
+                    producto_id=producto_id,
+                    tipo_caja_id=tipo_caja_id,
+                    calidad=calidad,
+                    lote=lote,
+                    cantidad_stock=delta,
+                )
+            )
+        else:
+            raise HTTPException(
+                status_code=409,
+                detail="No hay inventario final de esas cajas. No se cambió nada.",
+            )
+
+
+def _aplicar_delta_campo(db: Session, prod: ProductoCatalogo, lote: str, deltas: dict[str, int]) -> None:
+    for codigo, delta in deltas.items():
+        if delta == 0:
+            continue
+        parte = (
+            db.query(CatalogoCampoForma)
+            .filter_by(producto_id=prod.id, lote=lote, codigo=codigo)
+            .first()
+        )
+        tengo = int(parte.cantidad_disponible) if parte else 0
+        if tengo + delta < 0:
+            raise HTTPException(
+                status_code=400,
+                detail=f"No hay suficientes {_nombre_cosecha(db, codigo)} en el lote {lote} para este cambio.",
+            )
+    total_delta = sum(deltas.values())
+    total = (
+        db.query(CatalogoInventarioCampo).filter_by(producto_id=prod.id, lote=lote).first()
+    )
+    tengo_total = int(total.cantidad_disponible) if total else 0
+    if tengo_total + total_delta < 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"No hay suficientes contenedores en el lote {lote} para este cambio.",
+        )
+    for codigo, delta in deltas.items():
+        if delta == 0:
+            continue
+        parte = (
+            db.query(CatalogoCampoForma)
+            .filter_by(producto_id=prod.id, lote=lote, codigo=codigo)
+            .first()
+        )
+        if parte:
+            parte.cantidad_disponible = int(parte.cantidad_disponible or 0) + delta
+        elif delta > 0:
+            db.add(
+                CatalogoCampoForma(
+                    producto_id=prod.id,
+                    lote=lote,
+                    codigo=codigo,
+                    cantidad_disponible=delta,
+                )
+            )
+    if total:
+        total.cantidad_disponible = tengo_total + total_delta
+    elif total_delta > 0:
+        db.add(
+            CatalogoInventarioCampo(
+                producto_id=prod.id,
+                lote=lote,
+                cantidad_disponible=total_delta,
+            )
+        )
+
+
+def _lineas_produccion(emp: CatalogoEmpaque) -> list[tuple]:
+    out = []
+    for lin in _as_list(emp.lineas):
+        out.append(
+            (
+                int(lin.get("tipo_caja_id") or 0),
+                str(lin.get("calidad") or ""),
+                int(lin.get("cantidad") or 0),
+                int(lin.get("parametro_id") or 0),
+            )
+        )
+    return out
+
+
+@router.get("/correcciones/{producto_id}")
+def historial_correcciones(
+    producto_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    prod = _producto(db, producto_id)
+    formas = _formas_efectivas(db, prod)
+    nombres = {f.codigo: f.nombre for f in formas}
+    recepciones = (
+        db.query(CatalogoRecepcion)
+        .filter_by(producto_id=prod.id)
+        .order_by(CatalogoRecepcion.fecha.desc(), CatalogoRecepcion.id.desc())
+        .all()
+    )
+    recs_out = []
+    for rec in recepciones:
+        lineas = [
+            {
+                "codigo": codigo,
+                "nombre": nombres.get(codigo) or _nombre_cosecha(db, codigo),
+                "cantidad": cant,
+                "peso_kg": peso,
+                "kg": _r2(cant * peso),
+            }
+            for codigo, cant, peso in _detalle_recepcion(db, rec, prod, formas)
+        ]
+        recs_out.append(
+            {
+                "id": rec.id,
+                "fecha": rec.fecha.isoformat() if rec.fecha else None,
+                "lote": rec.lote,
+                "cantidad": int(rec.cantidad or 0),
+                "kg": _r2(sum(l["kg"] for l in lineas)),
+                "lineas": lineas,
+            }
+        )
+    empaques = (
+        db.query(CatalogoEmpaque)
+        .filter_by(producto_id=prod.id)
+        .order_by(CatalogoEmpaque.fecha.desc(), CatalogoEmpaque.id.desc())
+        .all()
+    )
+    params = {p.id: p for p in _parametros(db, prod.id)}
+    tipos = _tipos_por_id(db, [p.tipo_caja_id for p in params.values()])
+    emps_out = []
+    for emp in empaques:
+        consumos = [
+            {"codigo": c, "nombre": nombres.get(c) or _nombre_cosecha(db, c), "cantidad": n}
+            for c, n in _consumos_empaque(db, emp, prod, formas)
+        ]
+        lineas = []
+        for tipo_id, calidad, cant, param_id in _lineas_produccion(emp):
+            tipo = tipos.get(tipo_id)
+            lineas.append(
+                {
+                    "parametro_id": param_id,
+                    "tipo_caja_id": tipo_id,
+                    "tipo_caja": tipo.nombre if tipo else "",
+                    "calidad": calidad,
+                    "cantidad": cant,
+                }
+            )
+        emps_out.append(
+            {
+                "id": emp.id,
+                "fecha": emp.fecha.isoformat() if emp.fecha else None,
+                "lote": emp.lote,
+                "cantidad_campo": int(emp.cantidad_campo or 0),
+                "consumos": consumos,
+                "lineas": lineas,
+            }
+        )
+    emb_lineas = (
+        db.query(CatalogoEmbarqueLinea)
+        .filter_by(producto_id=prod.id)
+        .order_by(CatalogoEmbarqueLinea.id.desc())
+        .all()
+    )
+    emb_ids = {ln.embarque_id for ln in emb_lineas}
+    embarques = (
+        db.query(CatalogoEmbarque).filter(CatalogoEmbarque.id.in_(emb_ids)).all() if emb_ids else []
+    )
+    por_emb = {e.id: e for e in embarques}
+    clientes = {
+        c.id: c.nombre
+        for c in db.query(Cliente).filter(Cliente.id.in_({e.cliente_id for e in embarques})).all()
+    } if embarques else {}
+    agrupado: dict[int, dict] = {}
+    for ln in emb_lineas:
+        emb = por_emb.get(ln.embarque_id)
+        if not emb:
+            continue
+        slot = agrupado.get(emb.id)
+        if not slot:
+            slot = {
+                "id": emb.id,
+                "fecha_salida": emb.fecha_salida.isoformat() if emb.fecha_salida else None,
+                "cliente_id": emb.cliente_id,
+                "cliente": clientes.get(emb.cliente_id, ""),
+                "notas": emb.notas,
+                "lineas": [],
+            }
+            agrupado[emb.id] = slot
+        tipo = tipos.get(ln.tipo_caja_id)
+        slot["lineas"].append(
+            {
+                "tipo_caja_id": ln.tipo_caja_id,
+                "tipo_caja": tipo.nombre if tipo else _nombre_cosecha(db, "") or "",
+                "calidad": ln.calidad,
+                "lote": ln.lote,
+                "cantidad": int(ln.cantidad),
+            }
+        )
+    return {
+        "producto": _out_producto(db, prod),
+        "recepciones": recs_out,
+        "empaques": emps_out,
+        "embarques": list(agrupado.values()),
+    }
+
+
+@router.put("/recepciones/{recepcion_id}")
+def editar_recepcion(
+    recepcion_id: int,
+    body: RecepcionEditIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    rec = db.query(CatalogoRecepcion).filter(CatalogoRecepcion.id == recepcion_id).first()
+    if not rec:
+        raise HTTPException(status_code=404, detail="Recepción no encontrada")
+    prod = _producto(db, rec.producto_id)
+    formas = _formas_efectivas(db, prod)
+    por_codigo = {f.codigo: f for f in formas}
+    nuevas = []
+    for lin in body.lineas:
+        codigo = (lin.codigo or "").strip()
+        if codigo not in por_codigo:
+            raise HTTPException(status_code=400, detail="Esa forma de cosecha no está en el producto")
+        nuevas.append((codigo, int(lin.cantidad), float(por_codigo[codigo].peso_kg)))
+    viejas = _detalle_recepcion(db, rec, prod, formas)
+    lote = (body.lote or rec.lote or "").strip() or "General"
+    if lote != rec.lote:
+        raise HTTPException(
+            status_code=400,
+            detail="Para cambiar de lote borra la recepción y regístrala de nuevo.",
+        )
+    delta: dict[str, int] = defaultdict(int)
+    for codigo, cant, _p in viejas:
+        delta[codigo] -= cant
+    for codigo, cant, _p in nuevas:
+        delta[codigo] += cant
+    _aplicar_delta_campo(db, prod, rec.lote, delta)
+    db.query(CatalogoRecepcionLinea).filter_by(recepcion_id=rec.id).delete(synchronize_session=False)
+    db.query(CatalogoRecepcionForma).filter_by(recepcion_id=rec.id).delete(synchronize_session=False)
+    for codigo, cant, peso in nuevas:
+        db.add(
+            CatalogoRecepcionLinea(
+                recepcion_id=rec.id, codigo=codigo, cantidad=cant, peso_kg=peso
+            )
+        )
+    if len(nuevas) == 1:
+        db.add(CatalogoRecepcionForma(recepcion_id=rec.id, codigo=nuevas[0][0]))
+    rec.cantidad = sum(n for _c, n, _p in nuevas)
+    if body.fecha:
+        rec.fecha = body.fecha
+    db.commit()
+    return {"ok": True, "id": rec.id, "kg": _r2(sum(n * p for _c, n, p in nuevas))}
+
+
+def _deltas_produccion(viejas: list[tuple], nuevas: list[tuple], lote: str) -> dict[tuple, int]:
+    delta: dict[tuple, int] = defaultdict(int)
+    for tipo_id, calidad, cant, _pid in viejas:
+        delta[(tipo_id, calidad, lote)] -= cant
+    for tipo_id, calidad, cant, _pid in nuevas:
+        delta[(tipo_id, calidad, lote)] += cant
+    return delta
+
+
+@router.put("/empaques/{empaque_id}")
+def editar_empaque_catalogo(
+    empaque_id: int,
+    body: EmpaqueEditIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    emp = db.query(CatalogoEmpaque).filter(CatalogoEmpaque.id == empaque_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empaque no encontrado")
+    prod = _producto(db, emp.producto_id)
+    formas = _formas_efectivas(db, prod)
+    por_codigo = {f.codigo: f for f in formas}
+    params = {p.id: p for p in _parametros(db, prod.id)}
+    nuevas_cons = []
+    for c in body.consumos:
+        if c.codigo not in por_codigo:
+            raise HTTPException(status_code=400, detail=f"La forma '{c.codigo}' no está en el producto")
+        nuevas_cons.append((c.codigo, int(c.cantidad)))
+    nuevas_prod = []
+    for lin in body.lineas:
+        param = params.get(lin.parametro_id)
+        if not param:
+            raise HTTPException(status_code=400, detail="La presentación no pertenece a este producto")
+        nuevas_prod.append((param.tipo_caja_id, param.calidad, int(lin.cantidad), param.id))
+    viejas_cons = _consumos_empaque(db, emp, prod, formas)
+    viejas_prod = _lineas_produccion(emp)
+    delta_campo: dict[str, int] = defaultdict(int)
+    for codigo, cant in viejas_cons:
+        delta_campo[codigo] += cant
+    for codigo, cant in nuevas_cons:
+        delta_campo[codigo] -= cant
+    _aplicar_delta_campo(db, prod, emp.lote, delta_campo)
+    _aplicar_delta_final(db, prod.id, _deltas_produccion(viejas_prod, nuevas_prod, emp.lote))
+    db.query(CatalogoEmpaqueConsumo).filter_by(empaque_id=emp.id).delete(synchronize_session=False)
+    for codigo, cant in nuevas_cons:
+        db.add(CatalogoEmpaqueConsumo(empaque_id=emp.id, codigo=codigo, cantidad=cant))
+    emp.cantidad_campo = sum(n for _c, n in nuevas_cons)
+    emp.lineas = [
+        {
+            "parametro_id": pid,
+            "tipo_caja_id": tipo_id,
+            "calidad": calidad,
+            "cantidad": cant,
+        }
+        for tipo_id, calidad, cant, pid in nuevas_prod
+    ]
+    flag_modified(emp, "lineas")
+    if body.fecha:
+        emp.fecha = body.fecha
+    db.commit()
+    return {"ok": True, "id": emp.id}
+
+
+@router.delete("/empaques/{empaque_id}")
+def eliminar_empaque_catalogo(
+    empaque_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    emp = db.query(CatalogoEmpaque).filter(CatalogoEmpaque.id == empaque_id).first()
+    if not emp:
+        raise HTTPException(status_code=404, detail="Empaque no encontrado")
+    prod = _producto(db, emp.producto_id)
+    formas = _formas_efectivas(db, prod)
+    delta_campo: dict[str, int] = defaultdict(int)
+    for codigo, cant in _consumos_empaque(db, emp, prod, formas):
+        delta_campo[codigo] += cant
+    _aplicar_delta_campo(db, prod, emp.lote, delta_campo)
+    _aplicar_delta_final(db, prod.id, _deltas_produccion(_lineas_produccion(emp), [], emp.lote))
+    db.query(CatalogoEmpaqueConsumo).filter_by(empaque_id=emp.id).delete(synchronize_session=False)
+    db.delete(emp)
+    db.commit()
+    return {"ok": True, "id": empaque_id}
+
+
+def _lineas_embarque(db: Session, embarque_id: int) -> list[CatalogoEmbarqueLinea]:
+    return (
+        db.query(CatalogoEmbarqueLinea)
+        .filter_by(embarque_id=embarque_id)
+        .order_by(CatalogoEmbarqueLinea.id)
+        .all()
+    )
+
+
+@router.delete("/embarques/{embarque_id}")
+def eliminar_embarque_catalogo(
+    embarque_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    emb = db.query(CatalogoEmbarque).filter(CatalogoEmbarque.id == embarque_id).first()
+    if not emb:
+        raise HTTPException(status_code=404, detail="Embarque no encontrado")
+    lineas = _lineas_embarque(db, emb.id)
+    por_prod: dict[int, dict[tuple, int]] = defaultdict(lambda: defaultdict(int))
+    for ln in lineas:
+        por_prod[ln.producto_id][(ln.tipo_caja_id, ln.calidad, ln.lote or "")] += int(ln.cantidad)
+    for producto_id, deltas in por_prod.items():
+        _aplicar_delta_final(db, producto_id, deltas)
+    db.query(CatalogoEmbarqueLinea).filter_by(embarque_id=emb.id).delete(synchronize_session=False)
+    db.delete(emb)
+    db.commit()
+    return {"ok": True, "id": embarque_id}
+
+
+@router.put("/embarques/{embarque_id}")
+def editar_embarque_catalogo(
+    embarque_id: int,
+    body: EmbarqueEditIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    emb = db.query(CatalogoEmbarque).filter(CatalogoEmbarque.id == embarque_id).first()
+    if not emb:
+        raise HTTPException(status_code=404, detail="Embarque no encontrado")
+    viejas = _lineas_embarque(db, emb.id)
+    if not viejas:
+        raise HTTPException(status_code=400, detail="El embarque no tiene líneas")
+    producto_id = viejas[0].producto_id
+    if any(ln.producto_id != producto_id for ln in viejas):
+        raise HTTPException(
+            status_code=400,
+            detail="Este embarque mezcla productos. Bórralo y regístralo de nuevo.",
+        )
+    prod = _producto(db, producto_id)
+    params = _parametros(db, prod.id)
+    validos = {(p.tipo_caja_id, p.calidad) for p in params}
+    nuevas = []
+    for lin in body.lineas:
+        if (lin.tipo_caja_id, lin.calidad) not in validos:
+            raise HTTPException(status_code=400, detail="Esa presentación no está en el producto")
+        nuevas.append((lin.tipo_caja_id, lin.calidad, lin.lote.strip(), int(lin.cantidad)))
+    delta: dict[tuple, int] = defaultdict(int)
+    for ln in viejas:
+        delta[(ln.tipo_caja_id, ln.calidad, ln.lote or "")] += int(ln.cantidad)
+    for tipo_id, calidad, lote, cant in nuevas:
+        delta[(tipo_id, calidad, lote)] -= cant
+    try:
+        _aplicar_delta_final(db, prod.id, delta)
+    except HTTPException as exc:
+        if exc.status_code == 409:
+            raise HTTPException(
+                status_code=409,
+                detail="No hay cajas suficientes en inventario final para este embarque. No se cambió nada.",
+            ) from exc
+        raise
+    db.query(CatalogoEmbarqueLinea).filter_by(embarque_id=emb.id).delete(synchronize_session=False)
+    for tipo_id, calidad, lote, cant in nuevas:
+        param = next(p for p in params if p.tipo_caja_id == tipo_id and p.calidad == calidad)
+        db.add(
+            CatalogoEmbarqueLinea(
+                embarque_id=emb.id,
+                producto_id=prod.id,
+                tipo_caja_id=tipo_id,
+                calidad=calidad,
+                lote=lote,
+                cantidad=cant,
+                cajas_por_parrilla=int(param.cajas_por_parrilla),
+            )
+        )
+    if body.fecha:
+        emb.fecha_salida = body.fecha
+    if body.notas is not None:
+        emb.notas = body.notas or None
+    db.commit()
+    return {"ok": True, "id": emb.id}
+
+
+@router.put("/campo/ajustar")
+def ajustar_campo(
+    body: AjusteCampoIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    prod = _producto(db, body.producto_id)
+    formas = {f.codigo: f for f in _formas_efectivas(db, prod)}
+    if body.codigo not in formas:
+        raise HTTPException(status_code=400, detail="Esa forma de cosecha no está en el producto")
+    lote = body.lote.strip()
+    parte = (
+        db.query(CatalogoCampoForma)
+        .filter_by(producto_id=prod.id, lote=lote, codigo=body.codigo)
+        .first()
+    )
+    if parte:
+        parte.cantidad_disponible = int(body.cantidad)
+    else:
+        db.add(
+            CatalogoCampoForma(
+                producto_id=prod.id,
+                lote=lote,
+                codigo=body.codigo,
+                cantidad_disponible=int(body.cantidad),
+            )
+        )
+    db.flush()
+    partes = db.query(CatalogoCampoForma).filter_by(producto_id=prod.id, lote=lote).all()
+    suma = sum(int(p.cantidad_disponible or 0) for p in partes)
+    total = db.query(CatalogoInventarioCampo).filter_by(producto_id=prod.id, lote=lote).first()
+    if total:
+        total.cantidad_disponible = suma
+    else:
+        db.add(
+            CatalogoInventarioCampo(
+                producto_id=prod.id, lote=lote, cantidad_disponible=suma
+            )
+        )
+    db.commit()
+    return {"ok": True, "lote": lote, "codigo": body.codigo, "cantidad": int(body.cantidad)}
+
+
+@router.put("/inventario/{inventario_id}")
+def ajustar_inventario_final(
+    inventario_id: int,
+    body: AjusteFinalIn,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_roles([Rol.ADMIN])),
+):
+    inv = db.query(CatalogoInventarioFinal).filter(CatalogoInventarioFinal.id == inventario_id).first()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Inventario no encontrado")
+    inv.cantidad_stock = int(body.cantidad)
+    db.commit()
+    return {"ok": True, "id": inv.id, "cantidad_stock": int(inv.cantidad_stock)}
 
 
 @router.get("/reportes/{producto_id}")

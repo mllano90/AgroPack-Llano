@@ -28,6 +28,8 @@ import {
   tallasParaPresentacionMelon,
 } from '../../lib/constants';
 import { formatFechaCorta, toInputDate } from '../../lib/dates';
+import { listarProductosCatalogo, type ProductoCatalogo } from '../../lib/catalogoApi';
+import CorreccionesCatalogo from './CorreccionesCatalogo';
 import type { EmpaqueRecord } from '../../types';
 import InventariosAdmin from './InventariosAdmin';
 import MelonReempaque from './MelonReempaque';
@@ -71,7 +73,7 @@ function formatFecha(fecha: string) {
   return formatFechaCorta(fecha);
 }
 
-type ProductoCorreccion = 'limon_amarillo' | 'melon';
+type ProductoCorreccion = 'limon_amarillo' | 'melon' | string;
 
 function labelProducto(p: string) {
   if (p === 'limon_amarillo') return 'Limón amarillo';
@@ -124,8 +126,8 @@ function matchProductoCorreccion(
 }
 
 export default function Correcciones({ token, onCorregido }: CorreccionesProps) {
-  const [productoCorreccion, setProductoCorreccion] =
-    useState<ProductoCorreccion>('limon_amarillo');
+  const [productoCorreccion, setProductoCorreccion] = useState('limon_amarillo');
+  const [catalogoCorreccion, setCatalogoCorreccion] = useState<ProductoCatalogo[]>([]);
   const [empaques, setEmpaques] = useState<EmpaqueRecord[]>([]);
   const [desverdizado, setDesverdizado] = useState<DesverdizadoAdminItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -257,6 +259,14 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
 
   const esMelon = productoCorreccion === 'melon';
   const esLimon = productoCorreccion === 'limon_amarillo';
+  const esCatalogo = productoCorreccion.startsWith('cat:');
+  const catalogoSel = catalogoCorreccion.find((p) => `cat:${p.codigo}` === productoCorreccion) || null;
+
+  useEffect(() => {
+    listarProductosCatalogo(token)
+      .then((rows) => setCatalogoCorreccion(rows.filter((p) => p.activo && p.configurado)))
+      .catch(() => setCatalogoCorreccion([]));
+  }, [token]);
 
   const historialFiltrado = useMemo(
     () =>
@@ -1241,22 +1251,6 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
     return map[m] || '#f1f5f9';
   };
 
-  const productoBtn = (id: ProductoCorreccion): CSSProperties => ({
-    padding: '10px 20px',
-    border: 'none',
-    borderRadius: 8,
-    cursor: 'pointer',
-    fontWeight: productoCorreccion === id ? 700 : 500,
-    background:
-      productoCorreccion === id
-        ? id === 'melon'
-          ? '#0284c7'
-          : '#15803d'
-        : '#f1f5f9',
-    color: productoCorreccion === id ? 'white' : '#334155',
-    fontSize: 15,
-  });
-
   const secBtn = (id: typeof vistaSeccion): CSSProperties => ({
     padding: '8px 14px',
     border: 'none',
@@ -1275,7 +1269,9 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         bins e inventarios <strong>solo de ese producto</strong>.
         {esLimon
           ? ' En limón, la recepción alimenta el desverdizado (no es un registro aparte).'
-          : ' En melón, la recepción alimenta los bins de campo listos para empaque.'}
+          : esMelon
+            ? ' En melón, la recepción alimenta los bins de campo listos para empaque.'
+            : ' Corrige recepciones, empaques, embarques e inventarios solo de ese producto.'}
       </p>
 
       {error && (
@@ -1319,22 +1315,27 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
         >
           Producto
         </span>
-        <button
-          type="button"
-          style={productoBtn('limon_amarillo')}
-          onClick={() => setProductoCorreccion('limon_amarillo')}
+        <select
+          value={productoCorreccion}
+          onChange={(e) => setProductoCorreccion(e.target.value)}
+          style={{ padding: '10px 14px', borderRadius: 8, border: '1px solid #cbd5e1', fontWeight: 700, fontSize: 15 }}
         >
-          Limón
-        </button>
-        <button
-          type="button"
-          style={productoBtn('melon')}
-          onClick={() => setProductoCorreccion('melon')}
-        >
-          Melón
-        </button>
+          <option value="limon_amarillo">Limón</option>
+          <option value="melon">Melón</option>
+          {catalogoCorreccion.map((p) => (
+            <option key={p.codigo} value={`cat:${p.codigo}`}>
+              {p.nombre}
+            </option>
+          ))}
+        </select>
       </div>
 
+      {esCatalogo && catalogoSel && (
+        <CorreccionesCatalogo token={token} productoId={catalogoSel.id} nombre={catalogoSel.nombre} />
+      )}
+
+      {!esCatalogo && (
+      <>
       {/* 2) Secciones */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
         <span
@@ -2653,7 +2654,7 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
       {vistaSeccion === 'inventarios' && (
         <InventariosAdmin
           token={token}
-          productoFiltro={productoCorreccion}
+          productoFiltro={productoCorreccion === 'melon' ? 'melon' : 'limon_amarillo'}
           onChanged={() => {
             onCorregido?.();
           }}
@@ -2901,6 +2902,8 @@ export default function Correcciones({ token, onCorregido }: CorreccionesProps) 
             </div>
           )}
         </div>
+      )}
+      </>
       )}
     </div>
   );

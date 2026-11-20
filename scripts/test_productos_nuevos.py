@@ -469,6 +469,104 @@ def probar_dos_formas(base: str, admin: str, tag: str, caja_a: int, caja_b: int)
     check(stock4.get("cajas_campo") == 4 and stock4.get("bins") == 2, f"{tag} el rechazo no movió el stock {campo4}")
 
 
+def probar_correcciones(base: str, admin: str, recep: str, tag: str, caja_a: int, caja_b: int) -> None:
+    code, prod = req(base, "POST", "/api/catalogo/productos", token=admin, body={"nombre": f"Guayaba {tag}"})
+    if not prod.get("id"):
+        check(False, f"{tag} alta guayaba {code}")
+        return
+    code, conf = req(base, "PUT", f"/api/catalogo/productos/{prod['id']}", token=admin, body={
+        "formas": [
+            {"codigo": "cajas_campo", "peso_kg": 15},
+            {"codigo": "bins", "peso_kg": 300},
+        ],
+        "parametros": [
+            {"calidad": "primera", "tipo_caja_id": caja_a, "kg": 10, "cajas_por_parrilla": 40},
+            {"calidad": "segunda", "tipo_caja_id": caja_b, "kg": 15, "cajas_por_parrilla": 30},
+        ],
+    })
+    params = {p["calidad"]: p for p in conf.get("parametros") or []}
+    code, rec = req(base, "POST", "/api/catalogo/recepciones", token=admin, body={
+        "producto_id": prod["id"],
+        "lote": "Corr",
+        "lineas": [
+            {"codigo": "cajas_campo", "cantidad": 10},
+            {"codigo": "bins", "cantidad": 4},
+        ],
+    })
+    check(code == 200, f"{tag} recepción para corregir {code}")
+    code, emp = req(base, "POST", "/api/catalogo/empaques", token=admin, body={
+        "producto_id": prod["id"],
+        "lote": "Corr",
+        "consumos": [
+            {"codigo": "cajas_campo", "cantidad": 6},
+            {"codigo": "bins", "cantidad": 2},
+        ],
+        "lineas": [
+            {"parametro_id": params["primera"]["id"], "cantidad": 20},
+            {"parametro_id": params["segunda"]["id"], "cantidad": 10},
+        ],
+    })
+    check(code == 200, f"{tag} empaque para corregir {code}")
+    code, cli = req(base, "POST", "/api/clientes/", token=admin, body={"nombre": f"Cli corr {tag}"})
+    code, inv = req(base, "GET", f"/api/catalogo/inventario?producto_id={prod['id']}", token=admin)
+    prima = next(i for i in inv if i["calidad"] == "primera")
+    code, emb = req(base, "POST", "/api/catalogo/embarques", token=admin, body={
+        "cliente_id": cli["id"],
+        "lineas": [{"inventario_id": prima["id"], "cantidad": 5}],
+    })
+    check(code == 200, f"{tag} embarque para corregir {code}")
+    code, _ = req(base, "DELETE", f"/api/catalogo/empaques/{emp['id']}", token=recep)
+    check(code == 403, f"{tag} no-admin no borra empaque ({code})")
+    code, _ = req(base, "PUT", f"/api/catalogo/empaques/{emp['id']}", token=recep, body={
+        "consumos": [{"codigo": "cajas_campo", "cantidad": 1}],
+        "lineas": [{"parametro_id": params["primera"]["id"], "cantidad": 1}],
+    })
+    check(code == 403, f"{tag} no-admin no edita empaque ({code})")
+    code, bloqueado = req(base, "DELETE", f"/api/catalogo/empaques/{emp['id']}", token=admin)
+    check(code == 409, f"{tag} no borra empaque con cajas ya embarcadas ({code}) {bloqueado}")
+    code, inv2 = req(base, "GET", f"/api/catalogo/inventario?producto_id={prod['id']}", token=admin)
+    prima2 = next(i for i in inv2 if i["calidad"] == "primera")
+    check(prima2["cantidad_stock"] == 15, f"{tag} el rechazo dejó el inventario {prima2}")
+    code, off = req(base, "DELETE", f"/api/catalogo/embarques/{emb['id']}", token=admin)
+    check(code == 200, f"{tag} borrar embarque {code} {off}")
+    code, inv3 = req(base, "GET", f"/api/catalogo/inventario?producto_id={prod['id']}", token=admin)
+    prima3 = next(i for i in inv3 if i["calidad"] == "primera")
+    check(prima3["cantidad_stock"] == 20, f"{tag} el embarque devolvió las cajas {prima3}")
+    code, edit = req(base, "PUT", f"/api/catalogo/empaques/{emp['id']}", token=admin, body={
+        "consumos": [
+            {"codigo": "cajas_campo", "cantidad": 6},
+            {"codigo": "bins", "cantidad": 2},
+        ],
+        "lineas": [
+            {"parametro_id": params["primera"]["id"], "cantidad": 8},
+            {"parametro_id": params["segunda"]["id"], "cantidad": 10},
+        ],
+    })
+    check(code == 200, f"{tag} editar empaque {code} {edit}")
+    code, inv4 = req(base, "GET", f"/api/catalogo/inventario?producto_id={prod['id']}", token=admin)
+    prima4 = next(i for i in inv4 if i["calidad"] == "primera")
+    check(prima4["cantidad_stock"] == 8, f"{tag} el empaque editado dejó 8 cajas {prima4}")
+    code, gone = req(base, "DELETE", f"/api/catalogo/empaques/{emp['id']}", token=admin)
+    check(code == 200, f"{tag} borrar empaque {code} {gone}")
+    code, campo = req(base, "GET", f"/api/catalogo/campo?producto_id={prod['id']}", token=admin)
+    stock = {c["codigo"]: c["cantidad_disponible"] for c in campo} if isinstance(campo, list) else {}
+    check(stock.get("cajas_campo") == 10 and stock.get("bins") == 4, f"{tag} borrar empaque devolvió el campo {campo}")
+    code, inv5 = req(base, "GET", f"/api/catalogo/inventario?producto_id={prod['id']}", token=admin)
+    check(not any(i["cantidad_stock"] > 0 for i in inv5), f"{tag} ya no hay producto final {inv5}")
+    code, hist = req(base, "GET", f"/api/catalogo/correcciones/{prod['id']}", token=recep)
+    check(code == 403, f"{tag} no-admin no ve correcciones ({code})")
+    code, rec_edit = req(base, "PUT", f"/api/catalogo/recepciones/{rec['id']}", token=admin, body={
+        "lineas": [
+            {"codigo": "cajas_campo", "cantidad": 8},
+            {"codigo": "bins", "cantidad": 4},
+        ],
+    })
+    check(code == 200, f"{tag} editar recepción {code} {rec_edit}")
+    code, campo2 = req(base, "GET", f"/api/catalogo/campo?producto_id={prod['id']}", token=admin)
+    stock2 = {c["codigo"]: c["cantidad_disponible"] for c in campo2} if isinstance(campo2, list) else {}
+    check(stock2.get("cajas_campo") == 8 and stock2.get("bins") == 4, f"{tag} la edición movió solo las cajas {campo2}")
+
+
 def probar_forma_vieja(base: str, admin: str, db_path: str) -> None:
     """Producto guardado solo con tipo_cosecha + peso, sin filas en producto_formas_cosecha."""
     con = sqlite3.connect(db_path)
@@ -698,6 +796,7 @@ def ejercitar(base: str, admin: str, tag: str, tocar_legacy: bool) -> None:
         check("Caja export" not in marcas and f"Mango {tag}" not in marcas, f"{tag} el dashboard no mezcla el catálogo")
 
     probar_dos_formas(base, admin, tag, caja1["id"], caja2["id"])
+    probar_correcciones(base, admin, recep, tag, caja1["id"], caja2["id"])
 
     if not tocar_legacy:
         code, _ = req(base, "DELETE", f"/api/catalogo/productos/{prod['id']}", token=admin)

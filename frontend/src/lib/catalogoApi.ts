@@ -282,3 +282,104 @@ export async function reporteCatalogo(token: string, productoId: number): Promis
   const res = await client(token).get<ReporteCatalogo>(`/api/catalogo/reportes/${productoId}`);
   return res.data;
 }
+
+export interface HistorialCatalogo {
+  producto: ProductoCatalogo;
+  recepciones: Array<{
+    id: number;
+    fecha: string | null;
+    lote: string;
+    cantidad: number;
+    kg: number;
+    lineas: Array<{ codigo: string; nombre: string; cantidad: number; peso_kg: number; kg: number }>;
+  }>;
+  empaques: Array<{
+    id: number;
+    fecha: string | null;
+    lote: string;
+    cantidad_campo: number;
+    consumos: Array<{ codigo: string; nombre: string; cantidad: number }>;
+    lineas: Array<{
+      parametro_id: number;
+      tipo_caja_id: number;
+      tipo_caja: string;
+      calidad: string;
+      cantidad: number;
+    }>;
+  }>;
+  embarques: Array<{
+    id: number;
+    fecha_salida: string | null;
+    cliente: string;
+    notas: string | null;
+    lineas: Array<{
+      tipo_caja_id: number;
+      tipo_caja: string;
+      calidad: string;
+      lote: string;
+      cantidad: number;
+    }>;
+  }>;
+}
+
+export async function historialCorreccionesCatalogo(token: string, productoId: number) {
+  const res = await client(token).get<HistorialCatalogo>(`/api/catalogo/correcciones/${productoId}`);
+  return res.data;
+}
+
+export async function editarRecepcionCatalogo(
+  token: string,
+  id: number,
+  body: { lineas: Array<{ codigo: string; cantidad: number }>; fecha?: string | null }
+) {
+  const res = await client(token).put(`/api/catalogo/recepciones/${id}`, body);
+  return res.data;
+}
+
+export async function editarEmpaqueCatalogo(
+  token: string,
+  id: number,
+  body: {
+    consumos: Array<{ codigo: string; cantidad: number }>;
+    lineas: Array<{ parametro_id: number; cantidad: number }>;
+    fecha?: string | null;
+  }
+) {
+  const res = await client(token).put(`/api/catalogo/empaques/${id}`, body);
+  return res.data;
+}
+
+export async function eliminarEmpaqueCatalogo(token: string, id: number) {
+  const res = await client(token).delete(`/api/catalogo/empaques/${id}`);
+  return res.data;
+}
+
+export async function editarEmbarqueCatalogo(
+  token: string,
+  id: number,
+  body: {
+    lineas: Array<{ tipo_caja_id: number; calidad: string; lote: string; cantidad: number }>;
+    notas?: string | null;
+  }
+) {
+  const res = await client(token).put(`/api/catalogo/embarques/${id}`, body);
+  return res.data;
+}
+
+export async function eliminarEmbarqueCatalogo(token: string, id: number) {
+  const res = await client(token).delete(`/api/catalogo/embarques/${id}`);
+  return res.data;
+}
+
+export async function ajustarCampoCatalogo(
+  token: string,
+  body: { producto_id: number; lote: string; codigo: string; cantidad: number }
+) {
+  const res = await client(token).put('/api/catalogo/campo/ajustar', body);
+  return res.data;
+}
+
+export async function ajustarInventarioCatalogo(token: string, id: number, cantidad: number) {
+  const res = await client(token).put(`/api/catalogo/inventario/${id}`, { cantidad });
+  return res.data;
+}

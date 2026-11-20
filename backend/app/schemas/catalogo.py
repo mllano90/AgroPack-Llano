@@ -146,6 +146,53 @@ class EmpaqueIn(BaseModel):
         return self
 
 
+class RecepcionEditIn(BaseModel):
+    lote: str | None = None
+    fecha: date | None = None
+    lineas: list[LineaRecepcionIn] = Field(min_length=1, max_length=20)
+
+    @model_validator(mode="after")
+    def _unicas(self):
+        codes = []
+        for lin in self.lineas:
+            if not lin.codigo:
+                raise ValueError("Cada línea necesita su forma de cosecha")
+            codes.append(lin.codigo)
+        if len(codes) != len(set(codes)):
+            raise ValueError("No repitas la misma forma en la recepción")
+        return self
+
+
+class EmpaqueEditIn(BaseModel):
+    fecha: date | None = None
+    consumos: list[ConsumoIn] = Field(min_length=1, max_length=20)
+    lineas: list[LineaEmpaqueIn] = Field(min_length=1, max_length=40)
+
+
+class EmbarqueLineaEdit(BaseModel):
+    tipo_caja_id: int
+    calidad: Literal["primera", "segunda"]
+    lote: str = Field(min_length=1, max_length=120)
+    cantidad: int = Field(gt=0, le=1_000_000)
+
+
+class EmbarqueEditIn(BaseModel):
+    fecha: date | None = None
+    notas: str | None = None
+    lineas: list[EmbarqueLineaEdit] = Field(min_length=1, max_length=40)
+
+
+class AjusteCampoIn(BaseModel):
+    producto_id: int
+    lote: str = Field(min_length=1, max_length=120)
+    codigo: str = Field(min_length=1, max_length=48)
+    cantidad: int = Field(ge=0, le=1_000_000)
+
+
+class AjusteFinalIn(BaseModel):
+    cantidad: int = Field(ge=0, le=1_000_000)
+
+
 class LineaEmbarqueIn(BaseModel):
     inventario_id: int
     cantidad: int = Field(gt=0, le=1_000_000)
