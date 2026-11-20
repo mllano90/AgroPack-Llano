@@ -176,6 +176,12 @@
 .estacion-root .mh-stats b{font-size:1.3rem;white-space:nowrap}
 .estacion-root .mh-stats b small{font-size:.75rem;color:var(--tenue);font-weight:400}
 .estacion-root .mh-stats .st-min b{color:#69c8ff}.estacion-root .mh-stats .st-prom b{color:var(--verde)}.estacion-root .mh-stats .st-max b{color:var(--ambar)}
+.estacion-root .mh-par{display:grid;gap:4px;margin:10px 0 0;padding:8px 10px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid rgba(140,255,190,.16)}
+.estacion-root .mh-par p{display:flex;justify-content:space-between;gap:8px;margin:0;font-size:.9rem;color:var(--tenue)}
+.estacion-root .mh-par b{color:var(--texto);font-weight:650;text-align:right}
+.estacion-root .dli-nota{margin:8px 0 0;font-size:.92rem;line-height:1.4;color:var(--texto)}
+.estacion-root .dli-nota b{font-weight:650}
+@media (max-width:520px){.estacion-root .cal-par .dos{grid-template-columns:1fr}}
 .estacion-root .mh-permanencia{margin:8px 0 0;text-align:center;font-size:.92rem;line-height:1.4;color:var(--texto)}
 .estacion-root .mh-permanencia b{font-weight:650}
 .estacion-root .grafica.mh-grafica{height:min(42vh,340px);min-height:200px;margin-top:34px}

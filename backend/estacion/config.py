@@ -20,8 +20,22 @@ DEFAULT = {
     "sin_datos_min": 10,          # alerta "sin datos" tras X minutos
     "offline_min": 6,             # indicador "Sin conexión" en el header
     "bateria_min_v": 3.4,         # placeholder (futuro)
+    "factor_par": 2.02,           # µmol/m²/s por cada W/m² (malla sombra blanca/neutra)
     "umbrales": {k: {"min": v[2], "max": v[3], "activo": k != "pir"} for k, v in VARIABLES.items()},
 }
+
+FACTOR_PAR_MIN = 0.5
+FACTOR_PAR_MAX = 4.5
+
+
+def factor_par(cfg: dict) -> float:
+    try:
+        v = float(cfg.get("factor_par", DEFAULT["factor_par"]))
+    except (TypeError, ValueError):
+        return DEFAULT["factor_par"]
+    if not FACTOR_PAR_MIN <= v <= FACTOR_PAR_MAX:
+        return DEFAULT["factor_par"]
+    return v
 
 
 def leer(cx) -> dict:
@@ -49,6 +63,11 @@ def validar(nuevo: dict) -> dict:
             raise ValueError(f"{k} debe estar entre {lo} y {hi}")
         cfg[k] = v
     cfg["bateria_min_v"] = float(nuevo.get("bateria_min_v", cfg["bateria_min_v"]))
+    if "factor_par" in nuevo and nuevo.get("factor_par") not in (None, ""):
+        fp = float(nuevo["factor_par"])
+        if not FACTOR_PAR_MIN <= fp <= FACTOR_PAR_MAX:
+            raise ValueError(f"factor_par debe estar entre {FACTOR_PAR_MIN} y {FACTOR_PAR_MAX}")
+        cfg["factor_par"] = fp
     for k, u in (nuevo.get("umbrales") or {}).items():
         if k not in cfg["umbrales"] or not isinstance(u, dict):
             continue

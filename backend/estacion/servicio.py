@@ -736,8 +736,10 @@ def ultimo(cx, nodo, t=None):
     est = cx.uno("SELECT * FROM estacion_estado_receptora WHERE nodo = ? ORDER BY ts DESC, id DESC LIMIT 1", (nodo,))
     if est:
         est.pop("json", None)
+    factor = cfgmod.factor_par(cfg)
     base = {"nodo": nodo, "nombre_nodo": cfg["nombre_nodo"], "ahora": t, "alertas_activas": n_alertas,
-            "offline_min": cfg["offline_min"], "receptora": est, "umbrales": cfg["umbrales"]}
+            "offline_min": cfg["offline_min"], "receptora": est, "umbrales": cfg["umbrales"],
+            "factor_par": factor, "par_actual": None, "dli_hoy": dli_hoy(cx, nodo, t, factor)}
     if not r:
         return dict(base, hay_datos=False, en_linea=False)
     sensor = lambda e, **v: {"ok": e == 0, "error": None if e == 0 else texto_error(e), "codigo": e, **v}
@@ -754,6 +756,7 @@ def ultimo(cx, nodo, t=None):
                 aire={"a1": a1, "a2": a2, "t": _prom(r["t1"], r["t2"]), "h": _prom(r["h1"], r["h2"])},
                 interno=None if r.get("e_int") is None else sensor(r["e_int"], t=r["t_int"], h=r["h_int"]),
                 pir=sensor(r["e_pir"], v=r["pir"]),
+                par_actual=None if r["pir"] is None or r["e_pir"] != 0 else round(float(r["pir"]) * factor, 1),
                 suelo=sensor(r["e_suelo"], t=r["t_suelo"], h=r["h_suelo"], ts=r["ts_suelo"]),
                 npk=npk, npk_ultimo_fallo=bool(ult_c and ult_c["n_npk"] < 3),
                 fase={"fase": r["fase"], "min": r["min_fase"], "tot": r["tot_fase"]})
@@ -772,6 +775,8 @@ VARS_HIST = {
     "k": ("k", "ts_npk", "AND npk_nuevo = 1"),
     "t_caja": ("t_int", "ts", ""), "h_caja": ("h_int", "ts", ""),
     "rssi": ("rssi", "ts", ""), "snr": ("snr", "ts", ""),
+    # Luz PAR: la misma serie del piranómetro, escalada por factor_par al armar la respuesta.
+    "par": ("pir", "ts", ""),
 }
 RANGOS = {   # rango: (duración s, paso s, fuente)
     "8h": (8 * 3600, 120, "crudo"),
@@ -789,6 +794,7 @@ HUECO_EXTREMO_S = {
     "t_aire": _HUECO_RAPIDO_S, "h_aire": _HUECO_RAPIDO_S, "pir": _HUECO_RAPIDO_S,
     "t1": _HUECO_RAPIDO_S, "t2": _HUECO_RAPIDO_S, "h1": _HUECO_RAPIDO_S, "h2": _HUECO_RAPIDO_S,
     "t_caja": _HUECO_RAPIDO_S, "h_caja": _HUECO_RAPIDO_S, "rssi": _HUECO_RAPIDO_S, "snr": _HUECO_RAPIDO_S,
+    "par": _HUECO_RAPIDO_S,
     "t_suelo": _HUECO_SUELO_S, "h_suelo": _HUECO_SUELO_S,
     "ec": _HUECO_NPK_S, "ph": _HUECO_NPK_S, "n": _HUECO_NPK_S, "p": _HUECO_NPK_S, "k": _HUECO_NPK_S,
 }
@@ -799,12 +805,13 @@ MUESTRA_EXTREMO_S = {
     "t_aire": _MUESTRA_RAPIDA_S, "h_aire": _MUESTRA_RAPIDA_S, "pir": _MUESTRA_RAPIDA_S,
     "t1": _MUESTRA_RAPIDA_S, "t2": _MUESTRA_RAPIDA_S, "h1": _MUESTRA_RAPIDA_S, "h2": _MUESTRA_RAPIDA_S,
     "t_caja": _MUESTRA_RAPIDA_S, "h_caja": _MUESTRA_RAPIDA_S, "rssi": _MUESTRA_RAPIDA_S, "snr": _MUESTRA_RAPIDA_S,
+    "par": _MUESTRA_RAPIDA_S,
     "t_suelo": _MUESTRA_SUELO_S, "h_suelo": _MUESTRA_SUELO_S,
     "ec": _MUESTRA_NPK_S, "ph": _MUESTRA_NPK_S, "n": _MUESTRA_NPK_S, "p": _MUESTRA_NPK_S, "k": _MUESTRA_NPK_S,
 }
 DECIMALES_VISTA = {
     "t_aire": 1, "h_aire": 0, "pir": 0, "t1": 1, "t2": 1, "h1": 0, "h2": 0,
-    "t_caja": 1, "h_caja": 0, "t_suelo": 1, "h_suelo": 0,
+    "t_caja": 1, "h_caja": 0, "t_suelo": 1, "h_suelo": 0, "par": 0,
     "ec": 2, "ph": 1, "n": 0, "p": 0, "k": 0, "rssi": 0, "snr": 1,
 }
 BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0,
@@ -812,19 +819,27 @@ BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suel
 
 
 def _puntos(cx, nodo, var, desde, hasta, paso, fuente):
+    origen = "pir" if var == "par" else var
     if fuente == "crudo":
-        expr, tcol, filtro = VARS_HIST[var]
+        expr, tcol, filtro = VARS_HIST[origen]
         filas = cx.todos(
             f"SELECT ({tcol} / ?) * ? AS b, AVG({expr}) AS prom, MIN({expr}) AS mn, MAX({expr}) AS mx, COUNT(*) AS n "
             f"FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? AND ({expr}) IS NOT NULL {filtro} "
             f"GROUP BY b ORDER BY b", (paso, paso, nodo, desde, hasta))
-    else:   # agregados horarios (se conservan indefinidamente)
+    else:   # agregados horarios (se conservan indefinidamente). PAR no tiene fila propia: sale de pir.
         filas = cx.todos(
             "SELECT (hora / ?) * ? AS b, SUM(prom * n) / SUM(n) AS prom, MIN(vmin) AS mn, MAX(vmax) AS mx, SUM(n) AS n "
             "FROM estacion_agregados_hora WHERE nodo = ? AND var = ? AND hora >= ? AND hora <= ? "
-            "GROUP BY b ORDER BY b", (paso, paso, nodo, var, desde - desde % 3600, hasta))
-    return [{"t": int(f["b"]), "prom": round(float(f["prom"]), 3), "min": float(f["mn"]), "max": float(f["mx"]),
-             "n": int(f["n"])} for f in filas]
+            "GROUP BY b ORDER BY b", (paso, paso, nodo, origen, desde - desde % 3600, hasta))
+    pts = [{"t": int(f["b"]), "prom": round(float(f["prom"]), 3), "min": float(f["mn"]), "max": float(f["mx"]),
+            "n": int(f["n"])} for f in filas]
+    if var == "par" and pts:
+        fct = cfgmod.factor_par(cfgmod.leer(cx))
+        for p in pts:
+            p["prom"] = round(p["prom"] * fct, 3)
+            p["min"] = round(float(p["min"]) * fct, 3)
+            p["max"] = round(float(p["max"]) * fct, 3)
+    return pts
 
 
 def redondear_vista(valor: float, decimales: int) -> float:
@@ -863,11 +878,16 @@ def segundos_en_extremo(puntos, decimales: int, hueco_max_s: int, muestra_s: int
 
 
 def _lecturas_crudas(cx, nodo, var, desde, hasta):
-    expr, tcol, filtro = VARS_HIST[var]
+    origen = "pir" if var == "par" else var
+    expr, tcol, filtro = VARS_HIST[origen]
     filas = cx.todos(
         f"SELECT {tcol} AS t, ({expr}) AS v FROM estacion_lecturas WHERE nodo = ? AND {tcol} >= ? AND {tcol} <= ? "
         f"AND ({expr}) IS NOT NULL {filtro} ORDER BY {tcol}", (nodo, desde, hasta))
-    return [(f["t"], f["v"]) for f in filas if f["t"] is not None and f["v"] is not None]
+    out = [(f["t"], f["v"]) for f in filas if f["t"] is not None and f["v"] is not None]
+    if var == "par" and out:
+        fct = cfgmod.factor_par(cfgmod.leer(cx))
+        out = [(t, v * fct) for t, v in out]
+    return out
 
 
 def _extremo_periodo(cx, nodo, var, desde, hasta):
@@ -883,9 +903,10 @@ def historial(cx, nodo, var, rango, t=None):
         raise ValueError("variable o rango inválido")
     dur, paso, fuente = RANGOS[rango]
     desde = t - dur
-    return {"var": var, "rango": rango, "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": t,
-            "puntos": _puntos(cx, nodo, var, desde, t, paso, fuente),
-            "extremo": _extremo_periodo(cx, nodo, var, desde, t)}
+    return _anotar_luz(cx, nodo, var, desde, t, t, {
+        "var": var, "rango": rango, "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": t,
+        "puntos": _puntos(cx, nodo, var, desde, t, paso, fuente),
+        "extremo": _extremo_periodo(cx, nodo, var, desde, t)})
 
 
 def historial_ventana(cx, nodo, var, desde, hasta, t=None):
@@ -899,14 +920,92 @@ def historial_ventana(cx, nodo, var, desde, hasta, t=None):
         paso, fuente = 300, "crudo"
     else:
         paso, fuente = 3600, "hora"
-    return {"var": var, "rango": "ventana", "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": hasta,
-            "puntos": _puntos(cx, nodo, var, desde, hasta, paso, fuente),
-            "extremo": _extremo_periodo(cx, nodo, var, desde, hasta)}
+    return _anotar_luz(cx, nodo, var, desde, hasta, t or ahora(), {
+        "var": var, "rango": "ventana", "paso_s": paso, "fuente": fuente, "desde": desde, "hasta": hasta,
+        "puntos": _puntos(cx, nodo, var, desde, hasta, paso, fuente),
+        "extremo": _extremo_periodo(cx, nodo, var, desde, hasta)})
 
 
 def _inicio_dia_hmo(t):
     local = t - 7 * 3600
     return local - (local % 86400) + 7 * 3600
+
+
+# Un salto mayor no se integra como si la luz se hubiera mantenido.
+HUECO_DLI_S = 20 * 60
+
+
+def integrar_dli(puntos, factor, hueco_max_s=HUECO_DLI_S):
+    """DLI (mol/m²) por suma izquierda: W/m² × factor × dt_s / 1_000_000.
+
+    Cada tramo usa la radiación del extremo izquierdo. Si dt <= 0 o dt > hueco_max_s
+    (por defecto 20 min) el tramo no suma: un hueco largo no cuenta como luz constante.
+    Un salto de exactamente hueco_max_s sí entra.
+    """
+    total = 0.0
+    fac = float(factor)
+    for i in range(len(puntos) - 1):
+        t0, w0 = puntos[i]
+        dt = puntos[i + 1][0] - t0
+        if dt <= 0 or dt > hueco_max_s or w0 is None or w0 < 0:
+            continue
+        total += float(w0) * fac * dt / 1_000_000
+    return total
+
+
+def _pir_valido(cx, nodo, desde, hasta):
+    filas = cx.todos(
+        "SELECT ts AS t, pir AS v FROM estacion_lecturas WHERE nodo = ? AND ts >= ? AND ts <= ? "
+        "AND pir IS NOT NULL AND e_pir = 0 ORDER BY ts", (nodo, desde, hasta))
+    return [(int(f["t"]), float(f["v"])) for f in filas if f["t"] is not None and f["v"] is not None]
+
+
+def dli_hoy(cx, nodo, t, factor):
+    """Integral de hoy (America/Hermosillo) desde 00:00 local hasta la última lectura <= t."""
+    pts = _pir_valido(cx, nodo, _inicio_dia_hmo(t), t)
+    if len(pts) < 2:
+        return None
+    return round(integrar_dli(pts, factor), 4)
+
+
+def dli_promedio_periodo(cx, nodo, desde, hasta, factor):
+    """Promedio de los DLI diarios del periodo. Días sin dos lecturas válidas no entran.
+
+    Con crudo se usa el mismo tope de 20 min. Si el crudo ya se purgó, cada hora
+    guardada de pir aporta su promedio × 3600 s; las horas sin fila no se rellenan.
+    """
+    pts = _pir_valido(cx, nodo, desde, hasta)
+    if len(pts) >= 2:
+        por_dia = {}
+        for ts, w in pts:
+            por_dia.setdefault(_inicio_dia_hmo(ts), []).append((ts, w))
+        dlis = [integrar_dli(v, factor) for v in por_dia.values() if len(v) >= 2]
+        if dlis:
+            return round(sum(dlis) / len(dlis), 4)
+    filas = cx.todos(
+        "SELECT hora, prom FROM estacion_agregados_hora WHERE nodo = ? AND var = 'pir' AND hora >= ? AND hora <= ? "
+        "ORDER BY hora", (nodo, desde, hasta))
+    if not filas:
+        return None
+    por_dia = {}
+    for f in filas:
+        if f["hora"] is None or f["prom"] is None:
+            continue
+        dia = _inicio_dia_hmo(int(f["hora"]))
+        por_dia[dia] = por_dia.get(dia, 0.0) + float(f["prom"]) * float(factor) * 3600 / 1_000_000
+    if not por_dia:
+        return None
+    return round(sum(por_dia.values()) / len(por_dia), 4)
+
+
+def _anotar_luz(cx, nodo, var, desde, hasta, t, salida):
+    if var != "par":
+        return salida
+    factor = cfgmod.factor_par(cfgmod.leer(cx))
+    salida["factor_par"] = factor
+    salida["dli_hoy"] = dli_hoy(cx, nodo, t, factor)
+    salida["dli_promedio"] = dli_promedio_periodo(cx, nodo, desde, hasta, factor)
+    return salida
 
 
 def resumen_dia(cx, nodo, t=None):
@@ -942,7 +1041,7 @@ def resumen_dia(cx, nodo, t=None):
 
 ORDEN_REPORTE = ["t_aire", "h_aire", "pir", "t_suelo", "h_suelo", "ec", "ph", "n", "p", "k"]
 EXTRAS_REPORTE = {"t_aire": ["t1", "t2"], "h_aire": ["h1", "h2"]}
-NOMBRE_CAJA = {"t_caja": ("Temp. caja", "°C"), "h_caja": ("Hum. caja", "%")}
+NOMBRE_CAJA = {"t_caja": ("Temp. caja", "°C"), "h_caja": ("Hum. caja", "%"), "par": ("Luz PAR", "µmol/m²/s")}
 
 
 def _resumen_puntos(pts, umbral):
@@ -968,8 +1067,10 @@ def reporte(cx, nodo, rango, incluir_caja=False, t=None):
         raise ValueError("rango inválido")
     cfg = cfgmod.leer(cx)
     orden = list(ORDEN_REPORTE)
+    i = orden.index("pir") + 1
+    orden[i:i] = ["par"]
     if incluir_caja:
-        orden[3:3] = ["t_caja", "h_caja"]
+        orden[i:i] = ["t_caja", "h_caja"]
     variables = {}
     cab = None
     for var in orden:

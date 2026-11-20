@@ -3,6 +3,8 @@ export interface Umbral { min: number | null; max: number | null; activo: boolea
 export interface Ultimo {
   nodo: string; nombre_nodo: string; ahora: number; alertas_activas: number; offline_min: number;
   hay_datos: boolean; en_linea: boolean; umbrales: Record<string, Umbral>;
+  /** µmol/m²/s por W/m². Lo leen admin y usuario normal; solo el admin lo cambia. */
+  factor_par?: number; par_actual?: number | null; dli_hoy?: number | null;
   receptora: { firmware?: string | null; cola_pendiente?: number | null; ts: number } | null;
   ts?: number; seq?: number; tipo?: string; rssi?: number | null; snr?: number | null; sin_hora_emisora?: boolean;
   aire?: { a1: Sensor; a2: Sensor; t: number | null; h: number | null };
@@ -14,9 +16,12 @@ export interface Ultimo {
 }
 export interface Punto { t: number; prom: number; min: number; max: number; n: number }
 export interface ExtremoPeriodo { min: number; max: number; min_s: number; max_s: number; min_min: number; max_min: number }
-export interface Historial { var: string; rango: string; paso_s: number; fuente: string; desde: number; hasta: number; puntos: Punto[]; extremo?: ExtremoPeriodo | null }
+export interface Historial {
+  var: string; rango: string; paso_s: number; fuente: string; desde: number; hasta: number; puntos: Punto[]; extremo?: ExtremoPeriodo | null;
+  factor_par?: number; dli_hoy?: number | null; dli_promedio?: number | null;
+}
 export interface Config {
-  nombre_nodo: string; sin_datos_min: number; offline_min: number; bateria_min_v: number;
+  nombre_nodo: string; sin_datos_min: number; offline_min: number; bateria_min_v: number; factor_par?: number;
   rango_banda?: boolean;
   umbrales: Record<string, Umbral>; sugeridos?: Record<string, Umbral>;
   variables: Record<string, { nombre: string; unidad: string }>;

@@ -151,7 +151,8 @@ export default function Inicio({ d, errorRed }: { d: Ultimo | null; errorRed: bo
         <p className="pista">Toca un indicador para ver su historial (8 h · 24 h · 7 días · 1 mes)</p>
       </div>
 
-      {abierto && <ModalHistorial def={abierto} umbral={U[abierto.v]} rangoBanda alCerrar={cerrar} />}
+      {abierto && <ModalHistorial def={abierto} umbral={U[abierto.v]} rangoBanda alCerrar={cerrar}
+        luz={abierto.v === 'pir' ? { par: d.par_actual ?? null, dli: d.dli_hoy ?? null, factor: d.factor_par ?? 2.02 } : undefined} />}
     </section>
     </>
   );

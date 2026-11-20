@@ -16,9 +16,11 @@ export function resumen(pts: H['puntos']) {
     prom: pts.reduce((a, p) => a + p.prom * p.n, 0) / n, n, ultimo: pts[pts.length - 1].t };
 }
 
+export interface LuzPopup { par: number | null; dli: number | null; factor: number }
+
 /** Ventana emergente con el historial de un indicador (8 h / 24 h / 7 días / 1 mes). Cierra con X, Esc o clic fuera. */
-export default function ModalHistorial({ def, umbral, rangoBanda = true, alCerrar }: {
-  def: DefIndicador; umbral?: Umbral | null; rangoBanda?: boolean; alCerrar: () => void;
+export default function ModalHistorial({ def, umbral, rangoBanda = true, luz, alCerrar }: {
+  def: DefIndicador; umbral?: Umbral | null; rangoBanda?: boolean; luz?: LuzPopup; alCerrar: () => void;
 }) {
   const [rango, setRango] = useState('24h');
   const [datos, setDatos] = useState<H | null>(null);
@@ -72,6 +74,13 @@ export default function ModalHistorial({ def, umbral, rangoBanda = true, alCerra
           <h3 id="mh-titulo">{def.nombre}</h3>
           <button ref={cerrarBtn} className="x" aria-label="Cerrar" onClick={alCerrar}>×</button>
         </div>
+        {luz && def.v === 'pir' && (
+          <div className="mh-par" aria-label="Luz PAR estimada">
+            <p><span>PAR estimado</span> <b>{luz.par == null ? '—' : num(luz.par, 0)} µmol/m²/s</b></p>
+            <p><span>DLI de hoy</span> <b>{luz.dli == null ? '—' : num(luz.dli, 2)} mol/m²/día</b></p>
+            <p><span>Factor</span> <b>× {num(luz.factor, 2)}</b></p>
+          </div>
+        )}
         <div className="seg mh-rangos" role="group" aria-label="Rango del historial">
           {RANGOS_MODAL.map(([k, t]) => (
             <button key={k} className={k === rango ? 'on' : ''} aria-pressed={k === rango} onClick={() => setRango(k)}>{t}</button>

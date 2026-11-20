@@ -12,6 +12,7 @@ import type { FaseId } from './faseDelDia';
 import BarrasEnlace from './Enlace';
 import ModalHistorial from './ModalHistorial';
 import { IND, type DefIndicador } from './indicadores';
+import { FACTOR_PAR_BASE, FACTOR_PAR_MAX, FACTOR_PAR_MIN, factorDeCampo, factorValido } from './luzPar';
 
 function Cuentas() {
   const [lista, setLista] = useState<Cuenta[]>([]);
@@ -48,6 +49,74 @@ function Cuentas() {
   );
 }
 
+function numero(txt: string): number {
+  return Number(String(txt).trim().replace(',', '.'));
+}
+
+/** Calibración del factor PAR. El cálculo llena el campo; Guardar lo persiste. */
+function CalibracionPar({ cfg, setCfg, ultimo }: {
+  cfg: Config; setCfg: (c: Config) => void; ultimo: Ultimo | null;
+}) {
+  const [factor, setFactor] = useState(String(cfg.factor_par ?? FACTOR_PAR_BASE));
+  const [medido, setMedido] = useState('');
+  const [wm2, setWm2] = useState('');
+  const [msg, setMsg] = useState('');
+  const guardar = async () => {
+    const f = numero(factor);
+    if (!factorValido(f)) {
+      setMsg(`✖ El factor debe estar entre ${FACTOR_PAR_MIN} y ${FACTOR_PAR_MAX}`);
+      return;
+    }
+    try {
+      const r = await api.guardarConfig({ ...cfg, factor_par: f });
+      const sig = r?.config ? { ...cfg, ...r.config, factor_par: f } : { ...cfg, factor_par: f };
+      setCfg(sig);
+      setFactor(String(sig.factor_par ?? f));
+      setMsg('✔ Factor guardado');
+    } catch (err) { setMsg('✖ ' + (err as Error).message); }
+  };
+  const usarActual = () => {
+    const p = ultimo?.pir;
+    if (!p?.ok || p.v == null) { setMsg('✖ No hay radiación válida ahora'); return; }
+    setWm2(String(p.v));
+    setMsg('');
+  };
+  const calcular = () => {
+    const f = factorDeCampo(numero(medido), numero(wm2));
+    if (f == null) { setMsg('✖ Indica un PAR medido y una radiación mayor que 0'); return; }
+    setFactor(String(f));
+    setMsg(factorValido(f) ? 'Factor calculado. Pulsa Guardar para aplicarlo.' : `✖ ${f} queda fuera de ${FACTOR_PAR_MIN} a ${FACTOR_PAR_MAX}`);
+  };
+  return (
+    <div className="vidrio bloque cal-par" aria-label="Calibración de luz PAR">
+      <h2>Calibración de luz PAR</h2>
+      <p className="tenue chico">Base 2.02 para malla sombra blanca o neutra bajo luz solar. Ajusta el factor tras medir junto al piranómetro con un medidor PAR.</p>
+      <label>Factor de conversión (µmol/m²/s por W/m²)
+        <input type="number" min={FACTOR_PAR_MIN} max={FACTOR_PAR_MAX} step={0.01} inputMode="decimal"
+          value={factor} onChange={e => setFactor(e.target.value)} />
+      </label>
+      <div className="acciones">
+        <button className="btn primario" type="button" onClick={guardar}>Guardar</button>
+        <button className="btn" type="button" onClick={() => { setFactor(String(FACTOR_PAR_BASE)); setMsg(''); }}>Restablecer 2.02</button>
+      </div>
+      <h3>Calculadora de campo</h3>
+      <div className="dos">
+        <label>PAR medido (medidor PAR)
+          <input type="number" min={0} step={1} inputMode="decimal" value={medido} onChange={e => setMedido(e.target.value)} />
+        </label>
+        <label>Radiación estación (W/m²)
+          <input type="number" min={0} step={1} inputMode="decimal" value={wm2} onChange={e => setWm2(e.target.value)} />
+        </label>
+      </div>
+      <div className="acciones">
+        <button className="btn" type="button" onClick={usarActual}>Usar lectura actual</button>
+        <button className="btn" type="button" onClick={calcular}>Calcular factor</button>
+      </div>
+      {msg && <p className="tenue chico" role="status">{msg}</p>}
+    </div>
+  );
+}
+
 /** Configuración de nodo: solo admin. La caja no se muestra en Inicio. */
 export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
   ultimo: Ultimo | null; alGuardar: () => void; alSalir: () => void;
@@ -71,7 +140,7 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
     try {
       const r = await api.guardarConfig({
         nombre_nodo: cfg.nombre_nodo, sin_datos_min: cfg.sin_datos_min, offline_min: cfg.offline_min,
-        bateria_min_v: cfg.bateria_min_v, umbrales: cfg.umbrales,
+        bateria_min_v: cfg.bateria_min_v, factor_par: cfg.factor_par ?? FACTOR_PAR_BASE, umbrales: cfg.umbrales,
       });
       if (r && 'config' in r && r.config) setCfg({ ...cfg, ...r.config });
       setMsg('✔ Guardado'); alGuardar();
@@ -124,6 +193,7 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
           </select>
         </label>
       </div>
+      <CalibracionPar cfg={cfg} setCfg={setCfg} ultimo={ultimo} />
       <form className="vidrio bloque" onSubmit={guardar}>
         <h2>Configuración del nodo</h2>
         <label>Nombre del nodo<input maxLength={60} required value={cfg.nombre_nodo} onChange={e => setCfg({ ...cfg, nombre_nodo: e.target.value })} /></label>
