@@ -8,6 +8,7 @@ import {
   confirmarManifiesto,
   type ManifiestoParseResult,
 } from '../../lib/api';
+import CatalogoEmbarquePanel from '../Catalogo/CatalogoEmbarquePanel';
 
 interface EmbarquesProps {
   token: string;
@@ -1057,6 +1058,8 @@ export default function Embarques({
           Selecciona un cliente y agrega al menos un producto
         </p>
       )}
+
+      <CatalogoEmbarquePanel token={token} clientes={clientes} />
     </div>
   );
 }

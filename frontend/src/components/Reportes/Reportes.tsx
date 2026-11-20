@@ -26,6 +26,8 @@ import EmbarquesReporte from './EmbarquesReporte';
 import InventariosReporte from './InventariosReporte';
 import MapaCuadrosLimon from './MapaCuadrosLimon';
 import MelonReportes from './MelonReportes';
+import CatalogoReportes from './CatalogoReportes';
+import { listarProductosCatalogo, type ProductoCatalogo } from '../../lib/catalogoApi';
 import {
   kgRealPorBin,
   pctPrimeraCalidad,
@@ -1337,6 +1339,9 @@ export default function Reportes({ token }: ReportesProps) {
   const [error, setError] = useState('');
   const [aviso, setAviso] = useState('');
   const [productoReporte, setProductoReporte] = useState<ProductoReporte>('limon_amarillo');
+  const [catalogoCodigo, setCatalogoCodigo] = useState<string | null>(null);
+  const [catalogoProductos, setCatalogoProductos] = useState<ProductoCatalogo[]>([]);
+  const [reloadCatalogo, setReloadCatalogo] = useState(0);
   const [seccion, setSeccion] = useState<SeccionReporte>('produccion');
   // Por corrida: procesos fusionados (campo + conversión del granel)
   const [vista, setVista] = useState<VistaReporte>('lote');
@@ -1367,7 +1372,14 @@ export default function Reportes({ token }: ReportesProps) {
     setError('');
     setAviso('');
     setDebugInfo('');
+    setReloadCatalogo((n) => n + 1);
     try {
+      try {
+        const prods = await listarProductosCatalogo(token);
+        setCatalogoProductos(prods.filter((p) => p.activo && p.configurado));
+      } catch {
+        setCatalogoProductos([]);
+      }
       let ha = HECTAREAS_RANCHO;
       let data: {
         corridas: Corrida[];
@@ -1616,22 +1628,24 @@ export default function Reportes({ token }: ReportesProps) {
   const modoSeleccion = graficaModo === 'seleccion';
   const sinSeleccion = modoSeleccion && corridasSeleccionadas.length === 0;
 
-  const esMelon = productoReporte === 'melon';
-  const esLimon = productoReporte === 'limon_amarillo';
+  const esCatalogo = Boolean(catalogoCodigo);
+  const catalogoSel = catalogoProductos.find((p) => p.codigo === catalogoCodigo) || null;
+  const esMelon = !esCatalogo && productoReporte === 'melon';
+  const esLimon = !esCatalogo && productoReporte === 'limon_amarillo';
 
   const productoBtn = (id: ProductoReporte): CSSProperties => ({
     padding: '10px 20px',
     border: 'none',
     borderRadius: 8,
     cursor: 'pointer',
-    fontWeight: productoReporte === id ? 700 : 500,
+    fontWeight: !esCatalogo && productoReporte === id ? 700 : 500,
     background:
-      productoReporte === id
+      !esCatalogo && productoReporte === id
         ? id === 'melon'
           ? '#0284c7'
           : '#15803d'
         : '#f1f5f9',
-    color: productoReporte === id ? 'white' : '#334155',
+    color: !esCatalogo && productoReporte === id ? 'white' : '#334155',
     fontSize: 15,
   });
   const seccionBtn = (id: SeccionReporte): CSSProperties => ({
@@ -1680,12 +1694,34 @@ export default function Reportes({ token }: ReportesProps) {
         <span style={{ fontSize: 12, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: 0.4 }}>
           Producto
         </span>
-        <button type="button" style={productoBtn('limon_amarillo')} onClick={() => setProductoReporte('limon_amarillo')}>
+        <button type="button" style={productoBtn('limon_amarillo')} onClick={() => { setCatalogoCodigo(null); setProductoReporte('limon_amarillo'); }}>
           Limón
         </button>
-        <button type="button" style={productoBtn('melon')} onClick={() => setProductoReporte('melon')}>
+        <button type="button" style={productoBtn('melon')} onClick={() => { setCatalogoCodigo(null); setProductoReporte('melon'); }}>
           Melón
         </button>
+        {catalogoProductos.map((p) => {
+          const activo = catalogoCodigo === p.codigo;
+          return (
+            <button
+              key={p.codigo}
+              type="button"
+              onClick={() => setCatalogoCodigo(p.codigo)}
+              style={{
+                padding: '10px 20px',
+                border: 'none',
+                borderRadius: 8,
+                cursor: 'pointer',
+                fontWeight: activo ? 700 : 500,
+                background: activo ? '#7c3aed' : '#f1f5f9',
+                color: activo ? 'white' : '#334155',
+                fontSize: 15,
+              }}
+            >
+              {p.nombre}
+            </button>
+          );
+        })}
       </div>
 
       {/* 2) Secciones del producto elegido */}
@@ -1704,7 +1740,7 @@ export default function Reportes({ token }: ReportesProps) {
         </button>
       </div>
 
-      {seccion === 'inventarios' && (
+      {seccion === 'inventarios' && !esCatalogo && (
         <div style={{ marginTop: 12 }}>
           <InventariosReporte
             data={dashboard}
@@ -1717,7 +1753,7 @@ export default function Reportes({ token }: ReportesProps) {
         </div>
       )}
 
-      {seccion === 'embarques' && (
+      {seccion === 'embarques' && !esCatalogo && (
         <div style={{ marginTop: 12 }}>
           <EmbarquesReporte
             data={reporteEmbarques}
@@ -1729,6 +1765,15 @@ export default function Reportes({ token }: ReportesProps) {
 
       {seccion === 'produccion' && esMelon && (
         <MelonReportes empaques={empaquesMelon} token={token} />
+      )}
+
+      {esCatalogo && catalogoSel && (
+        <CatalogoReportes
+          token={token}
+          productoId={catalogoSel.id}
+          seccion={seccion}
+          reload={reloadCatalogo}
+        />
       )}
 
       {seccion === 'produccion' && esLimon && (

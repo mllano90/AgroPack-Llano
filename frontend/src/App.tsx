@@ -5,7 +5,7 @@ import Recepcion from './components/Recepcion/Recepcion';
 import Usuarios from './components/Usuarios/Usuarios';
 import Reportes from './components/Reportes/Reportes';
 import Correcciones from './components/Correcciones/Correcciones';
-import AjustePesosMelon from './components/AjustePesos/AjustePesosMelon';
+import AjustesGenerales from './components/Ajustes/AjustesGenerales';
 
 import { login, getCurrentUser } from './lib/api';
 import { useDashboard } from './hooks/useDashboard';
@@ -361,7 +361,7 @@ function App() {
                   border: activeTab === 'ajuste_pesos' ? 'none' : '1px solid #bfdbfe',
                 }}
               >
-                Ajuste de pesos
+                Ajustes generales
               </button>
             )}
           </div>
@@ -404,7 +404,7 @@ function App() {
             <Correcciones token={token} onCorregido={cargarDashboard} />
           )}
 
-          {activeTab === 'ajuste_pesos' && showAjustePesos && <AjustePesosMelon />}
+          {activeTab === 'ajuste_pesos' && showAjustePesos && <AjustesGenerales token={token} />}
         </>
       )}
     </div>

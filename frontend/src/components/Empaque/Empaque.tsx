@@ -5,8 +5,9 @@ import type {
   InventarioFinalItem,
   Variedad,
   TipoCultivo,
-  Producto,
 } from '../../types';
+import CatalogoEmpaqueForm from '../Catalogo/CatalogoEmpaqueForm';
+import { listarProductosCatalogo, type ProductoCatalogo } from '../../lib/catalogoApi';
 import { TipoCultivoSelect, InventarioCampoSelector } from '../ui';
 import { useCreateEmpaque } from '../../hooks/useCreateEmpaque';
 import { getApiBaseUrl, convertirRpcGranel } from '../../lib/api';
@@ -52,7 +53,8 @@ export default function Empaque({
   inventarioFinal = [],
   onEmpaqueRegistered,
 }: EmpaqueProps) {
-  const [productoEmpaque, setProductoEmpaque] = useState<Producto | ''>('');
+  const [productoEmpaque, setProductoEmpaque] = useState('');
+  const [catalogo, setCatalogo] = useState<ProductoCatalogo[]>([]);
   const [variedadEmpaque, setVariedadEmpaque] = useState<Variedad | ''>('');
   const [cajasCampoUsadas, setCajasCampoUsadas] = useState('');
   const [cajasCartonProducidas, setCajasCartonProducidas] = useState('');
@@ -433,8 +435,17 @@ export default function Empaque({
     setLineasProduccion(lineasProduccion.filter((_, i) => i !== idx));
   };
 
+  const esCatalogo = productoEmpaque.startsWith('cat:');
+
+  useEffect(() => {
+    if (!token) return;
+    listarProductosCatalogo(token)
+      .then((rows) => setCatalogo(rows.filter((p) => p.activo && p.configurado)))
+      .catch(() => setCatalogo([]));
+  }, [token]);
+
   const registrarEmpaque = async () => {
-    if (!productoEmpaque) return alert('Selecciona un producto');
+    if (!productoEmpaque || esCatalogo) return alert('Selecciona un producto');
     if (!fechaEmpaque) return alert('La fecha de empaque es obligatoria');
 
     try {
@@ -758,8 +769,7 @@ export default function Empaque({
       <select
         value={productoEmpaque}
         onChange={(e) => {
-          const val = e.target.value as Producto | '';
-          setProductoEmpaque(val);
+          setProductoEmpaque(e.target.value);
           setCajasCampoUsadas('');
           setCajasCartonProducidas('');
           setTipoCultivoEmpaque('');
@@ -781,9 +791,14 @@ export default function Empaque({
         <option value="uva">Uva</option>
         <option value="limon_amarillo">Limón Amarillo</option>
         <option value="melon">Melón</option>
+        {catalogo.map((p) => (
+          <option key={p.codigo} value={`cat:${p.codigo}`}>
+            {p.nombre}
+          </option>
+        ))}
       </select>
 
-      {productoEmpaque && (
+      {productoEmpaque && !esCatalogo && (
         <label style={{ display: 'block', margin: '8px 0', fontSize: 14 }}>
           <span style={{ fontWeight: 600, color: '#0f172a' }}>
             Fecha de empaque *
@@ -1603,6 +1618,12 @@ export default function Empaque({
             registra todos los lotes ligados (+ el actual si está completo).
           </p>
         </>
+      ) : esCatalogo ? (
+        <CatalogoEmpaqueForm
+          token={token}
+          codigo={productoEmpaque.slice(4)}
+          onDone={onEmpaqueRegistered}
+        />
       ) : (
         <button
           type="button"
