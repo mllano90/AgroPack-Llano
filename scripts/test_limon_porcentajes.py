@@ -128,6 +128,20 @@ def main():
     check(data["totalCuadra"], "js total es kilos ÷ bins")
     check(data["noEsPromedioDePromedios"], "js no promedia los promedios")
 
+    # Rendimiento general = bins campo ÷ (parrillas 1ra + bins de jugo de 900 kg).
+    # Captura: 3007 ÷ (476.5 + 373) = 3.54. Solo 1ra: 3007 ÷ 476.5 = 6.31.
+    for r in data["rendimientos"]:
+        etiqueta = r["id"]
+        check(r["general"] == r["esperadoGeneral"], f"rend general {etiqueta} {r['general']}")
+        check(
+            r["soloPrimera"] == r["esperadoSolo"],
+            f"rend solo 1ra {etiqueta} {r['soloPrimera']}",
+        )
+        check(
+            r["unidadesSegunda"] == r["esperadasUnidades"],
+            f"unidades jugo {etiqueta} {r['unidadesSegunda']}",
+        )
+
     print("\nFALLOS", len(FAILS))
     for f in FAILS:
         print(" -", f)

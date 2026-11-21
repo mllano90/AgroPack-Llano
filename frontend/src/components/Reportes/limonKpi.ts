@@ -64,3 +64,48 @@ export function pctPrimeraCalidad(partes: { rpc: number; carton: number }): numb
   if (!Number.isFinite(rpc) || !Number.isFinite(carton)) return 0;
   return unDecimal(rpc + carton);
 }
+
+/** Cada bin de jugo pesa 900 kg y en el modelo ya cuenta como 1 parrilla. */
+export const KG_BIN_JUGO = 900;
+
+function dosDecimales(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+/**
+ * Rendimiento en bins de campo por parrilla.
+ *
+ * Solo 1ra: bins de campo ÷ parrillas de 1ra. Es el número que ya se mostraba.
+ *
+ * General (1ra + 2da): bins de campo ÷ (parrillas de 1ra + unidades de 2da).
+ * La 2da del limón es el jugo. No hay otra "parrilla de 2da": parrillas_jugo
+ * es el conteo de bins de jugo, y cada uno es una unidad de 900 kg.
+ * Si no vienen unidades, se derivan de kg de jugo ÷ 900.
+ *
+ * null si no hay bins de campo o el denominador no es positivo.
+ */
+export function rendimientoBinsPorParrilla(
+  binsCampo: number,
+  parrillasPrimera: number,
+  unidadesSegunda?: number | null,
+  kgSegunda?: number | null
+): { general: number | null; soloPrimera: number | null; unidadesSegunda: number } {
+  const bins = Number(binsCampo);
+  const p1raw = Number(parrillasPrimera);
+  const p1 = Number.isFinite(p1raw) && p1raw > 0 ? p1raw : 0;
+  if (!Number.isFinite(bins) || bins <= 0) {
+    return { general: null, soloPrimera: null, unidadesSegunda: 0 };
+  }
+  const soloPrimera = p1 > 0 ? dosDecimales(bins / p1) : null;
+
+  let u2 = unidadesSegunda == null ? Number.NaN : Number(unidadesSegunda);
+  const kg2 = Number(kgSegunda);
+  const desdeKg = Number.isFinite(kg2) && kg2 > 0 ? kg2 / KG_BIN_JUGO : 0;
+  // Sin conteo de bins (o en cero habiendo kilos) cada 900 kg de jugo es una unidad.
+  if (!Number.isFinite(u2) || u2 < 0 || (u2 === 0 && desdeKg > 0)) {
+    u2 = desdeKg;
+  }
+  const den = p1 + u2;
+  const general = den > 0 ? dosDecimales(bins / den) : null;
+  return { general, soloPrimera, unidadesSegunda: u2 };
+}

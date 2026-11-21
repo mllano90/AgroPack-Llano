@@ -7,6 +7,7 @@ import {
   pctPrimeraCalidad,
   porcentajesQueSuman100,
   porcentajesRpcCartonJugo,
+  rendimientoBinsPorParrilla,
 } from '../frontend/src/components/Reportes/limonKpi.ts';
 
 const pares: Array<[number, number, number]> = [
@@ -61,6 +62,37 @@ const partes = trios.map(([rpc, carton, jugo]) => {
   };
 });
 
+const rendimientos = [
+  {
+    id: 'acumulado-captura',
+    ...rendimientoBinsPorParrilla(3007, 476.5, 373, 335700),
+    esperadoGeneral: 3.54,
+    esperadoSolo: 6.31,
+    esperadasUnidades: 373,
+  },
+  {
+    id: 'desde-kg-jugo',
+    ...rendimientoBinsPorParrilla(3007, 476.5, null, 335700),
+    esperadoGeneral: 3.54,
+    esperadoSolo: 6.31,
+    esperadasUnidades: 373,
+  },
+  {
+    id: 'solo-primera',
+    ...rendimientoBinsPorParrilla(100, 10, 0, 0),
+    esperadoGeneral: 10,
+    esperadoSolo: 10,
+    esperadasUnidades: 0,
+  },
+  {
+    id: 'sin-bins',
+    ...rendimientoBinsPorParrilla(0, 4, 2, 1800),
+    esperadoGeneral: null,
+    esperadoSolo: null,
+    esperadasUnidades: 0,
+  },
+];
+
 const loteA = { kg: 920, bins: 4 };
 const loteB = { kg: 400, bins: 2 };
 const totalLotes = kgRealPorBin(loteA.kg + loteB.kg, loteA.bins + loteB.bins);
@@ -71,6 +103,7 @@ console.log(
   JSON.stringify({
     resultados,
     partes,
+    rendimientos,
     totalLotes,
     promedioDePromedios,
     totalCuadra: totalLotes === (loteA.kg + loteB.kg) / (loteA.bins + loteB.bins),

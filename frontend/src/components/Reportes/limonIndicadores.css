@@ -1,9 +1,9 @@
-/* Seis indicadores de limón: 2 filas de 3. En pantallas angostas bajan a 2 y luego a 1. */
+/* Seis indicadores de limón, todos de la misma altura. 2×3; en pantallas angostas, 2 y luego 1. */
 .limon-kpi-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
-  align-items: stretch;
+  align-items: start;
   width: 100%;
 }
 
@@ -17,6 +17,78 @@
   .limon-kpi-grid {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+.limon-kpi-card {
+  height: 148px;
+  min-height: 148px;
+  max-height: 148px;
+  overflow: hidden;
+}
+
+.limon-kpi-label {
+  font-size: clamp(9px, 0.85vw, 11px);
+  line-height: 1.15;
+  max-height: 2.4em;
+  overflow: hidden;
+}
+
+.limon-kpi-value {
+  font-size: clamp(18px, 1.55vw, 26px);
+  line-height: 1.05;
+}
+
+.limon-kpi-foot {
+  margin-top: 4px;
+  font-size: clamp(10px, 0.95vw, 12px);
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.limon-kpi-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-top: 6px;
+  min-height: 0;
+  flex: 1;
+}
+
+.limon-kpi-half {
+  border-radius: 6px;
+  padding: 4px 6px;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.limon-kpi-split-label {
+  font-size: clamp(8px, 0.75vw, 10px);
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  line-height: 1.15;
+  text-transform: uppercase;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.limon-kpi-split-pct {
+  font-size: clamp(14px, 1.25vw, 18px);
+  font-weight: 800;
+  line-height: 1.1;
+  margin-top: 2px;
+}
+
+.limon-kpi-split-ton {
+  font-size: clamp(11px, 0.95vw, 13px);
+  font-weight: 700;
+  line-height: 1.2;
 }
 
 /* El número completo se queda en una línea (no partir 263,196 en 263,19 / 6). */
