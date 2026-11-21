@@ -33,6 +33,7 @@ import {
   pctPrimeraCalidad,
   porcentajesQueSuman100,
   porcentajesRpcCartonJugo,
+  rendimientoBinsPorParrilla,
 } from './limonKpi';
 import './limonIndicadores.css';
 
@@ -67,34 +68,28 @@ const cardStyle: CSSProperties = {
   minWidth: 140,
 };
 
-/** Tarjeta compacta: mismo tamaño en todos los indicadores */
+/** Tarjeta compacta. La altura fija vive en .limon-kpi-card (las seis iguales). */
 const cardPrimary: CSSProperties = {
   ...cardStyle,
   minWidth: 0,
   width: '100%',
-  height: '100%',
-  minHeight: 0,
   boxSizing: 'border-box',
   boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
   display: 'flex',
   flexDirection: 'column',
   justifyContent: 'flex-start',
   gap: 2,
-  padding: '10px 12px',
+  padding: '8px 10px',
 };
 
 const cardPrimaryLabel: CSSProperties = {
-  fontSize: 11,
   fontWeight: 700,
-  letterSpacing: 0.3,
-  lineHeight: 1.2,
+  letterSpacing: 0.2,
   textTransform: 'uppercase',
 };
 
 const cardPrimaryValue: CSSProperties = {
-  fontSize: 26,
   fontWeight: 800,
-  lineHeight: 1.1,
   letterSpacing: -0.4,
   marginTop: 2,
   whiteSpace: 'nowrap',
@@ -153,6 +148,16 @@ function fmtPct(n: number) {
     minimumFractionDigits: 1,
     maximumFractionDigits: 1,
   });
+}
+
+function fmtTon(kg: number) {
+  const t = (Number(kg) || 0) / 1000;
+  return t.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 1 });
+}
+
+function fmtRend(n: number | null) {
+  if (n == null || !Number.isFinite(n)) return '—';
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 /** Gráfica de pastel SVG: tallas 1ra + 2da (kg y %). Etiquetas dentro de cada gajo. */
@@ -1625,6 +1630,15 @@ export default function Reportes({ token }: ReportesProps) {
     : { rpc: 0, carton: 0, jugo: 0 };
   // % 1ra calidad = % RPC + % cartón. Con el jugo suma 100.
   const pctPrimeraTotal = pctPrimeraCalidad(partesCalidad);
+  // General: bins campo ÷ (parrillas 1ra + bins de jugo). Solo 1ra: el cociente de siempre.
+  const rendimientoParrilla = a
+    ? rendimientoBinsPorParrilla(
+        a.bins_campo,
+        a.parrillas_primera ?? 0,
+        a.parrillas_jugo != null ? a.parrillas_jugo : a.bins_jugo,
+        a.kg_segunda
+      )
+    : null;
   const modoSeleccion = graficaModo === 'seleccion';
   const sinSeleccion = modoSeleccion && corridasSeleccionadas.length === 0;
 
@@ -1785,7 +1799,9 @@ export default function Reportes({ token }: ReportesProps) {
         kilos producidos ÷
         bins de campo. La entrada de referencia sigue en {PESO_BIN_CAMPO_KG} kg y no entra en esos
         %. RPC 12 = 12 kg · RPC 18 / cartón = 18 kg · Bin jugo = 900 kg · Parrilla RPC = 45 ·
-        Cartón = 63 · <strong>Bins/parrilla = bins campo ÷ parrillas de 1ra</strong> (sin jugo)
+        Cartón = 63 · <strong>Rendimiento bins/parrilla</strong> = bins campo ÷ (parrillas de 1ra +
+        bins de jugo; cada bin de 900 kg es una unidad). El de solo 1ra sigue siendo bins campo ÷
+        parrillas de 1ra.
       </p>
 
       {aviso && (
@@ -2016,11 +2032,16 @@ export default function Reportes({ token }: ReportesProps) {
             </p>
           ) : a ? (
             <>
-              {/* Seis tarjetas en 2×3. % 1ra (RPC+cartón) + % jugo = 100. */}
+              {/* Seis tarjetas del mismo alto, 2×3. % 1ra + % jugo = 100. */}
               <div className="limon-kpi-grid" style={{ marginBottom: 12 }}>
-                <div style={{ ...cardPrimary, background: '#dbeafe' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#1e40af' }}>1ra calidad</div>
-                  <div className="limon-kpi-num" style={{ ...cardPrimaryValue, color: '#1e3a8a' }}>
+                <div className="limon-kpi-card" style={{ ...cardPrimary, background: '#dbeafe' }}>
+                  <div className="limon-kpi-label" style={{ ...cardPrimaryLabel, color: '#1e40af' }}>
+                    1ra calidad
+                  </div>
+                  <div
+                    className="limon-kpi-num limon-kpi-value"
+                    style={{ ...cardPrimaryValue, color: '#1e3a8a' }}
+                  >
                     {fmtPct(pctPrimeraTotal)}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
@@ -2038,51 +2059,18 @@ export default function Reportes({ token }: ReportesProps) {
                       </div>
                     </div>
                   </div>
-                  <div
-                    className="limon-kpi-num"
-                    style={{ fontSize: 12, fontWeight: 700, color: '#1e40af', marginTop: 6 }}
-                  >
+                  <div className="limon-kpi-num limon-kpi-foot" style={{ color: '#1e40af' }}>
                     {fmtEntero((a.cajas_rpc || 0) + (a.cajas_carton || 0))} cajas
                   </div>
-                  <div
-                    style={{
-                      display: 'grid',
-                      gridTemplateColumns: '1fr 1fr',
-                      gap: 6,
-                      marginTop: 8,
-                      paddingTop: 8,
-                      borderTop: '1px solid rgba(30, 64, 175, 0.18)',
-                    }}
-                  >
-                    <div style={{ ...cardStatChip, background: 'rgba(255,255,255,0.72)' }}>
-                      <div style={{ ...cardStatChipLabel, color: '#1e40af' }}>1ra en RPC</div>
-                      <div className="limon-kpi-num" style={{ ...cardStatChipValue, color: '#1e3a8a' }}>
-                        {fmtPct(partesCalidad.rpc)}%
-                      </div>
-                      <div className="limon-kpi-num" style={{ fontSize: 12, fontWeight: 700, color: '#1e40af' }}>
-                        {fmtKg(a.kg_rpc ?? 0)} kg
-                      </div>
-                      <div className="limon-kpi-num" style={{ fontSize: 12, color: '#1e40af' }}>
-                        {fmtEntero(a.cajas_rpc)} cajas
-                      </div>
-                    </div>
-                    <div style={{ ...cardStatChip, background: 'rgba(255, 237, 213, 0.85)' }}>
-                      <div style={{ ...cardStatChipLabel, color: '#9a3412' }}>1ra en cartón</div>
-                      <div className="limon-kpi-num" style={{ ...cardStatChipValue, color: '#7c2d12' }}>
-                        {fmtPct(partesCalidad.carton)}%
-                      </div>
-                      <div className="limon-kpi-num" style={{ fontSize: 12, fontWeight: 700, color: '#9a3412' }}>
-                        {fmtKg(a.kg_carton ?? 0)} kg
-                      </div>
-                      <div className="limon-kpi-num" style={{ fontSize: 12, color: '#9a3412' }}>
-                        {fmtEntero(a.cajas_carton)} cajas
-                      </div>
-                    </div>
-                  </div>
                 </div>
-                <div style={{ ...cardPrimary, background: '#fef9c3' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#854d0e' }}>Segunda (jugo)</div>
-                  <div className="limon-kpi-num" style={{ ...cardPrimaryValue, color: '#713f12' }}>
+                <div className="limon-kpi-card" style={{ ...cardPrimary, background: '#fef9c3' }}>
+                  <div className="limon-kpi-label" style={{ ...cardPrimaryLabel, color: '#854d0e' }}>
+                    Segunda (jugo)
+                  </div>
+                  <div
+                    className="limon-kpi-num limon-kpi-value"
+                    style={{ ...cardPrimaryValue, color: '#713f12' }}
+                  >
                     {fmtPct(partesCalidad.jugo)}
                     <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}>%</span>
                   </div>
@@ -2101,12 +2089,88 @@ export default function Reportes({ token }: ReportesProps) {
                     </div>
                   </div>
                 </div>
-                <div style={{ ...cardPrimary, background: '#fff7ed' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#9a3412' }}>Kg real / bin</div>
-                  <div className="limon-kpi-num" style={{ ...cardPrimaryValue, color: '#7c2d12' }}>
+                <div className="limon-kpi-card" style={{ ...cardPrimary, background: '#f8fafc' }}>
+                  <div className="limon-kpi-label" style={{ ...cardPrimaryLabel, color: '#334155' }}>
+                    1ra por presentación
+                  </div>
+                  <div className="limon-kpi-split">
+                    <div className="limon-kpi-half" style={{ background: '#dbeafe' }}>
+                      <div className="limon-kpi-split-label" style={{ color: '#1e40af' }}>
+                        1ra en RPC
+                      </div>
+                      <div className="limon-kpi-num limon-kpi-split-pct" style={{ color: '#1e3a8a' }}>
+                        {fmtPct(partesCalidad.rpc)}%
+                      </div>
+                      <div className="limon-kpi-num limon-kpi-split-ton" style={{ color: '#1e40af' }}>
+                        {fmtTon(a.kg_rpc ?? 0)} t
+                      </div>
+                    </div>
+                    <div className="limon-kpi-half" style={{ background: '#ffedd5' }}>
+                      <div className="limon-kpi-split-label" style={{ color: '#9a3412' }}>
+                        1ra en cartón
+                      </div>
+                      <div className="limon-kpi-num limon-kpi-split-pct" style={{ color: '#7c2d12' }}>
+                        {fmtPct(partesCalidad.carton)}%
+                      </div>
+                      <div className="limon-kpi-num limon-kpi-split-ton" style={{ color: '#9a3412' }}>
+                        {fmtTon(a.kg_carton ?? 0)} t
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div className="limon-kpi-card" style={{ ...cardPrimary, background: '#f0fdf4' }}>
+                  <div className="limon-kpi-label" style={{ ...cardPrimaryLabel, color: '#166534' }}>
+                    Ton / ha
+                  </div>
+                  <div
+                    className="limon-kpi-num limon-kpi-value"
+                    style={{ ...cardPrimaryValue, color: '#14532d' }}
+                  >
+                    {(() => {
+                      const kgHaVal =
+                        a.kg_por_ha != null && a.kg_por_ha !== undefined
+                          ? Number(a.kg_por_ha)
+                          : hectareas
+                            ? a.kg_salida / hectareas
+                            : 0;
+                      const tonHa = kgHaVal / 1000;
+                      return Number.isFinite(tonHa) ? tonHa.toFixed(1) : '—';
+                    })()}
+                  </div>
+                  <div className="limon-kpi-num limon-kpi-foot" style={{ color: '#166534' }}>
+                    1ra {fmtPct(pctPrimeraTotal)}% ({fmtKg(a.kg_primera)} kg)
+                  </div>
+                </div>
+                <div className="limon-kpi-card" style={{ ...cardPrimary, background: '#e0f2fe' }}>
+                  <div className="limon-kpi-label" style={{ ...cardPrimaryLabel, color: '#075985' }}>
+                    Rendimiento bins/parrilla
+                  </div>
+                  <div
+                    className="limon-kpi-num limon-kpi-value"
+                    style={{ ...cardPrimaryValue, color: '#0c4a6e' }}
+                    title={
+                      rendimientoParrilla
+                        ? `${fmtEntero(a.bins_campo)} bins ÷ (${fmtNum(a.parrillas_primera, 2)} parr. 1ra + ${fmtNum(rendimientoParrilla.unidadesSegunda, 2)} bins jugo)`
+                        : undefined
+                    }
+                  >
+                    {fmtRend(rendimientoParrilla?.general ?? null)}
+                  </div>
+                  <div className="limon-kpi-num limon-kpi-foot" style={{ color: '#075985' }}>
+                    solo 1ra {fmtRend(rendimientoParrilla?.soloPrimera ?? null)}
+                  </div>
+                </div>
+                <div className="limon-kpi-card" style={{ ...cardPrimary, background: '#fff7ed' }}>
+                  <div className="limon-kpi-label" style={{ ...cardPrimaryLabel, color: '#9a3412' }}>
+                    Kg reales aprovechados por bin de campo
+                  </div>
+                  <div
+                    className="limon-kpi-num limon-kpi-value"
+                    style={{ ...cardPrimaryValue, color: '#7c2d12' }}
+                  >
                     {fmtKgBin(a.kg_real_por_bin)}
                     {a.kg_real_por_bin != null && (
-                      <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 1 }}> kg</span>
+                      <span style={{ fontSize: 14, fontWeight: 700, marginLeft: 1 }}> kg</span>
                     )}
                   </div>
                   <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
@@ -2120,71 +2184,6 @@ export default function Reportes({ token }: ReportesProps) {
                       <div style={cardStatChipLabel}>Jugo</div>
                       <div className="limon-kpi-num" style={{ ...cardStatChipValue, color: '#9a3412' }}>
                         {fmtKgBin(kgRealPorBin(a.kg_segunda, a.bins_campo))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#f0fdf4' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#166534' }}>Ton / ha</div>
-                  <div className="limon-kpi-num" style={{ ...cardPrimaryValue, color: '#14532d' }}>
-                    {(() => {
-                      const kgHaVal =
-                        a.kg_por_ha != null && a.kg_por_ha !== undefined
-                          ? Number(a.kg_por_ha)
-                          : hectareas
-                            ? a.kg_salida / hectareas
-                            : 0;
-                      const tonHa = kgHaVal / 1000;
-                      return Number.isFinite(tonHa) ? tonHa.toFixed(1) : '—';
-                    })()}
-                  </div>
-                  <div style={{ fontSize: 12, color: '#166534', marginTop: 6, lineHeight: 1.35 }}>
-                    1ra {fmtPct(pctPrimeraTotal)}%{' '}
-                    <span className="limon-kpi-num">({fmtKg(a.kg_primera)} kg)</span>
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#e0f2fe' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#075985' }}>Bins / parrilla</div>
-                  <div className="limon-kpi-num" style={{ ...cardPrimaryValue, color: '#0c4a6e' }}>
-                    {a.bins_por_parrilla != null ? a.bins_por_parrilla : '—'}
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Bins</div>
-                      <div className="limon-kpi-num" style={{ ...cardStatChipValue, color: '#0c4a6e' }}>
-                        {fmtEntero(a.bins_campo)}
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Parr. 1ra</div>
-                      <div className="limon-kpi-num" style={{ ...cardStatChipValue, color: '#0c4a6e' }}>
-                        {a.parrillas_primera != null ? fmtNum(a.parrillas_primera, 2) : '—'}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-                <div style={{ ...cardPrimary, background: '#f5f3ff' }}>
-                  <div style={{ ...cardPrimaryLabel, color: '#5b21b6' }}>Kg producidos</div>
-                  <div className="limon-kpi-num" style={{ ...cardPrimaryValue, color: '#4c1d95', fontSize: 24 }}>
-                    {fmtKg(a.kg_salida)}
-                    <span style={{ fontSize: 15, fontWeight: 700, marginLeft: 2 }}>kg</span>
-                  </div>
-                  <div style={{ fontSize: 12, color: '#6d28d9', marginTop: 4, lineHeight: 1.35 }}>
-                    <span className="limon-kpi-num">1ra {fmtKg(a.kg_primera)}</span>
-                    {' + '}
-                    <span className="limon-kpi-num">jugo {fmtKg(a.kg_segunda)}</span>
-                  </div>
-                  <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Bins campo</div>
-                      <div className="limon-kpi-num" style={{ ...cardStatChipValue, color: '#4c1d95' }}>
-                        {fmtEntero(a.bins_campo)}
-                      </div>
-                    </div>
-                    <div style={cardStatChip}>
-                      <div style={cardStatChipLabel}>Kg/ha</div>
-                      <div className="limon-kpi-num" style={{ ...cardStatChipValue, color: '#4c1d95' }}>
-                        {fmtNum(a.kg_por_ha ?? kgHa(a.kg_salida, hectareas))}
                       </div>
                     </div>
                   </div>
