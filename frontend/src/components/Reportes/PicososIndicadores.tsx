@@ -7,8 +7,8 @@ import {
   textoKgBin,
   textoKilosDeApoyo,
   textoNotaHectareas,
-  textoPesoTeoricoBin,
   textoPorcentaje,
+  textoSubtituloTolva,
   textoRendimiento,
   textoTonHa,
 } from './picososKpi';
@@ -48,6 +48,7 @@ const valueStyle: CSSProperties = {
 export default function PicososTablero({ data }: { data: ReporteCatalogo }) {
   const ind = indicadoresDesdeReporte(data);
   const hayEmpaque = ind.kgConsumido > 0;
+  const subTolva = textoSubtituloTolva(ind);
 
   return (
     <div className="picosos-kpi-grid" style={{ marginBottom: 4 }}>
@@ -126,14 +127,14 @@ export default function PicososTablero({ data }: { data: ReporteCatalogo }) {
         tinta="#334155"
         valorColor="#0f172a"
         titulo="Producto de tolva"
-        valor={textoKgBin(ind.tolvaPorBin)}
-        sufijo={ind.tolvaPorBin != null ? 'kg/bin' : undefined}
-        pie={textoPesoTeoricoBin(ind.pesoTeoricoBinKg)}
-        nota={ind.tolvaAcotadaEnCero ? 'Tope en 0 kg/bin' : undefined}
+        valor={textoPorcentaje(ind.tolvaPorcentaje)}
+        sufijo={ind.tolvaPorcentaje != null ? '%' : undefined}
+        pie={subTolva.kilos ?? subTolva.bin}
+        nota={subTolva.kilos ? subTolva.bin : undefined}
         title={
-          ind.tolvaPorBin != null && ind.pesoTeoricoBinKg != null && ind.kgEfectivosPorBin != null
-            ? `${ind.pesoTeoricoBinKg} kg teóricos − ${ind.kgEfectivosPorBin} kg efectivos`
-            : textoPesoTeoricoBin(ind.pesoTeoricoBinKg)
+          ind.tolvaPorcentaje != null
+            ? `${ind.tolvaPorBin} kg/bin / ${ind.pesoTeoricoBinKg} kg del bin`
+            : subTolva.bin
         }
       />
     </div>
