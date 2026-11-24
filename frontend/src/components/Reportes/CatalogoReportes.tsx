@@ -1,5 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { mensajeError, reporteCatalogo, type ReporteCatalogo } from '../../lib/catalogoApi';
+import PicososTablero from './PicososIndicadores';
+import { usaDashboardPicosos } from './picososKpi';
 
 interface Props {
   token: string;
@@ -120,20 +122,34 @@ function Produccion({
     ...(data.kg_segunda > 0 ? [{ label: '2da', kg: data.kg_segunda, color: '#f9a8d4' }] : []),
   ];
   const totalBar = partes.reduce((s, p) => s + p.kg, 0);
+  const picosos = usaDashboardPicosos(data.codigo, data.nombre);
+  const formasTexto =
+    (data.formas || []).map((f) => `${f.nombre} = ${fmtNum(f.peso_kg, 1)} kg`).join(' · ') ||
+    'Sin formas de cosecha';
 
   return (
     <div style={{ marginTop: 12 }}>
-      <p style={{ fontSize: 13, color: '#64748b' }}>
-        {(data.formas || [])
-          .map((f) => `${f.nombre} = ${fmtNum(f.peso_kg, 1)} kg`)
-          .join(' · ') || 'Sin formas de cosecha'}
-        {data.hectareas ? ` · ${fmtNum(data.hectareas, 2)} ha` : ' · sin hectáreas (ton/ha en blanco)'}
-        . El % de 1ra, de 2da y de cada presentación es sobre los kilos de campo que los empaques de
-        este filtro sí consumieron (cantidad × peso de cada forma), no sobre lo recibido.{' '}
-        <strong>Contenedores / parrilla</strong> y <strong>kg real por contenedor</strong> usan esos
-        mismos contenedores consumidos. Bins y cajas de campo no se suman entre sí. Recibido y
-        pendiente por empacar se muestran aparte; el pendiente es el inventario de campo de ahora.
-      </p>
+      {picosos ? (
+        <p style={{ fontSize: 13, color: '#64748b' }}>
+          {formasTexto}
+          {data.hectareas
+            ? ` · ${fmtNum(data.hectareas, 2)} ha`
+            : ' · hectáreas por cultivo en desarrollo'}
+          . El % de primera y de segunda es sobre los kilos de campo que los empaques de este filtro
+          sí consumieron, no sobre lo recibido ni sobre el pendiente. Bins por parrilla reparte los
+          bins consumidos entre las parrillas de primera y de segunda.
+        </p>
+      ) : (
+        <p style={{ fontSize: 13, color: '#64748b' }}>
+          {formasTexto}
+          {data.hectareas ? ` · ${fmtNum(data.hectareas, 2)} ha` : ' · sin hectáreas (ton/ha en blanco)'}
+          . El % de 1ra, de 2da y de cada presentación es sobre los kilos de campo que los empaques de
+          este filtro sí consumieron (cantidad × peso de cada forma), no sobre lo recibido.{' '}
+          <strong>Contenedores / parrilla</strong> y <strong>kg real por contenedor</strong> usan esos
+          mismos contenedores consumidos. Bins y cajas de campo no se suman entre sí. Recibido y
+          pendiente por empacar se muestran aparte; el pendiente es el inventario de campo de ahora.
+        </p>
+      )}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'end', margin: '8px 0 12px' }}>
         <label style={{ fontSize: 12, color: '#64748b' }}>
           Desde
@@ -158,6 +174,9 @@ function Produccion({
         Rendimiento de {data.nombre} con los empaques de este filtro. Kilos de campo consumidos:{' '}
         {fmtKg(data.kg_consumido)}.
       </p>
+      {picosos ? (
+        <PicososTablero data={data} />
+      ) : (
       <div
         style={{
           display: 'grid',
@@ -252,6 +271,7 @@ function Produccion({
           );
         })}
       </div>
+      )}
 
       <h4 style={{ margin: '16px 0 8px' }}>
         Distribución por tipo de caja (1ra) y 2da calidad — acumulado total
