@@ -1,0 +1,54 @@
+/* Seis indicadores de picosos, todos de la misma altura. 3×2; en pantallas angostas, 2 y luego 1. */
+.picosos-kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+  width: 100%;
+}
+
+@media (max-width: 960px) {
+  .picosos-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .picosos-kpi-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.picosos-kpi-card {
+  height: 148px;
+  min-height: 148px;
+  max-height: 148px;
+  overflow: hidden;
+}
+
+.picosos-kpi-label {
+  font-size: clamp(9px, 0.85vw, 11px);
+  line-height: 1.15;
+  max-height: 2.4em;
+  overflow: hidden;
+}
+
+.picosos-kpi-value {
+  font-size: clamp(18px, 1.55vw, 26px);
+  line-height: 1.05;
+}
+
+.picosos-kpi-foot {
+  margin-top: 4px;
+  font-size: clamp(10px, 0.95vw, 12px);
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.picosos-kpi-num {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
