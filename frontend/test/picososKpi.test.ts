@@ -11,6 +11,7 @@ import {
   textoNotaHectareas,
   textoPesoTeoricoBin,
   textoPorcentaje,
+  textoSubtituloTolva,
   usaDashboardPicosos,
   type PicososKpiInput,
 } from '../src/components/Reportes/picososKpi.ts';
@@ -81,9 +82,11 @@ test('jalapeño 190 kg/bin: las seis tarjetas sobre lo consumido', () => {
   assert.equal(textoNotaHectareas(ind), 'Hectáreas por cultivo en desarrollo');
   cerca(ind.kgEfectivosPorBin, (2200 + 760) / 20, 'kg/bin');
   cerca(ind.tolvaPorBin, 190 - 148, 'tolva');
+  cerca(ind.tolvaPorcentaje, (42 / 190) * 100, 'tolva %');
+  assert.equal(textoPorcentaje(ind.tolvaPorcentaje), '22.11');
   assert.equal(ind.tolvaAcotadaEnCero, false);
   assert.equal(ind.pesoTeoricoBinKg, 190);
-  assert.equal(textoPesoTeoricoBin(ind.pesoTeoricoBinKg), 'Peso teórico bin: 190 kg');
+  assert.deepEqual(textoSubtituloTolva(ind), { kilos: '42 kg/bin', bin: 'Bin teórico: 190 kg' });
   assert.equal(textoPorcentaje(ind.pctPrimera), '57.89');
   assert.equal(textoPorcentaje(ind.pctSegunda), '20.00');
   assert.equal(textoKilosDeApoyo(ind.kgPrimera), '2.2 t');
@@ -107,7 +110,9 @@ test('anaheim 125, caribe 160, poblano 150, fresno 170 y serrano 185', () => {
   cerca(anaheim.binsPorParrilla, 8 / 3, 'anaheim bins/parrilla');
   cerca(anaheim.kgEfectivosPorBin, 75, 'anaheim kg/bin');
   cerca(anaheim.tolvaPorBin, 50, 'anaheim tolva');
-  assert.equal(textoPesoTeoricoBin(125), 'Peso teórico bin: 125 kg');
+  cerca(anaheim.tolvaPorcentaje, 40, 'anaheim tolva %');
+  assert.equal(textoPorcentaje(anaheim.tolvaPorcentaje), '40.00');
+  assert.deepEqual(textoSubtituloTolva(anaheim), { kilos: '50 kg/bin', bin: 'Bin teórico: 125 kg' });
 
   const caribe = indicadoresPicosos(caso({
     kgPrimera: 240,
@@ -125,7 +130,7 @@ test('anaheim 125, caribe 160, poblano 150, fresno 170 y serrano 185', () => {
   cerca(caribe.binsPorParrilla, 4 / 3, 'caribe bins/parrilla');
   cerca(caribe.kgEfectivosPorBin, 80, 'caribe kg/bin');
   cerca(caribe.tolvaPorBin, 80, 'caribe tolva');
-  assert.equal(textoPesoTeoricoBin(160), 'Peso teórico bin: 160 kg');
+  assert.equal(textoPesoTeoricoBin(160), 'Bin teórico: 160 kg');
 
   const poblano = indicadoresPicosos(caso({
     kgPrimera: 360,
@@ -147,7 +152,7 @@ test('anaheim 125, caribe 160, poblano 150, fresno 170 y serrano 185', () => {
   assert.equal(poblano.hectareasReservadas, false);
   cerca(poblano.tonPorHa, 0.54 / 3, 'poblano t/ha');
   assert.equal(textoNotaHectareas(poblano), '0.54 t · 3 ha');
-  assert.equal(textoPesoTeoricoBin(150), 'Peso teórico bin: 150 kg');
+  assert.equal(textoPesoTeoricoBin(150), 'Bin teórico: 150 kg');
 
   const fresno = indicadoresPicosos(caso({
     kgPrimera: 400,
@@ -165,7 +170,7 @@ test('anaheim 125, caribe 160, poblano 150, fresno 170 y serrano 185', () => {
   cerca(fresno.binsPorParrilla, 5 / 3, 'fresno bins/parrilla');
   cerca(fresno.kgEfectivosPorBin, 100, 'fresno kg/bin');
   cerca(fresno.tolvaPorBin, 70, 'fresno tolva');
-  assert.equal(textoPesoTeoricoBin(170), 'Peso teórico bin: 170 kg');
+  assert.equal(textoPesoTeoricoBin(170), 'Bin teórico: 170 kg');
 
   const serrano = indicadoresPicosos(caso({
     kgPrimera: 180,
@@ -183,7 +188,7 @@ test('anaheim 125, caribe 160, poblano 150, fresno 170 y serrano 185', () => {
   cerca(serrano.binsPorParrilla, 1, 'serrano bins/parrilla');
   cerca(serrano.kgEfectivosPorBin, 125, 'serrano kg/bin');
   cerca(serrano.tolvaPorBin, 60, 'serrano tolva');
-  assert.equal(textoPesoTeoricoBin(185), 'Peso teórico bin: 185 kg');
+  assert.equal(textoPesoTeoricoBin(185), 'Bin teórico: 185 kg');
 });
 
 test('el porcentaje usa el consumo del empaque, no un inventario más grande', () => {
@@ -240,9 +245,10 @@ test('sin empaque, sin bins y sin peso teórico', () => {
   assert.equal(vacio.binsPorParrilla, null);
   assert.equal(vacio.kgEfectivosPorBin, null);
   assert.equal(vacio.tolvaPorBin, null);
+  assert.equal(vacio.tolvaPorcentaje, null);
   assert.equal(vacio.hectareasReservadas, true);
   assert.equal(vacio.pesoTeoricoBinKg, 190);
-  assert.equal(textoPesoTeoricoBin(vacio.pesoTeoricoBinKg), 'Peso teórico bin: 190 kg');
+  assert.deepEqual(textoSubtituloTolva(vacio), { kilos: null, bin: 'Bin teórico: 190 kg' });
   assert.equal(textoPorcentaje(null), '—');
 
   const sinBins = indicadoresPicosos(caso({
@@ -257,7 +263,8 @@ test('sin empaque, sin bins y sin peso teórico', () => {
   assert.equal(sinBins.binsPorParrilla, null);
   assert.equal(sinBins.kgEfectivosPorBin, null);
   assert.equal(sinBins.tolvaPorBin, null);
-  assert.equal(textoPesoTeoricoBin(sinBins.pesoTeoricoBinKg), 'Peso teórico bin: 170 kg');
+  assert.equal(sinBins.tolvaPorcentaje, null);
+  assert.deepEqual(textoSubtituloTolva(sinBins), { kilos: null, bin: 'Bin teórico: 170 kg' });
 
   const shishito = indicadoresPicosos(caso({
     kgPrimera: 180,
@@ -276,7 +283,9 @@ test('sin empaque, sin bins y sin peso teórico', () => {
   cerca(shishito.binsPorParrilla, 1.5, 'shishito bins/parrilla');
   assert.equal(shishito.pesoTeoricoBinKg, null);
   assert.equal(shishito.tolvaPorBin, null);
-  assert.equal(textoPesoTeoricoBin(null), 'Sin peso teórico de bin');
+  assert.equal(shishito.tolvaPorcentaje, null);
+  assert.equal(textoPorcentaje(shishito.tolvaPorcentaje), '—');
+  assert.deepEqual(textoSubtituloTolva(shishito), { kilos: null, bin: 'Sin peso teórico de bin' });
   assert.deepEqual(productoTolvaPorBin(null, 80), { kgPorBin: null, acotadoEnCero: false });
   assert.deepEqual(productoTolvaPorBin(170, null), { kgPorBin: null, acotadoEnCero: false });
 });
@@ -321,8 +330,10 @@ test('si el efectivo supera el peso teórico, la tolva queda en 0', () => {
   }));
   cerca(ind.kgEfectivosPorBin, 150, 'kg/bin por encima del bin');
   assert.equal(ind.tolvaPorBin, 0);
+  assert.equal(ind.tolvaPorcentaje, 0);
+  assert.equal(textoPorcentaje(ind.tolvaPorcentaje), '0.00');
   assert.equal(ind.tolvaAcotadaEnCero, true);
-  assert.equal(textoPesoTeoricoBin(125), 'Peso teórico bin: 125 kg');
+  assert.deepEqual(textoSubtituloTolva(ind), { kilos: '0 kg/bin', bin: 'Bin teórico: 125 kg' });
 
   const exacto = indicadoresPicosos(caso({
     kgPrimera: 100,
@@ -333,7 +344,10 @@ test('si el efectivo supera el peso teórico, la tolva queda en 0', () => {
     pesoTeoricoBinKg: 190,
   }));
   assert.equal(exacto.tolvaPorBin, 0);
+  assert.equal(exacto.tolvaPorcentaje, 0);
+  assert.equal(textoPorcentaje(exacto.tolvaPorcentaje), '0.00');
   assert.equal(exacto.tolvaAcotadaEnCero, false);
+  assert.deepEqual(textoSubtituloTolva(exacto), { kilos: '0 kg/bin', bin: 'Bin teórico: 190 kg' });
 });
 
 test('el reporte lee el peso de la forma bins y no cuenta otras formas', () => {
@@ -381,8 +395,9 @@ test('el reporte lee el peso de la forma bins y no cuenta otras formas', () => {
   cerca(jalapeno.binsPorParrilla, 10 / 3, 'no usa las cajas de campo');
   cerca(jalapeno.kgEfectivosPorBin, 110, 'kg/bin');
   cerca(jalapeno.tolvaPorBin, 80, 'tolva');
+  cerca(jalapeno.tolvaPorcentaje, (80 / 190) * 100, 'tolva %');
   cerca(jalapeno.pctPrimera, (800 / 1900) * 100, '% 1ra del reporte');
-  assert.equal(textoPesoTeoricoBin(jalapeno.pesoTeoricoBinKg), 'Peso teórico bin: 190 kg');
+  assert.deepEqual(textoSubtituloTolva(jalapeno), { kilos: '80 kg/bin', bin: 'Bin teórico: 190 kg' });
 });
 
 function nulasInput(ind: { kgPrimera: number; kgSegunda: number; kgConsumido: number; binsConsumidos: number; pesoTeoricoBinKg: number | null }): PicososKpiInput {

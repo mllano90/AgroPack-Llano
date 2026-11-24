@@ -7,6 +7,7 @@
  * Cada parrilla sale de cajas ÷ cajas_por_parrilla de esa presentación.
  * Kg efectivos por bin = (kg 1ra + kg 2da) ÷ bins consumidos.
  * Tolva por bin = peso teórico del bin − kg efectivos, nunca negativo.
+ * En la tarjeta, el número grande es ese kilo como % del peso teórico.
  * Ton/ha queda reservada mientras el cultivo no tenga hectáreas > 0.
  *
  * Tomatillo no usa este tablero. Limón y melón tampoco pasan por aquí.
@@ -42,6 +43,8 @@ export interface PicososIndicadores {
   hectareasReservadas: boolean;
   kgEfectivosPorBin: number | null;
   tolvaPorBin: number | null;
+  /** tolvaPorBin / peso teórico × 100. null si falta el peso o no hay bins. */
+  tolvaPorcentaje: number | null;
   /** true solo cuando el empacado superó el peso teórico y se acotó a 0. */
   tolvaAcotadaEnCero: boolean;
   pesoTeoricoBinKg: number | null;
@@ -203,6 +206,18 @@ export function productoTolvaPorBin(
   return { kgPorBin: bruto, acotadoEnCero: false };
 }
 
+/** Porcentaje de tolva sobre el peso teórico del bin. 0 si el efectivo lo alcanza o lo supera. */
+export function porcentajeTolva(
+  tolvaKgPorBin: number | null,
+  pesoTeorico: number | null
+): number | null {
+  const peso = numeroPositivo(pesoTeorico);
+  if (peso == null || tolvaKgPorBin == null) return null;
+  const kg = numeroFinito(tolvaKgPorBin);
+  if (kg == null || kg < 0) return null;
+  return (kg / peso) * 100;
+}
+
 export function toneladasPorHectarea(
   kgPrimera: number,
   kgSegunda: number,
@@ -245,6 +260,7 @@ export function indicadoresPicosos(input: PicososKpiInput): PicososIndicadores {
     hectareasReservadas: ton.reservada,
     kgEfectivosPorBin: kgEfectivos,
     tolvaPorBin: tolva.kgPorBin,
+    tolvaPorcentaje: porcentajeTolva(tolva.kgPorBin, peso),
     tolvaAcotadaEnCero: tolva.acotadoEnCero,
     pesoTeoricoBinKg: peso,
   };
@@ -315,7 +331,23 @@ export function textoTonHa(n: number | null): string {
 export function textoPesoTeoricoBin(peso: number | null): string {
   if (peso == null || !Number.isFinite(peso) || peso <= 0) return 'Sin peso teórico de bin';
   const texto = peso.toLocaleString('en-US', { maximumFractionDigits: 1 });
-  return `Peso teórico bin: ${texto} kg`;
+  return `Bin teórico: ${texto} kg`;
+}
+
+/**
+ * Subtítulo de la tarjeta de tolva, en una o dos líneas cortas.
+ * Con bins y peso: kilos de tolva y el bin teórico.
+ * Sin bins: solo el bin teórico. Sin peso: el aviso, sin kilos.
+ */
+export function textoSubtituloTolva(ind: Pick<PicososIndicadores, 'tolvaPorBin' | 'pesoTeoricoBinKg'>): {
+  kilos: string | null;
+  bin: string;
+} {
+  const bin = textoPesoTeoricoBin(ind.pesoTeoricoBinKg);
+  if (ind.pesoTeoricoBinKg == null || ind.tolvaPorBin == null) {
+    return { kilos: null, bin };
+  }
+  return { kilos: `${textoKgBin(ind.tolvaPorBin)} kg/bin`, bin };
 }
 
 export function textoNotaHectareas(ind: Pick<
