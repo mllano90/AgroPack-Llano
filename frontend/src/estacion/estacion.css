@@ -387,6 +387,11 @@
 
 /* ---------- interior caja (Config admin) */
 .estacion-root .bloque-caja .caja-vals{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+.estacion-root .caja-val.ancho{grid-column:1 / -1}
+.estacion-root .caja-val .rocio{font-size:.78rem;font-style:normal;color:var(--tenue)}
+.estacion-root .caja-val.riesgo-bajo b{color:var(--verde)}
+.estacion-root .caja-val.riesgo-medio b{color:var(--ambar)}
+.estacion-root .caja-val.riesgo-alto b{color:var(--rojo)}
 .estacion-root .caja-val{display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:12px;background:rgba(0,0,0,.28);border:1px solid rgba(140,255,190,.16)}
 .estacion-root button.caja-val{appearance:none;-webkit-appearance:none;font:inherit;color:inherit;text-align:left;cursor:pointer;width:100%;-webkit-tap-highlight-color:transparent}
 .estacion-root button.caja-val:hover{border-color:rgba(140,255,190,.5)}

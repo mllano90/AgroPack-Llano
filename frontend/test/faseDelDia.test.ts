@@ -154,7 +154,9 @@ test('la caja se abre desde Configuración y el texto de ambiente coincide con e
   assert.match(escena, /en-pausa/);
   assert.match(hist, /t_caja/);
   assert.match(hist, /h_caja/);
-  assert.doesNotMatch(readFileSync('src/estacion/Inicio.tsx', 'utf8'), /IND\.t_caja|IND\.h_caja/);
+  assert.match(hist, /Condensación caja/);
+  assert.match(cfg, /Condensación/);
+  assert.doesNotMatch(readFileSync('src/estacion/Inicio.tsx', 'utf8'), /IND\.t_caja|IND\.h_caja|caja_condensacion|Condensación/);
 });
 
 test('la escena usa una ficha y apaga el bucle al desmontarse', () => {

@@ -10,13 +10,14 @@ const VARS: [string, string, string, number][] = [
   ['t_aire', 'Temp. aire', '°C', 1], ['h_aire', 'Hum. aire', '%', 0], ['pir', 'Radiación', 'W/m²', 0],
   ['par', 'Luz PAR', 'µmol/m²/s', 0],
   ['t_caja', 'Temp. caja', '°C', 1], ['h_caja', 'Hum. caja', '%', 0],
+  ['caja_condensacion_pct', 'Condensación caja', '%', 1],
   ['t_suelo', 'Temp. suelo', '°C', 1], ['h_suelo', 'Hum. suelo', '%', 0], ['ph', 'pH', '', 1],
   ['ec', 'CE', 'dS/m', 2], ['n', 'N', 'mg/kg', 0], ['p', 'P', 'mg/kg', 0], ['k', 'K', 'mg/kg', 0],
   ['t1', 'T Aire1', '°C', 1], ['t2', 'T Aire2', '°C', 1],
   ['h1', 'H Aire1', '%', 0], ['h2', 'H Aire2', '%', 0], ['rssi', 'RSSI', 'dBm', 0],
 ];
 const RANGOS: [string, string][] = [['24h', '24 h'], ['7d', '7 d'], ['30d', '30 d'], ['365d', '1 año']];
-const esCaja = (v: string) => v === 't_caja' || v === 'h_caja';
+const esCaja = (v: string) => v === 't_caja' || v === 'h_caja' || v === 'caja_condensacion_pct';
 
 /** Historial con líneas de rango. La caja interna (XY-MD01) la ven admin y usuario normal. */
 export default function Historial() {
@@ -67,7 +68,8 @@ export default function Historial() {
         {error && <p className="error-login">{error}</p>}
         {datos && n > 0 ? (
           <GraficaHist datos={datos} unidad={def[2]} dec={dec} banda={rango !== '24h'} umbral={umbral}
-            principal={{ v: def[0], nombre: def[1], color: '#2fe07a' }} />
+            yEscala={def[0] === 'caja_condensacion_pct' ? { min: 0, max: 100 } : undefined}
+            principal={{ v: def[0], nombre: def[1], color: def[0] === 'caja_condensacion_pct' ? '#7ec8ff' : '#2fe07a' }} />
         ) : <div className="grafica"><div className="mh-vacio">{datos ? 'Sin datos en este rango' : 'Cargando…'}</div></div>}
       </div>
       <BloqueReporte />

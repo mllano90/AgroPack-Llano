@@ -104,6 +104,7 @@ export default function ModalHistorial({ def, umbral, rangoBanda = true, luz, al
         {r && datos ? (
           <GraficaHist className="mh-grafica" datos={datos} datosExtras={extras} unidad={def.unidad} dec={def.dec}
             banda={rango === '7d' || rango === '30d'} extras={def.extras} umbral={umbral} rangoBanda={rangoBanda}
+            yEscala={def.yFija}
             principal={{ v: def.v, nombre: def.extras ? 'Promedio' : def.corto, color: def.color }} />
         ) : (
           <div className="grafica mh-grafica mh-vacia"><div className="mh-vacio">{cargando ? 'Cargando…' : error ? error : 'Sin datos en este rango'}</div></div>

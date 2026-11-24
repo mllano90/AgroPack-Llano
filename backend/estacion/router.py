@@ -266,7 +266,7 @@ async def historial(request: Request, var: str = "t_aire", rango: str = "24h",
 MAX_FILAS_CSV = 50000
 CSV_COLS = ["ts", "seq", "tipo", "t1", "h1", "e_a1", "t2", "h2", "e_a2", "pir", "e_pir", "t_suelo", "h_suelo",
             "e_suelo", "ts_suelo", "ec", "ph", "n", "p", "k", "n_npk", "edad_npk", "ts_npk", "rssi", "snr", "csv",
-            "e_int", "t_int", "h_int"]
+            "e_int", "t_int", "h_int", "caja_condensacion_pct"]
 
 
 def _hora(ts):

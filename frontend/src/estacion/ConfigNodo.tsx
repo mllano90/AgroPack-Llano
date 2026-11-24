@@ -117,6 +117,18 @@ function CalibracionPar({ cfg, setCfg, ultimo }: {
   );
 }
 
+function pctTxt(p: number): string {
+  const r = Math.round(p * 10) / 10;
+  return Number.isInteger(r) ? String(r) : r.toFixed(1);
+}
+
+function riesgoCond(p: number | null | undefined): string {
+  if (p == null) return 'bajo';
+  if (p >= 70) return 'alto';
+  if (p >= 35) return 'medio';
+  return 'bajo';
+}
+
 /** Configuración de nodo: solo admin. La caja no se muestra en Inicio. */
 export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
   ultimo: Ultimo | null; alGuardar: () => void; alSalir: () => void;
@@ -171,6 +183,12 @@ export default function ConfigNodo({ ultimo, alGuardar, alSalir }: {
             onClick={() => setHist(IND.h_caja)} aria-haspopup="dialog" aria-label="Humedad de la caja. Ver historial">
             <span>Humedad</span>
             <b>{hayCaja && caja!.ok ? <>{num(caja!.h, 0)}<small> %</small></> : (hayCaja ? (caja!.error || 'Error') : '—')}</b>
+          </button>
+          <button type="button" className={'caja-val ancho riesgo-' + riesgoCond(ultimo?.caja_condensacion_pct)}
+            onClick={() => setHist(IND.caja_condensacion_pct)} aria-haspopup="dialog" aria-label="Condensación de la caja. Ver historial">
+            <span>Condensación</span>
+            <b>{ultimo?.caja_condensacion_pct == null ? '—' : <>{pctTxt(ultimo.caja_condensacion_pct)}<small> %</small></>}</b>
+            <em className="rocio">{ultimo?.caja_punto_rocio == null ? 'Rocío —' : `Rocío ${num(ultimo.caja_punto_rocio, 1)} °C`}</em>
           </button>
         </div>
         {!hayCaja && <p className="tenue chico">Aún sin lectura en vivo{caja?.codigo != null ? ` (código ${caja.codigo})` : ''}. El historial abre las lecturas guardadas.</p>}

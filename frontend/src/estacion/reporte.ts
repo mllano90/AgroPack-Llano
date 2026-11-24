@@ -160,7 +160,7 @@ function grafica(g: CanvasRenderingContext2D, d: Reporte, v: string, x: number, 
           afterBuildTicks: sc => { sc.ticks = marcas(); },
           ticks: { ...tick, autoSkip: false, maxRotation: 0, callback: val => fx(Number(val)) },
           title: { display: true, text: d.rango === '24h' ? 'Hora (Hermosillo)' : 'Fecha (Hermosillo)', ...tick } },
-        y: { ...ejeConRango(info.umbral), grid: { color: '#edf1ee' }, ticks: tick, title: { display: true, text: u || v.toUpperCase(), ...tick } },
+        y: { ...ejeConRango(info.umbral), ...(v === 'caja_condensacion_pct' ? { min: 0, max: 100 } : {}), grid: { color: '#edf1ee' }, ticks: tick, title: { display: true, text: u || v.toUpperCase(), ...tick } },
       },
       plugins: {
         annotation: { annotations: anotacionesRango(info.umbral, u, dec(v), { banda: d.rango_banda !== false, claro: true, letra: 18, grosor: 2.5 }) },

@@ -29,6 +29,7 @@ class Lectura(Base):
     e_a2 = Column(Integer, nullable=False); t2 = Column(Float); h2 = Column(Float)
     # Caja interna (paquete de 27). NULL en paquetes de 23/24 campos. No entra al aire.
     e_int = Column(Integer); t_int = Column(Float); h_int = Column(Float)
+    caja_condensacion_pct = Column(Float)   # 0–100; NULL si esa lectura no trae T y RH de caja
     e_pir = Column(Integer, nullable=False); pir = Column(Float)
     e_suelo = Column(Integer, nullable=False); h_suelo = Column(Float); t_suelo = Column(Float)
     ts_suelo = Column(BigInteger)
@@ -50,7 +51,7 @@ class AgregadoHora(Base):
     __tablename__ = "estacion_agregados_hora"
     nodo = Column(String(32), primary_key=True)
     hora = Column(BigInteger, primary_key=True)                  # epoch del inicio de la hora (UTC)
-    var = Column(String(16), primary_key=True)
+    var = Column(String(32), primary_key=True)
     prom = Column(Float, nullable=False); vmin = Column(Float, nullable=False); vmax = Column(Float, nullable=False)
     n = Column(Integer, nullable=False)
 
@@ -160,6 +161,36 @@ def crear_tablas(engine):
         for nombre, tipo in (("e_int", "INTEGER"), ("t_int", tipo_num), ("h_int", tipo_num)):
             if nombre not in columnas:
                 conn.execute(text(f"ALTER TABLE estacion_lecturas ADD COLUMN {nombre} {tipo}"))
+        # Postgres acepta IF NOT EXISTS. El SQLite de este entorno (3.45) rechaza esa cláusula en ADD COLUMN.
+        if engine.dialect.name == "postgresql":
+            conn.execute(text(
+                "ALTER TABLE estacion_lecturas ADD COLUMN IF NOT EXISTS caja_condensacion_pct DOUBLE PRECISION"))
+        elif "caja_condensacion_pct" not in columnas:
+            conn.execute(text("ALTER TABLE estacion_lecturas ADD COLUMN caja_condensacion_pct REAL"))
+        from .condensacion import rellenar_condensacion
+
+        class _Cx:
+            def todos(self, sql, params=()):
+                from .db import Cx
+                q, p = Cx._sql(sql, params)
+                return [dict(r._mapping) for r in conn.execute(q, p)]
+
+            def ejecutar(self, sql, params=()):
+                from .db import Cx
+                q, p = Cx._sql(sql, params)
+                return conn.execute(q, p).rowcount
+
+        rellenar_condensacion(_Cx())
+        if "ts" in columnas and insp.has_table("estacion_agregados_hora"):
+            if engine.dialect.name == "postgresql":
+                conn.execute(text("ALTER TABLE estacion_agregados_hora ALTER COLUMN var TYPE VARCHAR(32)"))
+            conn.execute(text(
+                "INSERT INTO estacion_agregados_hora (nodo, hora, var, prom, vmin, vmax, n) "
+                "SELECT nodo, (ts / 3600) * 3600, 'caja_condensacion_pct', "
+                "AVG(caja_condensacion_pct), MIN(caja_condensacion_pct), MAX(caja_condensacion_pct), COUNT(*) "
+                "FROM estacion_lecturas WHERE caja_condensacion_pct IS NOT NULL "
+                "GROUP BY nodo, (ts / 3600) * 3600 "
+                "ON CONFLICT (nodo, hora, var) DO NOTHING"))
         largo = getattr(columnas.get("csv", {}).get("type"), "length", None)
         if engine.dialect.name == "postgresql" and largo is not None and largo < 160:
             conn.execute(text("ALTER TABLE estacion_lecturas ALTER COLUMN csv TYPE VARCHAR(160)"))

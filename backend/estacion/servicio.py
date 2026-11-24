@@ -6,6 +6,7 @@ import time
 
 from . import config as cfgmod
 from .ajustes import ajustes
+from .condensacion import condensacion_pct, punto_rocio
 from .paquete import PaqueteInvalido, decodificar, parsear, texto_error
 
 RE_NODO = re.compile(r"^[A-Za-z0-9_-]{1,32}$")
@@ -233,6 +234,7 @@ def validar_registro(reg, nodo, t_servidor):
             "ts_rx": rx or None, "ts_servidor": t_servidor, "rssi": rssi, "snr": float(snr) if snr is not None else None,
             "e_a1": p["e_a1"], "t1": d["t1"], "h1": d["h1"], "e_a2": p["e_a2"], "t2": d["t2"], "h2": d["h2"],
             "e_int": d["e_int"], "t_int": d["t_int"], "h_int": d["h_int"],
+            "caja_condensacion_pct": condensacion_pct(d["t_int"], d["h_int"]),
             "e_pir": p["e_pir"], "pir": d["pir"], "e_suelo": p["e_suelo"], "h_suelo": d["h_suelo"],
             "t_suelo": d["t_suelo"], "ts_suelo": d["ts_suelo"], "suelo_nuevo": 0,
             "ec": d["ec"], "ph": d["ph"], "n": d["n"], "p": d["p"], "k": d["k"], "n_npk": p["n_npk"],
@@ -243,7 +245,7 @@ def validar_registro(reg, nodo, t_servidor):
 
 
 COLS = ["uid", "nodo", "tipo", "seq", "ts", "ts_emisora", "ts_rx", "ts_servidor", "rssi", "snr", "e_a1", "t1", "h1",
-        "e_a2", "t2", "h2", "e_int", "t_int", "h_int", "e_pir", "pir", "e_suelo", "h_suelo", "t_suelo", "ts_suelo",
+        "e_a2", "t2", "h2", "e_int", "t_int", "h_int", "caja_condensacion_pct", "e_pir", "pir", "e_suelo", "h_suelo", "t_suelo", "ts_suelo",
         "suelo_nuevo", "ec", "ph", "n", "p", "k", "n_npk", "edad_npk", "ts_npk", "npk_nuevo", "fase", "min_fase",
         "tot_fase", "csv"]
 SQL_INSERT = (f"INSERT INTO estacion_lecturas ({', '.join(COLS)}) VALUES ({', '.join('?' * len(COLS))}) "
@@ -739,7 +741,8 @@ def ultimo(cx, nodo, t=None):
     factor = cfgmod.factor_par(cfg)
     base = {"nodo": nodo, "nombre_nodo": cfg["nombre_nodo"], "ahora": t, "alertas_activas": n_alertas,
             "offline_min": cfg["offline_min"], "receptora": est, "umbrales": cfg["umbrales"],
-            "factor_par": factor, "par_actual": None, "dli_hoy": dli_hoy(cx, nodo, t, factor)}
+            "factor_par": factor, "par_actual": None, "dli_hoy": dli_hoy(cx, nodo, t, factor),
+            "caja_condensacion_pct": None, "caja_punto_rocio": None}
     if not r:
         return dict(base, hay_datos=False, en_linea=False)
     sensor = lambda e, **v: {"ok": e == 0, "error": None if e == 0 else texto_error(e), "codigo": e, **v}
@@ -750,11 +753,17 @@ def ultimo(cx, nodo, t=None):
         npk = {"ec": r["ec"], "ph": r["ph"], "n": r["n"], "p": r["p"], "k": r["k"], "ts": r["ts_npk"],
                "n_npk": r["n_npk"]}
     ult_c = cx.uno("SELECT ts, n_npk FROM estacion_lecturas WHERE nodo = ? AND tipo = 'C' ORDER BY ts DESC LIMIT 1", (nodo,))
+    td = punto_rocio(r.get("t_int"), r.get("h_int"))
+    pct = r.get("caja_condensacion_pct")
+    if pct is None:
+        pct = condensacion_pct(r.get("t_int"), r.get("h_int"))
     return dict(base, hay_datos=True, en_linea=(t - r["ts"]) <= cfg["offline_min"] * 60,
                 ts=r["ts"], ts_servidor=r["ts_servidor"], sin_hora_emisora=r["ts_emisora"] == 0, seq=r["seq"],
                 tipo=r["tipo"], rssi=r["rssi"], snr=r["snr"],
                 aire={"a1": a1, "a2": a2, "t": _prom(r["t1"], r["t2"]), "h": _prom(r["h1"], r["h2"])},
                 interno=None if r.get("e_int") is None else sensor(r["e_int"], t=r["t_int"], h=r["h_int"]),
+                caja_condensacion_pct=pct,
+                caja_punto_rocio=None if td is None else round(td, 1),
                 pir=sensor(r["e_pir"], v=r["pir"]),
                 par_actual=None if r["pir"] is None or r["e_pir"] != 0 else round(float(r["pir"]) * factor, 1),
                 suelo=sensor(r["e_suelo"], t=r["t_suelo"], h=r["h_suelo"], ts=r["ts_suelo"]),
@@ -774,6 +783,7 @@ VARS_HIST = {
     "n": ("n", "ts_npk", "AND npk_nuevo = 1"), "p": ("p", "ts_npk", "AND npk_nuevo = 1"),
     "k": ("k", "ts_npk", "AND npk_nuevo = 1"),
     "t_caja": ("t_int", "ts", ""), "h_caja": ("h_int", "ts", ""),
+    "caja_condensacion_pct": ("caja_condensacion_pct", "ts", ""),
     "rssi": ("rssi", "ts", ""), "snr": ("snr", "ts", ""),
     # Luz PAR: la misma serie del piranómetro, escalada por factor_par al armar la respuesta.
     "par": ("pir", "ts", ""),
@@ -784,7 +794,7 @@ RANGOS = {   # rango: (duración s, paso s, fuente)
     "90d": (90 * 86400, 21600, "hora"), "365d": (365 * 86400, 86400, "hora"),
 }
 # Historial de la caja interna (XY-MD01). Cualquier usuario de la estación puede leerlas.
-VARS_CAJA = {"t_caja", "h_caja"}
+VARS_CAJA = {"t_caja", "h_caja", "caja_condensacion_pct"}
 # Segundos máximos entre dos lecturas seguidas que aún cuentan como “se mantuvo”.
 # Un hueco mayor (emisora callada, ciclo sin muestra) no suma tiempo.
 _HUECO_RAPIDO_S = 10 * 60     # aire, radiación, caja: paquete ~2 min
@@ -793,7 +803,8 @@ _HUECO_NPK_S = 75 * 60        # CE, pH y NPK: un ciclo ~30 min
 HUECO_EXTREMO_S = {
     "t_aire": _HUECO_RAPIDO_S, "h_aire": _HUECO_RAPIDO_S, "pir": _HUECO_RAPIDO_S,
     "t1": _HUECO_RAPIDO_S, "t2": _HUECO_RAPIDO_S, "h1": _HUECO_RAPIDO_S, "h2": _HUECO_RAPIDO_S,
-    "t_caja": _HUECO_RAPIDO_S, "h_caja": _HUECO_RAPIDO_S, "rssi": _HUECO_RAPIDO_S, "snr": _HUECO_RAPIDO_S,
+    "t_caja": _HUECO_RAPIDO_S, "h_caja": _HUECO_RAPIDO_S, "caja_condensacion_pct": _HUECO_RAPIDO_S,
+    "rssi": _HUECO_RAPIDO_S, "snr": _HUECO_RAPIDO_S,
     "par": _HUECO_RAPIDO_S,
     "t_suelo": _HUECO_SUELO_S, "h_suelo": _HUECO_SUELO_S,
     "ec": _HUECO_NPK_S, "ph": _HUECO_NPK_S, "n": _HUECO_NPK_S, "p": _HUECO_NPK_S, "k": _HUECO_NPK_S,
@@ -804,14 +815,15 @@ _MUESTRA_NPK_S = 30 * 60
 MUESTRA_EXTREMO_S = {
     "t_aire": _MUESTRA_RAPIDA_S, "h_aire": _MUESTRA_RAPIDA_S, "pir": _MUESTRA_RAPIDA_S,
     "t1": _MUESTRA_RAPIDA_S, "t2": _MUESTRA_RAPIDA_S, "h1": _MUESTRA_RAPIDA_S, "h2": _MUESTRA_RAPIDA_S,
-    "t_caja": _MUESTRA_RAPIDA_S, "h_caja": _MUESTRA_RAPIDA_S, "rssi": _MUESTRA_RAPIDA_S, "snr": _MUESTRA_RAPIDA_S,
+    "t_caja": _MUESTRA_RAPIDA_S, "h_caja": _MUESTRA_RAPIDA_S, "caja_condensacion_pct": _MUESTRA_RAPIDA_S,
+    "rssi": _MUESTRA_RAPIDA_S, "snr": _MUESTRA_RAPIDA_S,
     "par": _MUESTRA_RAPIDA_S,
     "t_suelo": _MUESTRA_SUELO_S, "h_suelo": _MUESTRA_SUELO_S,
     "ec": _MUESTRA_NPK_S, "ph": _MUESTRA_NPK_S, "n": _MUESTRA_NPK_S, "p": _MUESTRA_NPK_S, "k": _MUESTRA_NPK_S,
 }
 DECIMALES_VISTA = {
     "t_aire": 1, "h_aire": 0, "pir": 0, "t1": 1, "t2": 1, "h1": 0, "h2": 0,
-    "t_caja": 1, "h_caja": 0, "t_suelo": 1, "h_suelo": 0, "par": 0,
+    "t_caja": 1, "h_caja": 0, "caja_condensacion_pct": 1, "t_suelo": 1, "h_suelo": 0, "par": 0,
     "ec": 2, "ph": 1, "n": 0, "p": 0, "k": 0, "rssi": 0, "snr": 1,
 }
 BANDAS_DIA = {"t_aire": 0.3, "h_aire": 1.0, "pir": 20.0, "t_suelo": 0.3, "h_suelo": 1.0,
@@ -1041,7 +1053,8 @@ def resumen_dia(cx, nodo, t=None):
 
 ORDEN_REPORTE = ["t_aire", "h_aire", "pir", "t_suelo", "h_suelo", "ec", "ph", "n", "p", "k"]
 EXTRAS_REPORTE = {"t_aire": ["t1", "t2"], "h_aire": ["h1", "h2"]}
-NOMBRE_CAJA = {"t_caja": ("Temp. caja", "°C"), "h_caja": ("Hum. caja", "%"), "par": ("Luz PAR", "µmol/m²/s")}
+NOMBRE_CAJA = {"t_caja": ("Temp. caja", "°C"), "h_caja": ("Hum. caja", "%"),
+               "caja_condensacion_pct": ("Condensación caja", "%"), "par": ("Luz PAR", "µmol/m²/s")}
 
 
 def _resumen_puntos(pts, umbral):
@@ -1070,7 +1083,7 @@ def reporte(cx, nodo, rango, incluir_caja=False, t=None):
     i = orden.index("pir") + 1
     orden[i:i] = ["par"]
     if incluir_caja:
-        orden[i:i] = ["t_caja", "h_caja"]
+        orden[i:i] = ["t_caja", "h_caja", "caja_condensacion_pct"]
     variables = {}
     cab = None
     for var in orden:
@@ -1148,7 +1161,7 @@ def procesar_nuevas(cx, t=None, max_filas=5000):
 
 
 VARS_AGREGADAS = ["pir", "t_aire", "h_aire", "t1", "t2", "h1", "h2", "t_suelo", "h_suelo", "ph", "ec", "n", "p", "k",
-                  "t_caja", "h_caja", "rssi", "snr"]
+                  "t_caja", "h_caja", "caja_condensacion_pct", "rssi", "snr"]
 
 
 def reagregar(cx, nodo, desde, hasta):

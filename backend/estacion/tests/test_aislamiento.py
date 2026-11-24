@@ -143,7 +143,7 @@ def test_tabla_vieja_recibe_columnas_de_caja(tmp_path):
         c.execute(text("CREATE TABLE estacion_lecturas (id INTEGER PRIMARY KEY, csv VARCHAR(128) NOT NULL)"))
     crear_tablas(motor)
     cols = {c["name"] for c in inspect(motor).get_columns("estacion_lecturas")}
-    assert {"e_int", "t_int", "h_int"} <= cols
+    assert {"e_int", "t_int", "h_int", "caja_condensacion_pct"} <= cols
 
 
 def test_sin_variables_ingesta_cerrada_y_proceso_sigue(tmp_path, monkeypatch):
@@ -170,7 +170,7 @@ def test_no_importa_modulos_ajenos():
     base = pathlib.Path(__file__).resolve().parent.parent
     permitidos = {"fastapi", "sqlalchemy", "starlette", "base64", "hashlib", "hmac", "json", "secrets", "time", "os",
                   "re", "csv", "io", "logging", "asyncio", "threading", "argparse", "datetime", "concurrent", "pathlib",
-                  "psycopg"}
+                  "psycopg", "math"}
     archivos = list(base.glob("*.py"))
     assert len(archivos) >= 8, archivos
     for f in archivos:

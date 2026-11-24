@@ -31,9 +31,9 @@ const SIN_DATOS: H[] = [];
  * La exportación PDF/PNG no usa este componente.
  */
 export default function GraficaHist({ principal, extras = SIN_SERIES, datos, datosExtras = SIN_DATOS, unidad, dec, banda, umbral = null,
-  rangoBanda = true, className = '' }: {
+  rangoBanda = true, className = '', yEscala }: {
   principal: Serie; extras?: Serie[]; datos: H; datosExtras?: H[]; unidad: string; dec: number; banda: boolean;
-  umbral?: Umbral | null; rangoBanda?: boolean; className?: string;
+  umbral?: Umbral | null; rangoBanda?: boolean; className?: string; yEscala?: { min: number; max: number };
 }) {
   const lienzo = useRef<HTMLCanvasElement>(null);
   const toque = useRef<HTMLDivElement>(null);
@@ -80,7 +80,9 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
     const lo = valores.length ? Math.min(...valores) : 0;
     const hi = valores.length ? Math.max(...valores) : 1;
     const span = Math.max(hi - lo, dec === 0 ? 2 : 0.4);
-    const yLim = { min: lo - span * 0.6, max: hi + span * 0.6, minRange: Math.max(span * 0.08, dec === 0 ? 1 : 0.2) };
+    const yLim = yEscala
+      ? { min: yEscala.min - 5, max: yEscala.max + 5, minRange: 8 }
+      : { min: lo - span * 0.6, max: hi + span * 0.6, minRange: Math.max(span * 0.08, dec === 0 ? 1 : 0.2) };
 
     const pintar = (chart: Chart) => {
       const caja = mira.current, etiq = etiqueta.current;
@@ -154,7 +156,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
                 if (this.chart.width < 480) return ventana <= 2 * 86400 ? fHora.format(ms) : fDia.format(ms);
                 return fmtVentana(ventana)(ms);
               } } },
-          y: { ...ejeConRango(umbral), ticks: { color: '#a9c3b1' }, grid: { color: 'rgba(255,255,255,.08)' }, title: { display: !!unidad, text: unidad, color: '#a9c3b1' } },
+          y: { ...ejeConRango(umbral), ...(yEscala ? { min: yEscala.min, max: yEscala.max } : {}), ticks: { color: '#a9c3b1' }, grid: { color: 'rgba(255,255,255,.08)' }, title: { display: !!unidad, text: unidad, color: '#a9c3b1' } },
         },
         plugins: {
           annotation: { annotations: anotacionesRango(umbral, unidad, dec, { banda: rangoBanda }) },
@@ -281,7 +283,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
       ch.destroy();
       if (grafica.current === ch) grafica.current = null;
     };
-  }, [datos, datosExtras, umbral?.min, umbral?.max, rangoBanda]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [datos, datosExtras, umbral?.min, umbral?.max, rangoBanda, yEscala?.min, yEscala?.max]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const zoomY = (factor: number) => {
     const ch = grafica.current;

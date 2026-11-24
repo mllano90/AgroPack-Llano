@@ -89,4 +89,4 @@ def test_factor_par_guardar_leer_y_dli(cliente):
     rep = cliente.get(f"{API}/reporte?rango=24h").json()
     assert rep["variables"]["par"]["nombre"] == "Luz PAR"
     assert rep["variables"]["par"]["unidad"] == "µmol/m²/s"
-    assert rep["orden"][rep["orden"].index("pir") + 3] == "par"
+    assert rep["orden"][rep["orden"].index("pir") + 4] == "par"

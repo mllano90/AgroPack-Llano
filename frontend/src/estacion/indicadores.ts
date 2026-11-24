@@ -3,6 +3,8 @@ export interface DefIndicador {
   v: string; nombre: string; corto: string; /** etiqueta para pantallas angostas */ mini?: string; unidad: string; dec: number; icono: string; color: string;
   /** Series extra que se dibujan en la ventana emergente (p. ej. Aire 1 / Aire 2 bajo el promedio). */
   extras?: { v: string; nombre: string; color: string }[];
+  /** Eje Y inicial fijo (la condensación se lee de 0 a 100). */
+  yFija?: { min: number; max: number };
 }
 
 export const IND: Record<string, DefIndicador> = {
@@ -13,6 +15,7 @@ export const IND: Record<string, DefIndicador> = {
   pir: { v: 'pir', nombre: 'Radiación solar', corto: 'Radiación', mini: 'Rad.', unidad: 'W/m²', dec: 0, icono: 'sol', color: '#ffd23d' },
   t_caja: { v: 't_caja', nombre: 'Temp. caja', corto: 'Temp. caja', mini: 'Caja', unidad: '°C', dec: 1, icono: 'termo', color: '#ff8f5a' },
   h_caja: { v: 'h_caja', nombre: 'Hum. caja', corto: 'Hum. caja', mini: 'Hum. caja', unidad: '%', dec: 0, icono: 'gota', color: '#5bb8ff' },
+  caja_condensacion_pct: { v: 'caja_condensacion_pct', nombre: 'Condensación caja', corto: 'Condensación', mini: 'Cond.', unidad: '%', dec: 1, icono: 'gota', color: '#7ec8ff', yFija: { min: 0, max: 100 } },
   h_suelo: { v: 'h_suelo', nombre: 'Humedad del suelo', corto: 'Humedad', mini: 'Hum.', unidad: '%', dec: 0, icono: 'gota', color: '#2ea8ff' },
   t_suelo: { v: 't_suelo', nombre: 'Temperatura del suelo', corto: 'Temperatura', mini: 'Temp.', unidad: '°C', dec: 1, icono: 'termo', color: '#ff7a59' },
   ec: { v: 'ec', nombre: 'Conductividad eléctrica (CE)', corto: 'CE', unidad: 'dS/m', dec: 2, icono: 'ec', color: '#2fe07a' },
