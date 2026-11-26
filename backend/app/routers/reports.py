@@ -1168,6 +1168,11 @@ def rendimientos_limon(
 def _kg_pres_unit(pres: str | None) -> float:
     if not pres:
         return 0.0
+    # Solo el reporte de embarques. No entra a KG_POR_PRESENTACION para no
+    # sumar kg de melón en los rendimientos de empaque.
+    kg_melon = {"caja_chica_a": 15, "caja_normal_b": 18, "caja_jumbo_c": 21}
+    if pres in kg_melon:
+        return float(kg_melon[pres])
     return float(KG_POR_PRESENTACION.get(pres, 0) or 0)
 
 
@@ -1316,6 +1321,10 @@ def reporte_embarques(
                     cpp_i = 63
                 elif pres in ("rpc_12", "rpc_18"):
                     cpp_i = 45
+                elif pres in ("caja_chica_a", "caja_normal_b"):
+                    cpp_i = 56
+                elif pres == "caja_jumbo_c":
+                    cpp_i = 49
             detalles_rep.append(
                 EmbarqueDetalleReporte(
                     producto=str(prod_val),
