@@ -2,7 +2,9 @@ import type { CSSProperties } from 'react';
 import type { ReporteCatalogo } from '../../lib/catalogoApi';
 import {
   indicadoresDesdeReporte,
+  textoDesgloseCajasCampo,
   textoDetalleBins,
+  textoDetalleCajasCampo,
   textoDetalleParrilla,
   textoKgBin,
   textoKilosDeApoyo,
@@ -42,13 +44,16 @@ const valueStyle: CSSProperties = {
 };
 
 /**
- * Las seis tarjetas del reporte de un picoso. Mismo alto, 3 columnas × 2 filas.
+ * Las seis tarjetas del reporte de un picoso o de tomatillo. Mismo alto, 3 columnas × 2 filas.
+ * Tomatillo cambia la unidad (caja de campo); los picosos siguen en bins.
  * No agrega otros KPI: filtros y la gráfica quedan en el reporte de catálogo.
  */
 export default function PicososTablero({ data }: { data: ReporteCatalogo }) {
   const ind = indicadoresDesdeReporte(data);
+  const caja = ind.unidad === 'cajas_campo';
   const hayEmpaque = ind.kgConsumido > 0;
   const subTolva = textoSubtituloTolva(ind);
+  const desglose = textoDesgloseCajasCampo(ind);
 
   return (
     <div className="picosos-kpi-grid" style={{ marginBottom: 4 }}>
@@ -84,13 +89,18 @@ export default function PicososTablero({ data }: { data: ReporteCatalogo }) {
         fondo="#e0f2fe"
         tinta="#075985"
         valorColor="#0c4a6e"
-        titulo="Bins por parrilla"
+        titulo={caja ? 'Cajas de campo por parrilla' : 'Bins por parrilla'}
         valor={textoRendimiento(ind.binsPorParrilla)}
         pie={textoDetalleParrilla(ind)}
+        nota={desglose ?? undefined}
         title={
-          ind.binsPorParrilla != null
-            ? `${ind.binsConsumidos} bins / ${ind.parrillas} parrillas (1ra + 2da)`
-            : 'Bins consumidos entre parrillas de primera y de segunda'
+          caja
+            ? ind.binsPorParrilla != null
+              ? `${ind.binsConsumidos} cajas de campo eq. / ${ind.parrillas} parrillas (1ra + 2da)${desglose ? ` · ${desglose}` : ''}`
+              : 'Cajas de campo equivalentes entre parrillas de primera y de segunda'
+            : ind.binsPorParrilla != null
+              ? `${ind.binsConsumidos} bins / ${ind.parrillas} parrillas (1ra + 2da)`
+              : 'Bins consumidos entre parrillas de primera y de segunda'
         }
       />
       <Tarjeta
@@ -112,14 +122,18 @@ export default function PicososTablero({ data }: { data: ReporteCatalogo }) {
         fondo="#fff7ed"
         tinta="#9a3412"
         valorColor="#7c2d12"
-        titulo="Kg efectivos por bin"
+        titulo={caja ? 'Kg efectivos por caja de campo' : 'Kg efectivos por bin'}
         valor={textoKgBin(ind.kgEfectivosPorBin)}
-        sufijo={ind.kgEfectivosPorBin != null ? 'kg/bin' : undefined}
-        pie={textoDetalleBins(ind.binsConsumidos)}
+        sufijo={ind.kgEfectivosPorBin != null ? (caja ? 'kg/caja' : 'kg/bin') : undefined}
+        pie={caja ? textoDetalleCajasCampo(ind.binsConsumidos) : textoDetalleBins(ind.binsConsumidos)}
         title={
-          ind.kgEfectivosPorBin != null
-            ? `(${ind.kgPrimera} + ${ind.kgSegunda}) kg / ${ind.binsConsumidos} bins`
-            : 'Primera y segunda entre bins de campo consumidos'
+          caja
+            ? ind.kgEfectivosPorBin != null
+              ? `(${ind.kgPrimera} + ${ind.kgSegunda}) kg / ${ind.binsConsumidos} cajas de campo eq.`
+              : 'Primera y segunda entre cajas de campo equivalentes'
+            : ind.kgEfectivosPorBin != null
+              ? `(${ind.kgPrimera} + ${ind.kgSegunda}) kg / ${ind.binsConsumidos} bins`
+              : 'Primera y segunda entre bins de campo consumidos'
         }
       />
       <Tarjeta
@@ -133,7 +147,9 @@ export default function PicososTablero({ data }: { data: ReporteCatalogo }) {
         nota={subTolva.kilos ? subTolva.bin : undefined}
         title={
           ind.tolvaPorcentaje != null
-            ? `${ind.tolvaPorBin} kg/bin / ${ind.pesoTeoricoBinKg} kg del bin`
+            ? caja
+              ? `${ind.tolvaPorBin} kg/caja / ${ind.pesoTeoricoBinKg} kg de la caja de campo`
+              : `${ind.tolvaPorBin} kg/bin / ${ind.pesoTeoricoBinKg} kg del bin`
             : subTolva.bin
         }
       />
