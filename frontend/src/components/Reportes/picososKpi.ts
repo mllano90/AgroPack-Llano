@@ -1,17 +1,29 @@
 /**
- * Seis indicadores del reporte de productos picosos (chiles del catálogo).
+ * Seis indicadores del reporte de productos del catálogo (picosos y tomatillo).
  *
  * El % de primera y de segunda es sobre los kilos de campo que los empaques
  * del periodo consumieron, no sobre lo recibido ni sobre el pendiente.
- * Bins por parrilla = bins consumidos ÷ (parrillas de 1ra + parrillas de 2da).
- * Cada parrilla sale de cajas ÷ cajas_por_parrilla de esa presentación.
- * Kg efectivos por bin = (kg 1ra + kg 2da) ÷ bins consumidos.
- * Tolva por bin = peso teórico del bin − kg efectivos, nunca negativo.
- * En la tarjeta, el número grande es ese kilo como % del peso teórico.
+ * Cada parrilla sale de cajas ÷ cajas_por_parrilla de esa presentación (1ra + 2da).
+ *
+ * Picosos: la unidad es el bin.
+ *   Bins por parrilla = bins consumidos ÷ parrillas.
+ *   Kg efectivos por bin = (kg 1ra + kg 2da) ÷ bins consumidos.
+ *   Tolva = peso teórico del bin − kg efectivos, nunca negativo.
+ *
+ * Tomatillo: la unidad es la caja de campo. Cada bin cuenta como
+ * CAJAS_CAMPO_POR_BIN cajas. El peso teórico de la tolva es el de la forma
+ * cajas_campo (respaldo peso_contenedor_kg), no ese factor.
+ *
+ * En la tarjeta de tolva el número grande es ese kilo como % del peso teórico.
  * Ton/ha queda reservada mientras el cultivo no tenga hectáreas > 0.
  *
- * Tomatillo no usa este tablero. Limón y melón tampoco pasan por aquí.
+ * Limón y melón no pasan por aquí.
  */
+
+/** Cada bin de tomatillo equivale a esta cantidad de cajas de campo. No es un peso. */
+export const CAJAS_CAMPO_POR_BIN = 15;
+
+export type UnidadRendimiento = 'bins' | 'cajas_campo';
 
 export interface PresentacionPicoso {
   cajas?: number | null;
@@ -25,10 +37,20 @@ export interface PicososKpiInput {
   binsConsumidos?: number | null;
   presentaciones?: PresentacionPicoso[] | null;
   hectareas?: number | null;
+  /** Peso teórico de la unidad: el bin en picosos, la caja de campo en tomatillo. */
   pesoTeoricoBinKg?: number | null;
+  /** Por defecto bins. Tomatillo usa cajas_campo. */
+  unidad?: UnidadRendimiento | null;
+  /** Cajas de campo consumidas, sin convertir bins. Solo unidad cajas_campo. */
+  cajasCampo?: number | null;
+  /** Bins consumidos, antes de pasarlos a cajas. Solo unidad cajas_campo. */
+  binsReales?: number | null;
+  /** Factor bin → cajas de campo. Si no viene, CAJAS_CAMPO_POR_BIN. */
+  cajasPorBin?: number | null;
 }
 
 export interface PicososIndicadores {
+  unidad: UnidadRendimiento;
   pctPrimera: number | null;
   kgPrimera: number;
   pctSegunda: number | null;
@@ -36,14 +58,23 @@ export interface PicososIndicadores {
   kgConsumido: number;
   binsPorParrilla: number | null;
   parrillas: number;
+  /**
+   * Denominador del rendimiento.
+   * En bins: bins consumidos. En cajas_campo: cajas + bins × CAJAS_CAMPO_POR_BIN.
+   */
   binsConsumidos: number;
+  /** Bins tal cual. En picosos coincide con binsConsumidos. */
+  binsReales: number;
+  cajasCampoConsumidas: number;
+  cajasPorBin: number;
   tonPorHa: number | null;
   toneladasEmpacadas: number;
   hectareas: number | null;
   hectareasReservadas: boolean;
+  /** (kg 1ra + kg 2da) / unidades. El nombre del campo se queda; la unidad va en `unidad`. */
   kgEfectivosPorBin: number | null;
   tolvaPorBin: number | null;
-  /** tolvaPorBin / peso teórico × 100. null si falta el peso o no hay bins. */
+  /** tolva por unidad / peso teórico × 100. null si falta el peso o no hay unidades. */
   tolvaPorcentaje: number | null;
   /** true solo cuando el empacado superó el peso teórico y se acotó a 0. */
   tolvaAcotadaEnCero: boolean;
@@ -83,14 +114,23 @@ export function esTomatillo(
 }
 
 /**
- * Tablero de 6 tarjetas para cualquier producto del catálogo que no sea Tomatillo.
+ * Tablero de bins: cualquier producto del catálogo que no sea Tomatillo.
  * Así entra Jalapeño, Caribe, Anaheim, Serrano, Fresno, Shishito y un Poblano futuro.
+ * Tomatillo usa las mismas seis tarjetas; la unidad la decide `unidadRendimiento`.
  */
 export function usaDashboardPicosos(
   codigo: string | null | undefined,
   nombre: string | null | undefined
 ): boolean {
   return !esTomatillo(codigo, nombre);
+}
+
+/** Tomatillo rinde en cajas de campo. El resto del catálogo, en bins. */
+export function unidadRendimiento(
+  codigo: string | null | undefined,
+  nombre: string | null | undefined
+): UnidadRendimiento {
+  return esTomatillo(codigo, nombre) ? 'cajas_campo' : 'bins';
 }
 
 function numeroFinito(valor: unknown): number | null {
@@ -112,6 +152,25 @@ function numeroPositivo(valor: unknown): number | null {
 }
 
 /**
+ * Peso teórico de una forma de cosecha.
+ * Primero esa forma; si no trae peso, `productos_catalogo.peso_contenedor_kg`.
+ * Nunca un número fijo por producto.
+ */
+function pesoTeoricoDeForma(
+  codigo: string,
+  formas: FormaPeso[] | null | undefined,
+  pesoContenedorKg: number | null | undefined
+): number | null {
+  const clave = normalizarClave(codigo);
+  for (const forma of formas ?? []) {
+    if (normalizarClave(forma.codigo) !== clave) continue;
+    const peso = numeroPositivo(forma.peso_kg);
+    if (peso != null) return peso;
+  }
+  return numeroPositivo(pesoContenedorKg);
+}
+
+/**
  * Peso teórico del bin de campo.
  * Primero `producto_formas_cosecha` con código bins; si esa forma no trae peso,
  * `productos_catalogo.peso_contenedor_kg`. Nunca un número fijo por producto.
@@ -120,22 +179,51 @@ export function pesoTeoricoBinKg(
   formas: FormaPeso[] | null | undefined,
   pesoContenedorKg: number | null | undefined
 ): number | null {
+  return pesoTeoricoDeForma('bins', formas, pesoContenedorKg);
+}
+
+/**
+ * Peso teórico de la caja de campo.
+ * Primero la forma `cajas_campo`; si no trae peso, `peso_contenedor_kg`.
+ */
+export function pesoTeoricoCajaCampoKg(
+  formas: FormaPeso[] | null | undefined,
+  pesoContenedorKg: number | null | undefined
+): number | null {
+  return pesoTeoricoDeForma('cajas_campo', formas, pesoContenedorKg);
+}
+
+function consumidosDeForma(codigo: string, formas: FormaConsumo[] | null | undefined): number {
+  const clave = normalizarClave(codigo);
+  let total = 0;
   for (const forma of formas ?? []) {
-    if (normalizarClave(forma.codigo) !== 'bins') continue;
-    const peso = numeroPositivo(forma.peso_kg);
-    if (peso != null) return peso;
+    if (normalizarClave(forma.codigo) !== clave) continue;
+    total += numeroNoNegativo(forma.consumidos);
   }
-  return numeroPositivo(pesoContenedorKg);
+  return total;
 }
 
 /** Solo la forma `bins`. Cajas de campo u otras formas no cuentan como bin. */
 export function binsConsumidosDeFormas(formas: FormaConsumo[] | null | undefined): number {
-  let total = 0;
-  for (const forma of formas ?? []) {
-    if (normalizarClave(forma.codigo) !== 'bins') continue;
-    total += numeroNoNegativo(forma.consumidos);
-  }
-  return total;
+  return consumidosDeForma('bins', formas);
+}
+
+/** Solo la forma `cajas_campo`. Los bins no se suman aquí: se convierten aparte. */
+export function cajasCampoConsumidasDeFormas(formas: FormaConsumo[] | null | undefined): number {
+  return consumidosDeForma('cajas_campo', formas);
+}
+
+/**
+ * Cajas de campo equivalentes = cajas consumidas + bins × CAJAS_CAMPO_POR_BIN.
+ * Un bin de tomatillo cuenta como 15 cajas de campo.
+ */
+export function cajasCampoEquivalentes(
+  cajasCampo: number,
+  bins: number,
+  cajasPorBin: number = CAJAS_CAMPO_POR_BIN
+): number {
+  const factor = numeroPositivo(cajasPorBin) ?? CAJAS_CAMPO_POR_BIN;
+  return numeroNoNegativo(cajasCampo) + numeroNoNegativo(bins) * factor;
 }
 
 /** Parrillas de 1ra y de 2da: cada presentación aporta cajas ÷ cajas por parrilla. */
@@ -236,16 +324,25 @@ export function toneladasPorHectarea(
 }
 
 export function indicadoresPicosos(input: PicososKpiInput): PicososIndicadores {
+  const unidad: UnidadRendimiento = input.unidad === 'cajas_campo' ? 'cajas_campo' : 'bins';
   const kgPrimera = numeroNoNegativo(input.kgPrimera);
   const kgSegunda = numeroNoNegativo(input.kgSegunda);
   const kgConsumido = numeroNoNegativo(input.kgConsumido);
-  const binsConsumidos = numeroNoNegativo(input.binsConsumidos);
+  const factor = numeroPositivo(input.cajasPorBin) ?? CAJAS_CAMPO_POR_BIN;
+  const cajasCampoConsumidas = unidad === 'cajas_campo' ? numeroNoNegativo(input.cajasCampo) : 0;
+  const binsReales = unidad === 'cajas_campo'
+    ? numeroNoNegativo(input.binsReales)
+    : numeroNoNegativo(input.binsConsumidos);
+  const binsConsumidos = unidad === 'cajas_campo'
+    ? cajasCampoEquivalentes(cajasCampoConsumidas, binsReales, factor)
+    : binsReales;
   const parrillas = parrillasDePresentaciones(input.presentaciones);
   const peso = numeroPositivo(input.pesoTeoricoBinKg);
   const ton = toneladasPorHectarea(kgPrimera, kgSegunda, input.hectareas);
   const kgEfectivos = kgEfectivosPorBin(kgPrimera, kgSegunda, binsConsumidos);
   const tolva = productoTolvaPorBin(peso, kgEfectivos);
   return {
+    unidad,
     pctPrimera: porcentajeSobreConsumido(kgPrimera, kgConsumido),
     kgPrimera,
     pctSegunda: porcentajeSobreConsumido(kgSegunda, kgConsumido),
@@ -254,6 +351,9 @@ export function indicadoresPicosos(input: PicososKpiInput): PicososIndicadores {
     binsPorParrilla: rendimientoBinsPorParrilla(binsConsumidos, parrillas),
     parrillas,
     binsConsumidos,
+    binsReales,
+    cajasCampoConsumidas,
+    cajasPorBin: factor,
     tonPorHa: ton.tonPorHa,
     toneladasEmpacadas: ton.toneladas,
     hectareas: ton.hectareas,
@@ -267,6 +367,8 @@ export function indicadoresPicosos(input: PicososKpiInput): PicososIndicadores {
 }
 
 export interface ReportePicosoMinimo {
+  codigo?: string | null;
+  nombre?: string | null;
   kg_primera?: number | null;
   kg_segunda?: number | null;
   kg_consumido?: number | null;
@@ -287,13 +389,25 @@ export function indicadoresDesdeReporte(rep: ReportePicosoMinimo): PicososIndica
     cajas: p.cajas,
     cajasPorParrilla: p.cajas_por_parrilla,
   }));
-  return indicadoresPicosos({
+  const comun = {
     kgPrimera: rep.kg_primera,
     kgSegunda: rep.kg_segunda,
     kgConsumido: rep.kg_consumido,
-    binsConsumidos: binsConsumidosDeFormas(rep.por_forma),
     presentaciones,
     hectareas: rep.hectareas,
+  };
+  if (unidadRendimiento(rep.codigo, rep.nombre) === 'cajas_campo') {
+    return indicadoresPicosos({
+      ...comun,
+      unidad: 'cajas_campo',
+      cajasCampo: cajasCampoConsumidasDeFormas(rep.por_forma),
+      binsReales: binsConsumidosDeFormas(rep.por_forma),
+      pesoTeoricoBinKg: pesoTeoricoCajaCampoKg(rep.formas, rep.peso_contenedor_kg),
+    });
+  }
+  return indicadoresPicosos({
+    ...comun,
+    binsConsumidos: binsConsumidosDeFormas(rep.por_forma),
     pesoTeoricoBinKg: pesoTeoricoBinKg(rep.formas, rep.peso_contenedor_kg),
   });
 }
@@ -334,15 +448,28 @@ export function textoPesoTeoricoBin(peso: number | null): string {
   return `Bin teórico: ${texto} kg`;
 }
 
+export function textoPesoTeoricoCajaCampo(peso: number | null): string {
+  if (peso == null || !Number.isFinite(peso) || peso <= 0) return 'Sin peso teórico de caja';
+  const texto = peso.toLocaleString('en-US', { maximumFractionDigits: 1 });
+  return `Caja campo teórica: ${texto} kg`;
+}
+
 /**
  * Subtítulo de la tarjeta de tolva, en una o dos líneas cortas.
- * Con bins y peso: kilos de tolva y el bin teórico.
- * Sin bins: solo el bin teórico. Sin peso: el aviso, sin kilos.
+ * Con unidades y peso: kilos de tolva y el peso teórico.
+ * Sin unidades: solo el peso teórico. Sin peso: el aviso, sin kilos.
  */
-export function textoSubtituloTolva(ind: Pick<PicososIndicadores, 'tolvaPorBin' | 'pesoTeoricoBinKg'>): {
+export function textoSubtituloTolva(ind: Pick<PicososIndicadores, 'tolvaPorBin' | 'pesoTeoricoBinKg' | 'unidad'>): {
   kilos: string | null;
   bin: string;
 } {
+  if (ind.unidad === 'cajas_campo') {
+    const caja = textoPesoTeoricoCajaCampo(ind.pesoTeoricoBinKg);
+    if (ind.pesoTeoricoBinKg == null || ind.tolvaPorBin == null) {
+      return { kilos: null, bin: caja };
+    }
+    return { kilos: `${textoKgBin(ind.tolvaPorBin)} kg/caja`, bin: caja };
+  }
   const bin = textoPesoTeoricoBin(ind.pesoTeoricoBinKg);
   if (ind.pesoTeoricoBinKg == null || ind.tolvaPorBin == null) {
     return { kilos: null, bin };
@@ -361,11 +488,19 @@ export function textoNotaHectareas(ind: Pick<
   return `${t} t · ${ha} ha`;
 }
 
-export function textoDetalleParrilla(ind: Pick<PicososIndicadores, 'binsConsumidos' | 'parrillas'>): string {
+export function textoDetalleParrilla(
+  ind: Pick<PicososIndicadores, 'binsConsumidos' | 'parrillas' | 'unidad'>
+): string {
+  const parr = ind.parrillas.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (ind.unidad === 'cajas_campo') {
+    if (!(ind.binsConsumidos > 0)) return 'Sin cajas de campo';
+    if (!(ind.parrillas > 0)) return 'Sin parrillas empacadas';
+    const cajas = ind.binsConsumidos.toLocaleString('en-US', { maximumFractionDigits: 1 });
+    return `${cajas} cajas campo eq. · ${parr} parr.`;
+  }
   if (!(ind.binsConsumidos > 0)) return 'Sin bins consumidos';
   if (!(ind.parrillas > 0)) return 'Sin parrillas empacadas';
   const bins = ind.binsConsumidos.toLocaleString('en-US', { maximumFractionDigits: 1 });
-  const parr = ind.parrillas.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return `${bins} bins · ${parr} parr.`;
 }
 
@@ -373,4 +508,28 @@ export function textoDetalleBins(bins: number): string {
   if (!(bins > 0)) return 'Sin bins consumidos';
   const texto = bins.toLocaleString('en-US', { maximumFractionDigits: 1 });
   return `${texto} bins consumidos`;
+}
+
+export function textoDetalleCajasCampo(cajasEquivalentes: number): string {
+  if (!(cajasEquivalentes > 0)) return 'Sin cajas de campo';
+  const texto = cajasEquivalentes.toLocaleString('en-US', { maximumFractionDigits: 1 });
+  return `${texto} cajas campo eq.`;
+}
+
+/** Desglose de bins solo cuando la unidad es la caja de campo y hubo bins. */
+export function textoDesgloseCajasCampo(
+  ind: Pick<PicososIndicadores, 'unidad' | 'binsReales' | 'cajasCampoConsumidas' | 'cajasPorBin'>
+): string | null {
+  if (ind.unidad !== 'cajas_campo') return null;
+  const bins = numeroNoNegativo(ind.binsReales);
+  if (!(bins > 0)) return null;
+  const factor = numeroPositivo(ind.cajasPorBin) ?? CAJAS_CAMPO_POR_BIN;
+  const binsTxt = bins.toLocaleString('en-US', { maximumFractionDigits: 1 });
+  const factorTxt = factor.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  const cajas = numeroNoNegativo(ind.cajasCampoConsumidas);
+  if (cajas > 0) {
+    const cajasTxt = cajas.toLocaleString('en-US', { maximumFractionDigits: 1 });
+    return `${binsTxt} bins × ${factorTxt} + ${cajasTxt} cajas`;
+  }
+  return `${binsTxt} bins × ${factorTxt}`;
 }

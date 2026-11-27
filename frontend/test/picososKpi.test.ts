@@ -1,12 +1,17 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import {
+  CAJAS_CAMPO_POR_BIN,
   binsConsumidosDeFormas,
+  cajasCampoEquivalentes,
   esTomatillo,
   indicadoresDesdeReporte,
   indicadoresPicosos,
   pesoTeoricoBinKg,
   productoTolvaPorBin,
+  textoDesgloseCajasCampo,
+  textoDetalleCajasCampo,
+  textoDetalleParrilla,
   textoKilosDeApoyo,
   textoNotaHectareas,
   textoPesoTeoricoBin,
@@ -398,6 +403,243 @@ test('el reporte lee el peso de la forma bins y no cuenta otras formas', () => {
   cerca(jalapeno.tolvaPorcentaje, (80 / 190) * 100, 'tolva %');
   cerca(jalapeno.pctPrimera, (800 / 1900) * 100, '% 1ra del reporte');
   assert.deepEqual(textoSubtituloTolva(jalapeno), { kilos: '80 kg/bin', bin: 'Bin teórico: 190 kg' });
+});
+
+test('tomatillo: 2 bins y 30 cajas de campo son 60 cajas equivalentes', () => {
+  assert.equal(CAJAS_CAMPO_POR_BIN, 15);
+  assert.equal(cajasCampoEquivalentes(30, 2), 60);
+  assert.equal(cajasCampoEquivalentes(0, 0), 0);
+  assert.equal(cajasCampoEquivalentes(-4, -1), 0);
+
+  const ind = indicadoresDesdeReporte({
+    codigo: 'tomatillo',
+    nombre: 'Tomatillo',
+    kg_primera: 480,
+    kg_segunda: 120,
+    // 30×15 kg + 2×260 kg. El % usa este kilo, no 60×15.
+    kg_consumido: 30 * 15 + 2 * 260,
+    hectareas: null,
+    peso_contenedor_kg: 260,
+    formas: [
+      { codigo: 'bins', peso_kg: 260 },
+      { codigo: 'cajas_campo', peso_kg: 15 },
+    ],
+    por_forma: [
+      { codigo: 'bins', consumidos: 2 },
+      { codigo: 'cajas_campo', consumidos: 30 },
+    ],
+    por_presentacion_primera: [{ cajas: 40, cajas_por_parrilla: 40 }],
+    por_presentacion_segunda: [],
+  });
+  assert.equal(ind.unidad, 'cajas_campo');
+  assert.equal(ind.cajasCampoConsumidas, 30);
+  assert.equal(ind.binsReales, 2);
+  assert.equal(ind.cajasPorBin, CAJAS_CAMPO_POR_BIN);
+  assert.equal(ind.binsConsumidos, 60);
+  cerca(ind.parrillas, 1, 'una parrilla');
+  cerca(ind.binsPorParrilla, 60, '60 cajas / 1 parrilla');
+  cerca(ind.pctPrimera, (480 / 970) * 100, '% 1ra sobre kg consumidos');
+  cerca(ind.pctSegunda, (120 / 970) * 100, '% 2da');
+  assert.ok(Math.abs((ind.pctPrimera ?? 0) - (480 / (60 * 15)) * 100) > 1, 'no usa 60×15 como base');
+  cerca(ind.kgEfectivosPorBin, 600 / 60, 'kg por caja equivalente');
+  assert.equal(ind.pesoTeoricoBinKg, 15);
+  cerca(ind.tolvaPorBin, 5, 'tolva kg/caja');
+  cerca(ind.tolvaPorcentaje, (5 / 15) * 100, 'tolva %');
+  assert.equal(ind.tolvaAcotadaEnCero, false);
+  assert.equal(textoDetalleParrilla(ind), '60 cajas campo eq. · 1 parr.');
+  assert.equal(textoDesgloseCajasCampo(ind), '2 bins × 15 + 30 cajas');
+  assert.equal(textoDetalleCajasCampo(ind.binsConsumidos), '60 cajas campo eq.');
+  assert.deepEqual(textoSubtituloTolva(ind), { kilos: '5 kg/caja', bin: 'Caja campo teórica: 15 kg' });
+  assert.equal(ind.hectareasReservadas, true);
+  assert.equal(textoPorcentaje(ind.tolvaPorcentaje), '33.33');
+});
+
+test('tomatillo solo con cajas de campo no convierte bins', () => {
+  const ind = indicadoresDesdeReporte({
+    codigo: 'tomatillo',
+    nombre: 'Tomatillo',
+    kg_primera: 200,
+    kg_segunda: 80,
+    kg_consumido: 40 * 15,
+    peso_contenedor_kg: 260,
+    formas: [
+      { codigo: 'cajas_campo', peso_kg: 15 },
+      { codigo: 'bins', peso_kg: 260 },
+    ],
+    por_forma: [
+      { codigo: 'cajas_campo', consumidos: 40 },
+      { codigo: 'bins', consumidos: 0 },
+    ],
+    por_presentacion_primera: [{ cajas: 20, cajas_por_parrilla: 20 }],
+    por_presentacion_segunda: [{ cajas: 20, cajas_por_parrilla: 20 }],
+  });
+  assert.equal(ind.unidad, 'cajas_campo');
+  assert.equal(ind.binsReales, 0);
+  assert.equal(ind.cajasCampoConsumidas, 40);
+  assert.equal(ind.binsConsumidos, 40);
+  cerca(ind.parrillas, 2, '1ra + 2da');
+  cerca(ind.binsPorParrilla, 20, '40 cajas / 2 parrillas');
+  cerca(ind.pctPrimera, (200 / 600) * 100, '% 1ra');
+  cerca(ind.pctSegunda, (80 / 600) * 100, '% 2da');
+  cerca(ind.kgEfectivosPorBin, 280 / 40, 'kg/caja');
+  assert.equal(ind.pesoTeoricoBinKg, 15);
+  cerca(ind.tolvaPorBin, 8, '15 − 7');
+  cerca(ind.tolvaPorcentaje, (8 / 15) * 100, 'tolva %');
+  assert.equal(textoDesgloseCajasCampo(ind), null);
+  assert.equal(textoDetalleParrilla(ind), '40 cajas campo eq. · 2 parr.');
+  assert.equal(textoDetalleCajasCampo(40), '40 cajas campo eq.');
+});
+
+test('tomatillo solo con bins convierte cada bin a 15 cajas', () => {
+  const ind = indicadoresDesdeReporte({
+    codigo: 'TOMATILLO',
+    nombre: 'Tomátillo',
+    kg_primera: 300,
+    kg_segunda: 0,
+    kg_consumido: 2 * 260,
+    peso_contenedor_kg: 260,
+    formas: [
+      { codigo: 'bins', peso_kg: 260 },
+      { codigo: 'CAJAS_CAMPO', peso_kg: 15 },
+    ],
+    por_forma: [{ codigo: 'BINS', consumidos: 2 }],
+    por_presentacion_primera: [{ cajas: 30, cajas_por_parrilla: 30 }],
+  });
+  assert.equal(ind.unidad, 'cajas_campo');
+  assert.equal(ind.cajasCampoConsumidas, 0);
+  assert.equal(ind.binsReales, 2);
+  assert.equal(ind.binsConsumidos, 30);
+  cerca(ind.binsPorParrilla, 30, '2×15 / 1 parrilla');
+  cerca(ind.kgEfectivosPorBin, 10, '300/30');
+  cerca(ind.pctPrimera, (300 / 520) * 100, '% sobre el kilo del bin');
+  assert.equal(ind.pctSegunda, 0);
+  assert.equal(ind.pesoTeoricoBinKg, 15);
+  cerca(ind.tolvaPorBin, 5, '15 − 10');
+  assert.equal(textoDesgloseCajasCampo(ind), '2 bins × 15');
+  assert.equal(textoDetalleParrilla(ind), '30 cajas campo eq. · 1 parr.');
+  assert.deepEqual(textoSubtituloTolva(ind), { kilos: '5 kg/caja', bin: 'Caja campo teórica: 15 kg' });
+});
+
+test('tomatillo sin consumos deja los rendimientos en blanco', () => {
+  const ind = indicadoresDesdeReporte({
+    codigo: 'tomatillo',
+    nombre: 'Tomatillo',
+    kg_primera: 0,
+    kg_segunda: 0,
+    kg_consumido: 0,
+    peso_contenedor_kg: 260,
+    formas: [
+      { codigo: 'cajas_campo', peso_kg: 15 },
+      { codigo: 'bins', peso_kg: 260 },
+    ],
+    por_forma: [
+      { codigo: 'cajas_campo', consumidos: 0 },
+      { codigo: 'bins', consumidos: 0 },
+    ],
+    por_presentacion_primera: [{ cajas: 0, cajas_por_parrilla: 20 }],
+  });
+  assert.equal(ind.pctPrimera, null);
+  assert.equal(ind.pctSegunda, null);
+  assert.equal(ind.binsConsumidos, 0);
+  assert.equal(ind.binsPorParrilla, null);
+  assert.equal(ind.kgEfectivosPorBin, null);
+  assert.equal(ind.tolvaPorBin, null);
+  assert.equal(ind.tolvaPorcentaje, null);
+  assert.equal(ind.tolvaAcotadaEnCero, false);
+  assert.equal(ind.pesoTeoricoBinKg, 15);
+  assert.equal(ind.hectareasReservadas, true);
+  assert.equal(textoDetalleParrilla(ind), 'Sin cajas de campo');
+  assert.equal(textoDetalleCajasCampo(0), 'Sin cajas de campo');
+  assert.equal(textoDesgloseCajasCampo(ind), null);
+  assert.equal(textoPorcentaje(ind.tolvaPorcentaje), '—');
+  assert.deepEqual(textoSubtituloTolva(ind), { kilos: null, bin: 'Caja campo teórica: 15 kg' });
+});
+
+test('tomatillo acota la tolva en 0 y lee el peso de la caja, no el factor 15', () => {
+  const encima = indicadoresDesdeReporte({
+    codigo: 'tomatillo',
+    nombre: 'Tomatillo',
+    kg_primera: 400,
+    kg_segunda: 0,
+    kg_consumido: 20 * 18,
+    formas: [{ codigo: 'cajas_campo', peso_kg: 18 }],
+    por_forma: [{ codigo: 'cajas_campo', consumidos: 20 }],
+    por_presentacion_primera: [{ cajas: 20, cajas_por_parrilla: 20 }],
+    peso_contenedor_kg: 15,
+  });
+  assert.equal(encima.pesoTeoricoBinKg, 18);
+  cerca(encima.kgEfectivosPorBin, 20, 'por encima de la caja');
+  assert.equal(encima.tolvaPorBin, 0);
+  assert.equal(encima.tolvaPorcentaje, 0);
+  assert.equal(textoPorcentaje(encima.tolvaPorcentaje), '0.00');
+  assert.equal(encima.tolvaAcotadaEnCero, true);
+  assert.deepEqual(textoSubtituloTolva(encima), { kilos: '0 kg/caja', bin: 'Caja campo teórica: 18 kg' });
+
+  const respaldo = indicadoresDesdeReporte({
+    codigo: 'tomatillo',
+    nombre: 'Tomatillo',
+    kg_primera: 100,
+    kg_segunda: 0,
+    kg_consumido: 150,
+    formas: [
+      { codigo: 'cajas_campo', peso_kg: null },
+      { codigo: 'bins', peso_kg: 260 },
+    ],
+    por_forma: [{ codigo: 'cajas_campo', consumidos: 10 }],
+    por_presentacion_primera: [{ cajas: 10, cajas_por_parrilla: 10 }],
+    peso_contenedor_kg: 15,
+  });
+  assert.equal(respaldo.pesoTeoricoBinKg, 15);
+  cerca(respaldo.kgEfectivosPorBin, 10, '100/10');
+  cerca(respaldo.tolvaPorBin, 5, '15-10');
+  assert.equal(respaldo.tolvaAcotadaEnCero, false);
+
+  const sinPeso = indicadoresDesdeReporte({
+    codigo: 'tomatillo',
+    nombre: 'Tomatillo',
+    kg_primera: 100,
+    kg_segunda: 20,
+    kg_consumido: 200,
+    formas: [{ codigo: 'bins', peso_kg: 260 }],
+    por_forma: [{ codigo: 'cajas_campo', consumidos: 10 }],
+    por_presentacion_primera: [{ cajas: 10, cajas_por_parrilla: 10 }],
+    peso_contenedor_kg: null,
+  });
+  assert.equal(sinPeso.pesoTeoricoBinKg, null);
+  cerca(sinPeso.kgEfectivosPorBin, 12, 'sigue el efectivo');
+  assert.equal(sinPeso.tolvaPorBin, null);
+  assert.equal(sinPeso.tolvaPorcentaje, null);
+  assert.deepEqual(textoSubtituloTolva(sinPeso), { kilos: null, bin: 'Sin peso teórico de caja' });
+});
+
+test('jalapeño sigue en bins aunque el reporte traiga cajas de campo', () => {
+  const ind = indicadoresDesdeReporte({
+    codigo: 'jalapeno',
+    nombre: 'Jalapeño',
+    kg_primera: 800,
+    kg_segunda: 0,
+    kg_consumido: 1900,
+    formas: [
+      { codigo: 'bins', peso_kg: 190 },
+      { codigo: 'cajas_campo', peso_kg: 15 },
+    ],
+    por_forma: [
+      { codigo: 'bins', consumidos: 10 },
+      { codigo: 'cajas_campo', consumidos: 30 },
+    ],
+    por_presentacion_primera: [{ cajas: 40, cajas_por_parrilla: 40 }],
+    peso_contenedor_kg: 190,
+  });
+  assert.equal(ind.unidad, 'bins');
+  assert.equal(ind.binsConsumidos, 10);
+  assert.equal(ind.binsReales, 10);
+  assert.equal(ind.cajasCampoConsumidas, 0);
+  assert.equal(ind.pesoTeoricoBinKg, 190);
+  cerca(ind.kgEfectivosPorBin, 80, 'kg/bin');
+  cerca(ind.tolvaPorBin, 110, 'tolva del bin');
+  assert.equal(textoDetalleParrilla(ind), '10 bins · 1 parr.');
+  assert.equal(textoDesgloseCajasCampo(ind), null);
+  assert.deepEqual(textoSubtituloTolva(ind), { kilos: '110 kg/bin', bin: 'Bin teórico: 190 kg' });
 });
 
 function nulasInput(ind: { kgPrimera: number; kgSegunda: number; kgConsumido: number; binsConsumidos: number; pesoTeoricoBinKg: number | null }): PicososKpiInput {

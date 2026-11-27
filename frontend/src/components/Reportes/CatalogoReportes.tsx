@@ -1,7 +1,7 @@
 import { useEffect, useState, type CSSProperties } from 'react';
 import { mensajeError, reporteCatalogo, type ReporteCatalogo } from '../../lib/catalogoApi';
 import PicososTablero from './PicososIndicadores';
-import { usaDashboardPicosos } from './picososKpi';
+import { CAJAS_CAMPO_POR_BIN, esTomatillo, usaDashboardPicosos } from './picososKpi';
 
 interface Props {
   token: string;
@@ -123,6 +123,7 @@ function Produccion({
   ];
   const totalBar = partes.reduce((s, p) => s + p.kg, 0);
   const picosos = usaDashboardPicosos(data.codigo, data.nombre);
+  const tomatillo = esTomatillo(data.codigo, data.nombre);
   const formasTexto =
     (data.formas || []).map((f) => `${f.nombre} = ${fmtNum(f.peso_kg, 1)} kg`).join(' · ') ||
     'Sin formas de cosecha';
@@ -138,6 +139,17 @@ function Produccion({
           . El % de primera y de segunda es sobre los kilos de campo que los empaques de este filtro
           sí consumieron, no sobre lo recibido ni sobre el pendiente. Bins por parrilla reparte los
           bins consumidos entre las parrillas de primera y de segunda.
+        </p>
+      ) : tomatillo ? (
+        <p style={{ fontSize: 13, color: '#64748b' }}>
+          {formasTexto}
+          {data.hectareas
+            ? ` · ${fmtNum(data.hectareas, 2)} ha`
+            : ' · hectáreas por cultivo en desarrollo'}
+          . El % de primera y de segunda es sobre los kilos de campo que los empaques de este filtro
+          sí consumieron, no sobre lo recibido ni sobre el pendiente. Cajas de campo por parrilla
+          reparte las cajas equivalentes (cada bin cuenta como {CAJAS_CAMPO_POR_BIN} cajas de campo)
+          entre las parrillas de primera y de segunda.
         </p>
       ) : (
         <p style={{ fontSize: 13, color: '#64748b' }}>
@@ -174,7 +186,7 @@ function Produccion({
         Rendimiento de {data.nombre} con los empaques de este filtro. Kilos de campo consumidos:{' '}
         {fmtKg(data.kg_consumido)}.
       </p>
-      {picosos ? (
+      {picosos || tomatillo ? (
         <PicososTablero data={data} />
       ) : (
       <div
