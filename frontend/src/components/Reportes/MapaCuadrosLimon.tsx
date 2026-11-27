@@ -88,6 +88,12 @@ function fmtNum(n: number | null | undefined, digits = 1) {
   return n.toLocaleString(undefined, { maximumFractionDigits: digits });
 }
 
+function fmtEntero(n: number | null | undefined) {
+  const v = Number(n ?? 0);
+  if (!Number.isFinite(v)) return '0';
+  return Math.round(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
 function lotePorSeccion(lotes: Lote[], seccion: string): Lote | undefined {
   return lotes.find((l) => seccionDesdeLote(l.lote) === seccion);
 }
@@ -369,15 +375,23 @@ export default function MapaCuadrosLimon({ lotes }: MapaCuadrosLimonProps) {
                 <>
                   <div style={rowStyle}>
                     <span style={{ color: '#94a3b8' }}>Bins campo</span>
-                    <strong>{lote.bins_campo}</strong>
+                    <strong>{fmtEntero(lote.bins_campo)}</strong>
                   </div>
                   <div style={rowStyle}>
                     <span style={{ color: '#94a3b8' }}>Parrillas 1ra</span>
                     <strong>{fmtNum(lote.parrillas_primera, 2)}</strong>
                   </div>
                   <div style={rowStyle}>
-                    <span style={{ color: '#94a3b8' }}>Bins jugo</span>
-                    <strong>{lote.bins_jugo}</strong>
+                    <span style={{ color: '#94a3b8' }}>Bins jugo 2da</span>
+                    <strong>{fmtEntero(lote.bins_jugo)}</strong>
+                  </div>
+                  <div style={rowStyle}>
+                    <span style={{ color: '#94a3b8' }}>Cajas cartón</span>
+                    <strong>{fmtEntero(lote.cajas_carton)}</strong>
+                  </div>
+                  <div style={rowStyle}>
+                    <span style={{ color: '#94a3b8' }}>Cajas RPC</span>
+                    <strong>{fmtEntero(lote.cajas_rpc)}</strong>
                   </div>
                   <div style={rowStyle}>
                     <span style={{ color: '#94a3b8' }}>% kg 1ra</span>

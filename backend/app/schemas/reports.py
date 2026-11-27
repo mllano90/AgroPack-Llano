@@ -121,6 +121,8 @@ class LoteRendimiento(BaseModel):
     pct_segunda: float  # jugo a 900 kg
     pct_recuperacion: float  # producido / entrada estimada (bins×260)
     kg_real_por_bin: float | None = None  # kilos producidos / bins de campo
+    # Cantidad de cajas/bins (no kg). RPC = rpc_12+rpc_18; cartón = caja_40lbs.
+    # bins_jugo = presentación bins_jugo, que en limón es la 2da (900 kg).
     cajas_rpc: int
     cajas_carton: int
     bins_jugo: int
