@@ -8,6 +8,7 @@ import { fDia, fFecha, fHora } from './formato';
 import { huecoMs } from './cadencia';
 import { lecturaEnCursor, limitesPaneo, type Muestra } from './lecturaMira';
 import { decidirGesto, razonPellizcoVertical } from './gestosGrafica';
+import { anclaEnCursor, seguirPunto, zoomEnAncla } from './encuadreZoom';
 
 Chart.register(zoomPlugin);
 
@@ -42,6 +43,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
   const grafica = useRef<GraficaZoom | null>(null);
   const yBase = useRef<{ min: number; max: number } | null>(null);
   const restablecerY = useRef<() => void>(() => {});
+  const aplicarZoomRef = useRef<(factor: number) => void>(() => {});
   const [yZoom, setYZoom] = useState(false);
 
   useEffect(() => {
@@ -167,7 +169,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
             pan: { enabled: false },
             zoom: {
               mode: 'y',
-              wheel: { enabled: true, modifierKey: 'shift', speed: 0.12 },
+              wheel: { enabled: false },
               pinch: { enabled: false },
               drag: { enabled: false },
               onZoomStart: (ctx: { chart: Chart; point: { x: number | null; y: number | null } }) => {
@@ -189,6 +191,41 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
       setYZoom(Math.abs(y.min - base.min) > span * 0.02 || Math.abs(y.max - base.max) > span * 0.02);
     };
     yBase.current = { min: ch.scales.y.min, max: ch.scales.y.max };
+    const limitesY = { min: yLim.min, max: yLim.max };
+    const anclaDe = (chart: Chart) => {
+      const area = chart.chartArea;
+      if (!area || area.width < 8) return null;
+      const t = chart.scales.x.getValueForPixel((area.left + area.right) / 2);
+      if (t == null || !Number.isFinite(Number(t))) return null;
+      return anclaEnCursor(
+        metas.map(m => ({ pts: m.pts, huecoMs: hueco(m.v, datos.paso_s) })),
+        Number(t),
+        { tMin: chart.scales.x.min, tMax: chart.scales.x.max },
+      );
+    };
+    const aplicarZoom = (chart: GraficaZoom, factor: number) => {
+      const anchor = anclaDe(chart);
+      if (anchor == null) return;
+      const y = chart.scales.y;
+      chart.zoomScale('y', zoomEnAncla({ min: y.min, max: y.max }, anchor, factor, limitesY), 'none');
+      marcarZoom(chart);
+    };
+    const seguir = (chart: GraficaZoom) => {
+      const base = yBase.current;
+      if (!base) return;
+      const y = chart.scales.y;
+      const spanY = y.max - y.min;
+      if (!(spanY > 0) || spanY >= (base.max - base.min) * 0.98) return;
+      const anchor = anclaDe(chart);
+      if (anchor == null) return;
+      const next = seguirPunto({ min: y.min, max: y.max }, anchor, limitesY);
+      if (Math.abs(next.min - y.min) < 1e-4 && Math.abs(next.max - y.max) < 1e-4) return;
+      chart.zoomScale('y', next, 'none');
+    };
+    aplicarZoomRef.current = (factor) => {
+      const chart = grafica.current;
+      if (chart) aplicarZoom(chart, factor);
+    };
     restablecerY.current = () => {
       const base = yBase.current;
       if (!base || !grafica.current) return;
@@ -220,15 +257,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
         sepY = Math.abs(dy);
         if (razon == null) return;
         if (e.cancelable) e.preventDefault();
-        const rect = canvas.getBoundingClientRect();
-        chz.zoom({
-          y: razon,
-          focalPoint: {
-            x: (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left,
-            y: (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top,
-          },
-        }, 'none');
-        marcarZoom(chz);
+        aplicarZoom(chz, razon);
         return;
       }
       if (modo === 'vertical' || modo === 'pellizco') return;
@@ -242,6 +271,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
       if (e.cancelable) e.preventDefault();
       chz.pan({ x: x - ultimoX }, undefined, 'none');
       ultimoX = x;
+      seguir(chz);
     };
     const alFin = (e: TouchEvent) => {
       if (e.touches.length >= 2) return;
@@ -259,23 +289,32 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
       if (!arrastre || !grafica.current) return;
       grafica.current.pan({ x: e.clientX - ratonX }, undefined, 'none');
       ratonX = e.clientX;
+      seguir(grafica.current);
     };
     const alRatonSoltar = () => { arrastre = false; };
     const alDobleRaton = (e: MouseEvent) => { e.preventDefault(); restablecerY.current(); };
+    const alRueda = (e: WheelEvent) => {
+      if (!e.shiftKey || !grafica.current) return;
+      e.preventDefault();
+      aplicarZoom(grafica.current, e.deltaY < 0 ? 1.12 : 1 / 1.12);
+    };
     zona?.addEventListener('touchstart', alInicio, { passive: true });
     zona?.addEventListener('touchmove', alMover, { passive: false });
     zona?.addEventListener('touchend', alFin);
     zona?.addEventListener('touchcancel', alFin);
+    zona?.addEventListener('wheel', alRueda, { passive: false });
     zona?.addEventListener('mousedown', alRatonAbajo);
     zona?.addEventListener('dblclick', alDobleRaton);
     window.addEventListener('mousemove', alRatonMover);
     window.addEventListener('mouseup', alRatonSoltar);
     setYZoom(false);
     return () => {
+      aplicarZoomRef.current = () => {};
       zona?.removeEventListener('touchstart', alInicio);
       zona?.removeEventListener('touchmove', alMover);
       zona?.removeEventListener('touchend', alFin);
       zona?.removeEventListener('touchcancel', alFin);
+      zona?.removeEventListener('wheel', alRueda);
       zona?.removeEventListener('mousedown', alRatonAbajo);
       zona?.removeEventListener('dblclick', alDobleRaton);
       window.removeEventListener('mousemove', alRatonMover);
@@ -285,15 +324,7 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
     };
   }, [datos, datosExtras, umbral?.min, umbral?.max, rangoBanda, yEscala?.min, yEscala?.max]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const zoomY = (factor: number) => {
-    const ch = grafica.current;
-    const base = yBase.current;
-    if (!ch || !base) return;
-    ch.zoom({ y: factor }, 'none');
-    const y = ch.scales.y;
-    const span = Math.max(base.max - base.min, 0.2);
-    setYZoom(Math.abs(y.min - base.min) > span * 0.02 || Math.abs(y.max - base.max) > span * 0.02);
-  };
+  const zoomY = (factor: number) => aplicarZoomRef.current(factor);
 
   return (
     <div className={'graf-zoom ' + className}>
