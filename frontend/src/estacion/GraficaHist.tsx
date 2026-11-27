@@ -82,9 +82,13 @@ export default function GraficaHist({ principal, extras = SIN_SERIES, datos, dat
     const lo = valores.length ? Math.min(...valores) : 0;
     const hi = valores.length ? Math.max(...valores) : 1;
     const span = Math.max(hi - lo, dec === 0 ? 2 : 0.4);
-    const yLim = yEscala
-      ? { min: yEscala.min - 5, max: yEscala.max + 5, minRange: 8 }
-      : { min: lo - span * 0.6, max: hi + span * 0.6, minRange: Math.max(span * 0.08, dec === 0 ? 1 : 0.2) };
+    // Humedad, condensación y el resto de % no salen de 0–100 ni con zoom.
+    const porcentaje = unidad === '%';
+    const yLim = porcentaje
+      ? { min: 0, max: 100, minRange: 8 }
+      : yEscala
+        ? { min: yEscala.min - 5, max: yEscala.max + 5, minRange: 8 }
+        : { min: lo - span * 0.6, max: hi + span * 0.6, minRange: Math.max(span * 0.08, dec === 0 ? 1 : 0.2) };
 
     const pintar = (chart: Chart) => {
       const caja = mira.current, etiq = etiqueta.current;

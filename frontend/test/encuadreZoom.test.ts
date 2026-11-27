@@ -50,6 +50,18 @@ test('con zoom, al deslizar a un valor más bajo el encuadre lo sigue sin cambia
   assert.ok(bajo.max < zoom.min);
 });
 
+test('87 % con zoom deja el eje en 100 como máximo', () => {
+  const r = zoomEnAncla({ min: 0, max: 100 }, 87, 2, LIM);
+  assert.equal(r.max, 100);
+  assert.ok(r.min >= 0);
+  assert.ok(Math.abs(span(r) - 50) < 1e-6);
+  assert.ok(dentro(r, 87));
+  const mas = zoomEnAncla(r, 87, 1.3, LIM);
+  assert.equal(mas.max, 100);
+  assert.ok(dentro(mas, 87));
+  assert.ok(mas.min > r.min);
+});
+
 test('un hueco usa el valor cercano, no el 50 % del eje', () => {
   const series = [{ pts: [{ t: 0, y: 85 }, { t: 100_000, y: 8 }], huecoMs: 1_000 }];
   const ancla = anclaEnCursor(series, 4_000, { tMin: 0, tMax: 20_000 });
