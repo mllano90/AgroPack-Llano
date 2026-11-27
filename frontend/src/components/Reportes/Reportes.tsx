@@ -1057,21 +1057,23 @@ function computeFromEmpaques(
     for (const p of produccion) {
       const cant = Number(p.cantidad) || 0;
       if (cant <= 0) continue;
+      // Misma clave que el reporte: presentacion, contando cajas/bins y no kg.
+      const pres = String(p.presentacion || '').trim().toLowerCase();
       // Conversión: producción es final; no contar granel residual en prod
-      if (esConversion && p.presentacion === 'rpc_granel') continue;
-      const kg = (KG_PRES[p.presentacion] || 0) * cant;
-      if (p.presentacion === 'bins_jugo') {
+      if (esConversion && pres === 'rpc_granel') continue;
+      const kg = (KG_PRES[pres] || 0) * cant;
+      if (pres === 'bins_jugo') {
         kg2 += kg;
         binsJugo += cant;
-      } else if (p.presentacion === 'rpc_12' || p.presentacion === 'rpc_18') {
+      } else if (pres === 'rpc_12' || pres === 'rpc_18') {
         kg1 += kg;
         kgRpc += kg;
         cajasRpc += cant;
-      } else if (p.presentacion === 'caja_40lbs') {
+      } else if (pres === 'caja_40lbs') {
         kg1 += kg;
         kgCarton += kg;
         cajasCarton += cant;
-      } else if (p.presentacion === 'rpc_granel') {
+      } else if (pres === 'rpc_granel') {
         // WIP 1ra del día de campo (para usar al día siguiente)
         kg1 += kg;
         kgGranel += kg;
@@ -2279,7 +2281,8 @@ export default function Reportes({ token }: ReportesProps) {
             Principales: % 1ra, % 2da (sobre el kilo producido; suman 100) y kg real por bin
             (kilos ÷ bins de campo). Kg/ha por lote = kg ÷ <strong>{hectareasPorLote} ha</strong>{' '}
             (cada lote = {hectareasPorLote} ha). Multi-lote: producción prorrateada por bins. Lotes
-            iguales se agrupan ignorando fecha de corte.
+            iguales se agrupan ignorando fecha de corte. Cajas cartón, cajas RPC y bins
+            de jugo de 2da son la cantidad empacada de ese lote (misma prorrata por bins).
           </p>
           {porLote.length > 0 && <LoteBarrasChart lotes={porLote} fmtKg={fmtKg} />}
           <MapaCuadrosLimon lotes={porLote} />
@@ -2296,7 +2299,7 @@ export default function Reportes({ token }: ReportesProps) {
                   width: '100%',
                   borderCollapse: 'collapse',
                   fontSize: 13,
-                  minWidth: 920,
+                  minWidth: 1180,
                 }}
               >
                 <thead>
@@ -2312,6 +2315,9 @@ export default function Reportes({ token }: ReportesProps) {
                     <th style={th}>kg total</th>
                     <th style={th}>Bins</th>
                     <th style={th}>Parr. 1ra</th>
+                    <th style={th}>Cajas cartón</th>
+                    <th style={th}>Cajas RPC</th>
+                    <th style={th}>Bins jugo 2da</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2350,6 +2356,9 @@ export default function Reportes({ token }: ReportesProps) {
                       <td style={td}>{fmtKg(l.kg_salida)}</td>
                       <td style={td}>{l.bins_campo}</td>
                       <td style={td}>{fmtNum(l.parrillas_primera, 2)}</td>
+                      <td style={td}>{fmtEntero(l.cajas_carton ?? 0)}</td>
+                      <td style={td}>{fmtEntero(l.cajas_rpc ?? 0)}</td>
+                      <td style={td}>{fmtEntero(l.bins_jugo ?? 0)}</td>
                     </tr>
                   ))}
                 </tbody>

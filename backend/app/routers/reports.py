@@ -98,7 +98,14 @@ def _norm_lote_campo_reporte(lote: str | None) -> str:
 
 
 def _split_produccion(produccion: list | None) -> dict:
-    """Separa producción en final (RPC/cartón), granel WIP y jugo."""
+    """Separa la producción de limón por el campo presentacion.
+
+    Suma cajas o bins (cantidad), no kilos:
+    - cartón: caja_40lbs
+    - RPC final: rpc_12 + rpc_18 (rpc_granel es intermedio y no cuenta)
+    - bins de jugo de 2da: bins_jugo. En limón esa presentación es la fruta
+      de segunda (900 kg, calidad segunda). No hay otro tipo de bin de jugo.
+    """
     kg_rpc = 0.0
     kg_carton = 0.0
     kg_granel = 0.0
@@ -108,7 +115,7 @@ def _split_produccion(produccion: list | None) -> dict:
     bins_jugo = 0
     rpc_granel_producido = 0
     for p in produccion or []:
-        pres = p.get("presentacion") or ""
+        pres = str(p.get("presentacion") or "").strip().lower()
         cant = int(p.get("cantidad") or 0)
         if cant <= 0:
             continue
